@@ -34,7 +34,14 @@ func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 	if strings.Contains(view, "long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error") {
 		t.Fatal("long content was not wrapped")
 	}
+	if got := m.agentPanel(); got != "" {
+		t.Fatal("root-only runtime should hide the agent list")
+	}
+	m.agents = append(m.agents, harness.AgentSnapshot{ID: "child", Title: "child", Status: "idle", Depth: 1})
 	if got := lipgloss.Width(m.agentPanel()); got != 80 {
 		t.Fatalf("agent list width=%d, want full terminal width", got)
+	}
+	if strings.Contains(m.statusLine(), "Enter send") || strings.Contains(m.statusLine(), "agents 1") || strings.Contains(m.statusLine(), "jobs 0") {
+		t.Fatal("footer contains hidden help or zero-count metadata")
 	}
 }

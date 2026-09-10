@@ -303,7 +303,12 @@ func (m Model) View() string {
 	status := m.statusLine()
 	// Keep the agent list in the bottom control area. Besides matching the
 	// layout contract, this makes Down from the input naturally enter it.
-	return chat + "\n" + bar + "\n" + agents + "\n" + status
+	parts := []string{chat, bar}
+	if agents != "" {
+		parts = append(parts, agents)
+	}
+	parts = append(parts, status)
+	return strings.Join(parts, "\n")
 }
 
 func (m Model) chatHeight() int {
@@ -313,7 +318,11 @@ func (m Model) chatHeight() int {
 func (m Model) footerHeight() int {
 	// The newlines joining blocks do not consume an additional terminal row
 	// beyond the first row of the next block.
-	return lipgloss.Height(m.input.View()) + lipgloss.Height(m.agentPanel()) + lipgloss.Height(m.statusLine())
+	agentHeight := 0
+	if agents := m.agentPanel(); agents != "" {
+		agentHeight = lipgloss.Height(agents)
+	}
+	return lipgloss.Height(m.input.View()) + agentHeight + lipgloss.Height(m.statusLine())
 }
 
 func wrapToWidth(text string, width int) string {
@@ -326,16 +335,26 @@ func wrapToWidth(text string, width int) string {
 func (m Model) statusLine() string {
 	root := m.runtime.Root()
 	model := "-"
+	effort := "-"
 	if root != nil {
-		model = root.Model + " / " + root.Effort
+		model = root.Model
+		effort = root.Effort
 	}
 	width := max(1, m.chatWidth())
-	metadata := dim.Render(fmt.Sprintf("runtime %s · model %s · jobs %d · agents %d", m.runtime.ID(), model, len(m.runtime.Jobs().List()), len(m.agents)))
-	controls := dim.Render("Enter send · Down agents · PgUp/PgDn scroll · Ctrl-C exit")
-	return wrapToWidth(metadata, width) + "\n" + wrapToWidth(controls, width)
+	parts := []string{m.runtime.ID(), model + " / " + effort}
+	if jobs := len(m.runtime.Jobs().List()); jobs > 0 {
+		parts = append(parts, fmt.Sprintf("jobs %d", jobs))
+	}
+	if agents := len(m.agents); agents > 1 {
+		parts = append(parts, fmt.Sprintf("agents %d", agents))
+	}
+	return wrapToWidth(dim.Render(strings.Join(parts, " · ")), width)
 }
 
 func (m Model) agentPanel() string {
+	if len(m.agents) <= 1 {
+		return ""
+	}
 	lines := []string{accent.Render("AGENTS")}
 	for i, a := range m.agents {
 		marker := "  "
