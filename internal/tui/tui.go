@@ -341,7 +341,7 @@ func (m Model) statusLine() string {
 		effort = root.Effort
 	}
 	width := max(1, m.chatWidth())
-	parts := []string{m.runtime.ID(), model + " / " + effort}
+	parts := []string{m.runtime.ID(), model + " " + effort}
 	if jobs := len(m.runtime.Jobs().List()); jobs > 0 {
 		parts = append(parts, fmt.Sprintf("jobs %d", jobs))
 	}

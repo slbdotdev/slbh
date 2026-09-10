@@ -44,4 +44,7 @@ func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 	if strings.Contains(m.statusLine(), "Enter send") || strings.Contains(m.statusLine(), "agents 1") || strings.Contains(m.statusLine(), "jobs 0") {
 		t.Fatal("footer contains hidden help or zero-count metadata")
 	}
+	if strings.Contains(m.statusLine(), " / ") || !strings.Contains(m.statusLine(), runtime.Root().Model+" "+runtime.Root().Effort) {
+		t.Fatal("footer should show the actual model identifier followed by effort")
+	}
 }
