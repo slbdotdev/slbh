@@ -13,11 +13,13 @@ import (
 )
 
 var (
-	accent = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	dim    = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	green  = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	yellow = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
-	red    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	accent          = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	dim             = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	green           = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	yellow          = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	red             = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	assistantBubble = lipgloss.Color("236")
+	userBubble      = lipgloss.Color("24")
 )
 
 type eventMsg harness.Event
@@ -257,8 +259,12 @@ func (m *Model) refreshView() {
 		}
 	}
 	lines := make([]string, 0, len(visible))
-	for _, event := range visible {
-		lines = append(lines, wrapToWidth(renderEvent(event), max(1, m.chatWidth())))
+	width := max(1, m.chatWidth())
+	for i, event := range visible {
+		if i > 0 && (isMessage(visible[i-1]) || isMessage(event)) {
+			lines = append(lines, "")
+		}
+		lines = append(lines, renderEvent(event, width))
 	}
 	m.viewport.SetContent(strings.Join(lines, "\n"))
 	if !m.userScrolled {
@@ -266,35 +272,43 @@ func (m *Model) refreshView() {
 	}
 }
 
-func renderEvent(event harness.Event) string {
+func renderEvent(event harness.Event, width int) string {
 	title := event.AgentTitle
 	if title == "" {
 		title = "agent"
 	}
 	switch event.Kind {
 	case "assistant":
-		return accent.Render(title+"> ") + event.Text
+		return messageBlock(accent.Render(title+"> ")+event.Text, width, assistantBubble)
 	case "user":
-		return green.Render("you> ") + event.Text
+		return messageBlock(green.Render("you> ")+event.Text, width, userBubble)
 	case "thinking":
-		return dim.Render("thinking · ") + event.Text
+		return wrapToWidth(dim.Render("thinking · ")+event.Text, width)
 	case "tool":
 		name, _ := event.Metadata["name"].(string)
 		if name == "" {
 			name = "call"
 		}
-		return yellow.Render("tool "+name+" · ") + event.Text
+		return wrapToWidth(yellow.Render("tool "+name+" · ")+event.Text, width)
 	case "error":
-		return red.Render("error · ") + event.Text
+		return wrapToWidth(red.Render("error · ")+event.Text, width)
 	case "steer":
-		return yellow.Render("steer · ") + event.Text
+		return wrapToWidth(yellow.Render("steer · ")+event.Text, width)
 	case "usage":
-		return dim.Render("usage · ") + fmt.Sprint(event.Metadata)
+		return wrapToWidth(dim.Render("usage · ")+fmt.Sprint(event.Metadata), width)
 	case "status", "runtime", "tool_result":
-		return dim.Render(event.Kind+" · ") + event.Text
+		return wrapToWidth(dim.Render(event.Kind+" · ")+event.Text, width)
 	default:
-		return event.Text
+		return wrapToWidth(event.Text, width)
 	}
+}
+
+func isMessage(event harness.Event) bool {
+	return event.Kind == "user" || event.Kind == "assistant"
+}
+
+func messageBlock(text string, width int, background lipgloss.TerminalColor) string {
+	return lipgloss.NewStyle().Width(width).Background(background).Render(text)
 }
 
 func toolIndex(event harness.Event) string {

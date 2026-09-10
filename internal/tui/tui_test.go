@@ -7,6 +7,8 @@ import (
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/harness"
 	"github.com/slbdotdev/slbh/internal/provider"
@@ -46,5 +48,59 @@ func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 	}
 	if strings.Contains(m.statusLine(), " / ") || !strings.Contains(m.statusLine(), runtime.Root().Model+" "+runtime.Root().Effort) {
 		t.Fatal("footer should show the actual model identifier followed by effort")
+	}
+}
+
+func TestMessageBlocksAreSpacedAndColored(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	width := 40
+	user := harness.Event{AgentID: runtime.Root().ID, AgentTitle: "root", Kind: "user", Text: "hello"}
+	thinking := harness.Event{AgentID: runtime.Root().ID, AgentTitle: "root", Kind: "thinking", Text: "working"}
+	assistant := harness.Event{AgentID: runtime.Root().ID, AgentTitle: "root", Kind: "assistant", Text: "done"}
+
+	if got := lipgloss.Width(renderEvent(user, width)); got != width {
+		t.Fatalf("user block width=%d, want %d", got, width)
+	}
+	if got := lipgloss.Width(renderEvent(assistant, width)); got != width {
+		t.Fatalf("assistant block width=%d, want %d", got, width)
+	}
+
+	profile := lipgloss.DefaultRenderer().ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(profile) })
+	userBlock := renderEvent(user, width)
+	assistantBlock := renderEvent(assistant, width)
+	if !strings.Contains(userBlock, "48;5;24") {
+		t.Fatalf("user block has no colored background: %q", userBlock)
+	}
+	if !strings.Contains(assistantBlock, "48;5;236") {
+		t.Fatalf("assistant block has no colored background: %q", assistantBlock)
+	}
+
+	m := New(runtime)
+	m.width = width
+	m.height = 12
+	m.events = []harness.Event{user, thinking, assistant}
+	m.refreshView()
+	content := ansi.Strip(m.viewport.View())
+	lines := strings.Split(content, "\n")
+	hasBlankAfter := func(prefix string) bool {
+		for i, line := range lines[:len(lines)-1] {
+			if strings.HasPrefix(line, prefix) {
+				return strings.TrimSpace(lines[i+1]) == ""
+			}
+		}
+		return false
+	}
+	if !hasBlankAfter("you> hello") {
+		t.Fatalf("user block is not separated from following text: %q", content)
+	}
+	if !hasBlankAfter("thinking · working") {
+		t.Fatalf("text is not separated from following assistant block: %q", content)
 	}
 }
