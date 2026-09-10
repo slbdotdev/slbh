@@ -1,7 +1,10 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -31,6 +34,34 @@ func TestNormalizeDeepSeekModel(t *testing.T) {
 	}
 	if got := (&HTTPProvider{Flavor: "openrouter"}).modelID("deepseek-v4-flash"); got != "deepseek/deepseek-v4-flash" {
 		t.Fatalf("OpenRouter model id got %q", got)
+	}
+}
+
+func TestContextWindowReadsAndCachesLiveMetadata(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"vendor/model","context_length":262144}]}`))
+	}))
+	defer server.Close()
+
+	p := NewHTTP(server.URL+"/v1/chat/completions", "test-key")
+	for i := 0; i < 2; i++ {
+		got, err := p.ContextWindow(context.Background(), "vendor/model")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != 262144 {
+			t.Fatalf("context window = %d, want 262144", got)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("metadata calls = %d, want one cached lookup", calls)
 	}
 }
 

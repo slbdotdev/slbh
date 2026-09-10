@@ -2,14 +2,18 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/slbdotdev/slbh/internal/provider"
+)
+
+const (
+	compactAtNumerator   = 7
+	compactAtDenominator = 10
 )
 
 type turn struct {
@@ -29,14 +33,16 @@ type Agent struct {
 	WorkDir  string
 	SSH      string
 
-	mu       sync.RWMutex
-	status   string
-	history  []provider.Message
-	turns    chan turn
-	steers   chan string
-	cancel   context.CancelFunc
-	done     chan struct{}
-	stopOnce sync.Once
+	mu            sync.RWMutex
+	status        string
+	history       []provider.Message
+	turns         chan turn
+	steers        chan string
+	cancel        context.CancelFunc
+	done          chan struct{}
+	stopOnce      sync.Once
+	contextModel  string
+	contextWindow int
 }
 
 func newAgent(runtime *Runtime, agentID, title, parentID string, depth int, model, effort string) *Agent {
@@ -131,9 +137,13 @@ drained:
 		a.fail(err)
 		return
 	}
+	contextWindow := a.resolveContextWindow(ctx, p)
 	var finalAnswer strings.Builder
+	system := systemPrompt(a)
+	tools := ToolDefinitions()
 	for round := 0; round < 8; round++ {
-		req := provider.Request{Model: a.Model, Effort: a.Effort, System: systemPrompt(a), Messages: history, Tools: ToolDefinitions(), CacheKey: provider.StablePrefixKey(provider.Request{Model: a.Model, System: systemPrompt(a), Tools: ToolDefinitions()})}
+		history = a.compactHistoryIfNeeded(history, contextWindow, system, tools)
+		req := provider.Request{Model: a.Model, Effort: a.Effort, System: system, Messages: history, Tools: tools, CacheKey: provider.StablePrefixKey(provider.Request{Model: a.Model, System: system, Tools: tools})}
 		var answer strings.Builder
 		calls := make(map[int]*provider.ToolCall)
 		err = provider.Retry(ctx, 3, func() error {
@@ -206,7 +216,7 @@ drained:
 		a.history = append(a.history, provider.Message{Role: "assistant", Content: finalAnswer.String()})
 	}
 	a.mu.Unlock()
-	a.maybeCompact()
+	a.maybeCompact(contextWindow, system, tools)
 	a.setStatus("idle")
 	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "turn_done"})
 	if a.ParentID != "" && finalAnswer.Len() > 0 {
@@ -243,34 +253,109 @@ func (a *Agent) Compact(keep int) int {
 		keep = 4
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if len(a.history) <= keep {
+	compacted, dropped := compactMessages(a.history, keep)
+	if dropped == 0 {
+		a.mu.Unlock()
 		return 0
 	}
-	dropped := len(a.history) - keep
-	recent := append([]provider.Message(nil), a.history[len(a.history)-keep:]...)
-	a.history = append([]provider.Message{{Role: "user", Content: fmt.Sprintf("[compacted %d earlier messages; preserve their conclusions]", dropped)}}, recent...)
+	a.history = compacted
+	a.mu.Unlock()
 	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
 	return dropped
 }
 
-func (a *Agent) maybeCompact() {
-	limit := 120000
-	if configured, err := strconv.Atoi(os.Getenv("SLBH_CONTEXT_BYTES")); err == nil && configured > 1000 {
-		limit = configured
-	}
+func (a *Agent) maybeCompact(contextWindow int, system string, tools []provider.Tool) {
 	a.mu.RLock()
-	bytes := 0
-	for _, message := range a.history {
-		bytes += len(message.Role) + len(message.Content) + len(message.Name) + len(message.ToolCallID)
-		for _, call := range message.ToolCalls {
-			bytes += len(call.ID) + len(call.Function.Name) + len(call.Function.Arguments)
-		}
+	history := append([]provider.Message(nil), a.history...)
+	a.mu.RUnlock()
+	compacted, dropped := compactHistory(history, contextWindow, system, tools, 24)
+	if dropped == 0 {
+		return
+	}
+	a.mu.Lock()
+	a.history = compacted
+	a.mu.Unlock()
+	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
+}
+
+func (a *Agent) compactHistoryIfNeeded(history []provider.Message, contextWindow int, system string, tools []provider.Tool) []provider.Message {
+	compacted, dropped := compactHistory(history, contextWindow, system, tools, 24)
+	if dropped > 0 {
+		a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
+		return compacted
+	}
+	return history
+}
+
+func compactHistory(history []provider.Message, contextWindow int, system string, tools []provider.Tool, keep int) ([]provider.Message, int) {
+	if !contextLimitReached(contextWindow, system, history, tools) {
+		return history, 0
+	}
+	return compactMessages(history, keep)
+}
+
+func contextBudget(contextWindow int) int {
+	return contextWindow * compactAtNumerator / compactAtDenominator
+}
+
+func contextLimitReached(contextWindow int, system string, history []provider.Message, tools []provider.Tool) bool {
+	encoded, err := json.Marshal(struct {
+		System   string             `json:"system"`
+		Messages []provider.Message `json:"messages"`
+		Tools    []provider.Tool    `json:"tools"`
+	}{System: system, Messages: history, Tools: tools})
+	if err != nil {
+		return false
+	}
+	estimatedTokens := (len(encoded) + 3) / 4
+	return estimatedTokens >= contextBudget(contextWindow)
+}
+
+func (a *Agent) resolveContextWindow(ctx context.Context, p provider.Provider) int {
+	a.mu.RLock()
+	model := a.Model
+	if a.contextModel == model && a.contextWindow > 0 {
+		window := a.contextWindow
+		a.mu.RUnlock()
+		return window
 	}
 	a.mu.RUnlock()
-	if bytes >= limit*7/10 {
-		a.Compact(24)
+
+	window := provider.FallbackContextWindow
+	if metadata, ok := p.(provider.ContextWindowProvider); ok {
+		metadataCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if discovered, err := metadata.ContextWindow(metadataCtx, model); err == nil && discovered > 0 {
+			window = discovered
+		}
+		cancel()
 	}
+	a.mu.Lock()
+	a.contextModel = model
+	a.contextWindow = window
+	a.mu.Unlock()
+	return window
+}
+
+func compactMessages(history []provider.Message, keep int) ([]provider.Message, int) {
+	if keep < 4 {
+		keep = 4
+	}
+	if len(history) <= keep {
+		return history, 0
+	}
+	start := len(history) - keep
+	// Never begin the retained suffix with an assistant/tool message. Walking
+	// back to a user message keeps tool calls and their results structurally
+	// attached to the turn that requested them.
+	for start > 0 && history[start].Role != "user" {
+		start--
+	}
+	if start == 0 {
+		return history, 0
+	}
+	recent := append([]provider.Message(nil), history[start:]...)
+	marker := provider.Message{Role: "user", Content: fmt.Sprintf("[compacted %d earlier messages; preserve their conclusions]", start)}
+	return append([]provider.Message{marker}, recent...), start
 }
 
 func systemPrompt(a *Agent) string {

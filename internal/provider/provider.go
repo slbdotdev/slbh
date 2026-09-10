@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -78,15 +80,26 @@ type Provider interface {
 	Stream(context.Context, Request, StreamSink) error
 }
 
+// ContextWindowProvider is optional because not every OpenAI-compatible API
+// exposes model metadata. Callers must use FallbackContextWindow when a
+// provider does not implement this capability or returns no usable value.
+type ContextWindowProvider interface {
+	ContextWindow(context.Context, string) (int, error)
+}
+
+const FallbackContextWindow = 128000
+
 type HTTPProvider struct {
-	Endpoint string
-	APIKey   string
-	Client   *http.Client
-	Flavor   string
+	Endpoint       string
+	APIKey         string
+	Client         *http.Client
+	Flavor         string
+	metadataMu     sync.Mutex
+	contextWindows map[string]int
 }
 
 func NewHTTP(endpoint, key string) *HTTPProvider {
-	return &HTTPProvider{Endpoint: endpoint, APIKey: key, Client: &http.Client{Timeout: 0}}
+	return &HTTPProvider{Endpoint: endpoint, APIKey: key, Client: &http.Client{Timeout: 0}, contextWindows: make(map[string]int)}
 }
 
 // ForModel selects the native endpoint where available and falls back to
@@ -137,6 +150,131 @@ func (p *HTTPProvider) modelID(model string) string {
 		}
 	}
 	return model
+}
+
+// ContextWindow discovers the active model's context length from the
+// provider's live model catalog. The value is cached on this provider instance
+// so a runtime does not repeatedly fetch metadata for the same model.
+func (p *HTTPProvider) ContextWindow(ctx context.Context, model string) (int, error) {
+	wanted := p.modelID(model)
+	p.metadataMu.Lock()
+	if p.contextWindows == nil {
+		p.contextWindows = make(map[string]int)
+	}
+	if window := p.contextWindows[wanted]; window > 0 {
+		p.metadataMu.Unlock()
+		return window, nil
+	}
+	p.metadataMu.Unlock()
+
+	if p.APIKey == "" {
+		return 0, fmt.Errorf("provider API key is not configured")
+	}
+	endpoint, err := modelsEndpoint(p.Endpoint)
+	if err != nil {
+		return 0, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return 0, err
+	}
+	request.Header.Set("Authorization", "Bearer "+p.APIKey)
+	request.Header.Set("Accept", "application/json")
+	client := p.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(request)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
+		return 0, fmt.Errorf("model metadata returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+	var catalog struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8*1024*1024)).Decode(&catalog); err != nil {
+		return 0, fmt.Errorf("decode model metadata: %w", err)
+	}
+	models, err := decodeModels(catalog.Data)
+	if err != nil {
+		return 0, err
+	}
+	for _, metadata := range models {
+		if !sameModelID(wanted, metadata.ID) {
+			continue
+		}
+		window := metadata.ContextLength
+		if window <= 0 {
+			window = metadata.TopProvider.ContextLength
+		}
+		if window <= 0 {
+			return 0, fmt.Errorf("model %q has no usable context_length", wanted)
+		}
+		p.metadataMu.Lock()
+		p.contextWindows[wanted] = window
+		p.metadataMu.Unlock()
+		return window, nil
+	}
+	return 0, fmt.Errorf("model %q was not found in provider metadata", wanted)
+}
+
+type modelMetadata struct {
+	ID            string `json:"id"`
+	ContextLength int    `json:"context_length"`
+	TopProvider   struct {
+		ContextLength int `json:"context_length"`
+	} `json:"top_provider"`
+}
+
+func decodeModels(data json.RawMessage) ([]modelMetadata, error) {
+	data = bytes.TrimSpace(data)
+	var models []modelMetadata
+	if len(data) > 0 && data[0] == '[' {
+		if err := json.Unmarshal(data, &models); err != nil {
+			return nil, fmt.Errorf("decode model metadata list: %w", err)
+		}
+		return models, nil
+	}
+	var model modelMetadata
+	if err := json.Unmarshal(data, &model); err != nil {
+		return nil, fmt.Errorf("decode model metadata item: %w", err)
+	}
+	return []modelMetadata{model}, nil
+}
+
+func modelsEndpoint(endpoint string) (string, error) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("parse provider endpoint: %w", err)
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("provider endpoint must be an absolute URL")
+	}
+	path := strings.TrimSuffix(parsed.Path, "/")
+	for _, suffix := range []string{"/chat/completions", "/completions"} {
+		if strings.HasSuffix(path, suffix) {
+			path = strings.TrimSuffix(path, suffix)
+			break
+		}
+	}
+	parsed.Path = strings.TrimSuffix(path, "/") + "/models"
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
+}
+
+func sameModelID(wanted, candidate string) bool {
+	wanted = strings.ToLower(strings.TrimSpace(wanted))
+	candidate = strings.ToLower(strings.TrimSpace(candidate))
+	if wanted == candidate {
+		return true
+	}
+	// Provider variants such as :free or :thinking share the base metadata.
+	return strings.SplitN(wanted, ":", 2)[0] == strings.SplitN(candidate, ":", 2)[0]
 }
 
 func (p *HTTPProvider) Stream(ctx context.Context, req Request, sink StreamSink) error {

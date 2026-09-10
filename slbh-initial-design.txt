@@ -1,0 +1,59 @@
+Implement "slbh" here in this new repo, do not work outside of this dir. slbh (slb's harness) - a minimalist agentic harness purpose built to make multi-agent coordination and non-blocking responsive collaborative agents as simple as possible by reducing it to a tool interface and letting code handle the details.
+
+Linux only, supporting: rhel-based, debian-based, arch-based, at least two of which are available for testing through /org ssh tailscale, and WSL2, which you can reach locally on this machine.
+Lightweight minimal charmbracelet stack Go TUI app creates and manages a unique set of agents and jobs. All jobs and subagents are runtime-specific and must not conflict with another TUI launch, even in the same cwd. All subagents and jobs must be correctly destroyed if the TUI is "/exit"ed, crashes, or otherwise dies.
+
+TUI:
+
+Full REPL. Scrollable chat messages text area supporting termux scrolling. Token streaming mandatory, take care to handle anchoring to the bottom during generation correctly unless the user is scrolled. Show all thinking and tool calls. Bottom chat bar, standard affairs for an agentic coding tool, LOTS of status text and info, count of jobs running in this session's runtime, and a list of all subagents and their subagents (depth limit 2, root is 0), as selectable lines with title and status. Arrow key down from last line of text entry reaches this list, and enter swaps out TUI chat area for that agent's messages, without interrupting or notifying anyone or changing anything. User can chat in to subagents, which lands as a steer, but that does not change next message out delivery to the parent agent.
+
+APIs:
+
+OpenRouter, DeepSeek, Z.ai, support for more, use a lib/framework for inference provider support if it's easier.
+
+Inference caching:
+
+Stable prefix mandatory, input caching must be enabled and used for all providers.
+
+Defaults:
+
+DeepSeek V4.1 Flash xhigh for root. GLM 5.3 Flash high for subagents. Configurable.
+
+Tools provided to the agent:
+
+glob - standard implementation.
+grep - standardized implementation smoothing over OS differences.
+read_file - Returns a whole file by filepath, full or relative, for up to 100k bytes. Anything larger errors out with lots of useful info like size, line count, type, and a harness nudge to use read_lines or read_bytes instead for large files.
+read_lines - Returns standardized prefix-numbered lines of a file from arguments "start" to "end" line numbers. 100k total input limit.
+edit_file - Standard Anthropic style; atomic and returns a diff. It should also report whether the replacement matched zero, one, or multiple locations.
+apply_patch - reliable coordinated multi-file changes
+write_file - Newly created files, whole output becomes the file, resultant filepath with filename as argument.
+
+quick_bash - Foreground blocking bash script run, stops the agent entirely until the results are returned, which goes directly back as the tool result in line. 5000ms timeout: if hit, cmd is aborted and harness injects instruction to use background long_job instead. Input is a complete bash script, and a cwd [anything else?]
+long_job - Non-blocking background bash job. Same as above, but the agent moves past the tool call immediately and continues inference while it runs in the bg, plus a required "warn_after_seconds" which does not abort the job, but injects a harness nudge informing the agent of the job running over it's anticipated time. As soon as job is complete: Exit code returned, plus output from stdout and stderr is captured separately and returned in full as the tool result, up to 50k bytes each stream, truncation made obvious. Result hits in full on the next tool boundary, does not wait for a turn to end. Yields a unique job_id that is returned as tool result.
+list_jobs - Returns full list of running bg jobs with: job_id, author agent's name, start time, specified warn_after_seconds value, size in bytes of captured stdout and stderr at time of check, for ALL agents and subagents, including the caller's, working under the current parent.
+read_job - Given a valid job_id, returns the current in-progress stdout and stderr.
+kill_job - Given a job_id AND the authoring agent's name string, which must match, the job is stopped and outputs flushed to the agent.
+
+list_subagents - Return this session and all under it, if present, all the way down recursively, with agent session names, start times, turn count, current tokens in context, and time since last API reply completed.
+launch_subagent - Arguments: A permanent non-whitespace title (uniquely addressable name of the agent), a harness (this one, codex headless or claude headless), a model and effort setting, a brief describing their job, a "warn_after_seconds" (same as above), a working dir that will become the agent's root, and an optional ssh string if the agent is launching into a dir on a different box, so subagents can work "in" machines instead of having to ssh every single command. Subagents chat normally with their parent, any turn that ends waiting for a user message is transformed into a msg_subagent transparently where the output of the last subagent message is sent to the parent. Subagents do not need to be the same model or even same harness; using any specified model and effort for any arbitrary subagent is first-class within this harness. Claude and Codex subagents are supported as leaf-agents only (no subagents under them) as far as their proprietary harnesses will allow.
+msg_subagent - Send a text block to another agent. Messages are queued for delivery in order in per-subagent mailboxes and the sending agent does not block, messages are always delivered to the recipient as a mid-turn steer, in order, all at once if multiple waiting, waiting for end of turn is never acceptable, all messages must start with a header.
+end_subagent - A parent can stop a child, a child can never kill a parent or a sibling. Subagents never end their own sessions, they chat normally and can be responded to from the parent to followup, continue, or be assigned a new task. Only a parent ends a subagent session when the parent decides the work is fully done. Tool yields and error with an informative harness nudge if the subagent is not idle (turn ended).
+
+Notes on tools:
+
+Line numbers are one-based and inclusive, as are start and end bytes.
+~ and . expansion supported in filepath arguments where it would cause no other issues
+All tools must sanity check and validate all arguments prior to running, any error is plainly spelled out to the agent.
+
+Other requirements:
+Complete transcript and job logging of all agents, subagents, and all long_jobs to a ~ dotfolder.
+Slash commands "/" like exit, quit, clear, model, effort, and compact.
+Sane minimal compaction tool, tuned to prefer more recent messages and work, discarding info from summary about what has already been finished. Limit for compacted summary text is 100k bytes. Structure must be maintained. Autocompaction at 70% used of model's avail context window.
+Minimal resilience features, like retry on API failure with stepped delays, etc.
+Full test suite, build as you go.
+All tests passing, all green, all features tested and fully validated, acceptance integration tests done.
+Take special care to test that mid-turn messages actually land, messages that wait until the end of a turn are ignored by subagents until their work is done, at which point they can't be stopped or corrected.
+Ignore any and all prior org projects. Do not read, look at docs, plans, instructions, or pending. This is brand new work and your only task.
+Make best-effort decisions about blocking/unspecified choices.
+Commit and push frequently to this repo, as me.

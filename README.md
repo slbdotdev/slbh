@@ -101,11 +101,15 @@ All settings are read from environment variables when the process starts.
 | `SLBH_SUBAGENT_MODEL` | `zai/glm-5.3-flash` | Default child-agent model. |
 | `SLBH_SUBAGENT_EFFORT` | `high` | Default child-agent reasoning effort. |
 | `SLBH_ENDPOINT` | OpenRouter chat-completions endpoint | Custom compatible endpoint. |
-| `SLBH_CONTEXT_BYTES` | `120000` | Approximate per-agent history threshold. |
 
-When an agent reaches roughly 70% of its context-byte threshold, `slbh`
-compacts its history and keeps the most recent 24 messages plus a durable
-compaction marker. `/compact` performs the same operation on demand.
+Compaction is automatic and not configurable: before the first request for an
+active model, `slbh` asks the provider's live model metadata endpoint for its
+maximum context window and starts compaction at 70% of that value. The result
+is cached for that model during the runtime. If the provider does not expose
+usable metadata, the harness falls back to 128,000 tokens. Token usage is
+estimated from the serialized system prompt, tool definitions, and message
+history. Compaction keeps the most recent 24 messages plus a durable marker;
+`/compact` remains available for an explicit compaction.
 
 ## TUI controls
 
