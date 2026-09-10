@@ -15,20 +15,20 @@ import (
 )
 
 var (
-	accent             = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	dim                = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	chatLabelStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
-	yellow             = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
-	red                = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	assistantBubble    = lipgloss.Color("24")
-	userBubble         = lipgloss.Color("22")
-	nonChatBubble      = lipgloss.Color("236")
-	nonChatHeaderStyle = yellow.Bold(true)
+	accent          = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	dim             = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	headerStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220"))
+	red             = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	assistantBubble = lipgloss.Color("24")
+	userBubble      = lipgloss.Color("22")
+	nonChatBubble   = lipgloss.Color("236")
 )
 
 const nonChatBlockHeight = 10
 
 const scrollStep = 5
+
+const headerBullet = "• "
 
 var slashCommands = []string{
 	"/exit",
@@ -520,28 +520,28 @@ func (m *Model) clearCurrentView() {
 func renderEvent(event harness.Event, width int) string {
 	switch event.Kind {
 	case "assistant":
-		return messageBlock(chatLabelStyle.Render("agent> ")+event.Text, width, assistantBubble)
+		return renderChatBlock("agent", event.Text, width, assistantBubble)
 	case "user":
-		return messageBlock(chatLabelStyle.Render("user> ")+event.Text, width, userBubble)
-	case "thinking":
-		return rollingBlock(dim.Render("thinking · ")+event.Text, width)
-	case "tool":
-		name, _ := event.Metadata["name"].(string)
-		if name == "" {
-			name = "call"
-		}
-		return rollingBlock(yellow.Render("tool "+name+" · ")+event.Text, width)
-	case "error":
-		return rollingBlock(red.Render("error · ")+event.Text, width)
-	case "steer":
-		return rollingBlock(yellow.Render("steer · ")+event.Text, width)
+		return renderChatBlock("user", event.Text, width, userBubble)
 	case "usage":
-		return rollingBlock(dim.Render("usage · ")+fmt.Sprint(event.Metadata), width)
-	case "status", "runtime", "tool_result":
-		return rollingBlock(dim.Render(event.Kind+" · ")+event.Text, width)
+		return rollingBlock(fmt.Sprint(event.Metadata), width)
+	case "thinking", "tool", "error", "steer", "status", "runtime", "tool_result":
+		// The event kind is already shown in the non-chat block header. Keep the
+		// body to the event's content so the label is not duplicated there.
+		return rollingBlock(event.Text, width)
 	default:
 		return rollingBlock(event.Text, width)
 	}
+}
+
+func renderChatBlock(label, text string, width int, background color.Color) string {
+	header := renderHeader(label)
+	body := messageBlock(text, width, background)
+	return header + "\n" + body
+}
+
+func renderHeader(label string) string {
+	return headerStyle.Render(headerBullet + label)
 }
 
 func isMessage(event harness.Event) bool {
@@ -549,15 +549,15 @@ func isMessage(event harness.Event) bool {
 }
 
 func isViewportEvent(event harness.Event) bool {
-	// Request payloads are durable audit/replay records, not chat output.
-	return event.Kind != "inference_request" && event.Kind != "turn_done"
+	// Request payloads, status updates, and usage reports are durable
+	// control-plane records, not chat output. Keep them in Model.events and the
+	// runtime transcript while omitting them from the message viewport.
+	return event.Kind != "inference_request" && event.Kind != "turn_done" && event.Kind != "status" && event.Kind != "usage"
 }
 
 func messageBlock(text string, width int, background color.Color) string {
-	// The label is foreground-styled before this block is rendered. Lipgloss's
-	// foreground style emits a full reset, which would clear the block
-	// background before the message text. Keep the foreground reset scoped so
-	// the background remains continuous across the whole rectangle.
+	// Keep foreground resets in the content scoped so the background remains
+	// continuous across the whole rectangle.
 	text = strings.ReplaceAll(text, "\x1b[0m", "\x1b[39m")
 	text = strings.ReplaceAll(text, "\x1b[m", "\x1b[39m")
 	return lipgloss.NewStyle().Width(width).Background(background).Render(text)
@@ -646,18 +646,19 @@ func renderNonChatBlock(events []harness.Event, parts []string, width int) strin
 	if len(events) == 0 {
 		return ""
 	}
-	header := messageBlock(nonChatHeader(events), width, nonChatBubble)
+	header := nonChatHeader(events)
 	body := rollingBlock(strings.Join(parts, "\n"), width)
 	return header + "\n" + body
 }
 
 func nonChatHeader(events []harness.Event) string {
+	label := events[len(events)-1].Kind
 	for i := len(events) - 1; i >= 0; i-- {
 		if label := responseType(events[i]); label != "" {
-			return nonChatHeaderStyle.Render(label)
+			return renderHeader(label)
 		}
 	}
-	return nonChatHeaderStyle.Render(events[len(events)-1].Kind)
+	return renderHeader(label)
 }
 
 func responseType(event harness.Event) string {

@@ -101,14 +101,28 @@ func TestMessageBlocksAreSpacedAndColored(t *testing.T) {
 	if !strings.Contains(userBlock, "48;5;22") {
 		t.Fatalf("user block has no colored background: %q", userBlock)
 	}
-	if strings.Contains(userBlock, "user> \x1b[0mhello") || !strings.Contains(userBlock, "user> \x1b[39mhello") {
-		t.Fatalf("user message background breaks after the colored label: %q", userBlock)
+	userHeader := strings.Split(userBlock, "\n")[0]
+	if strings.Contains(userHeader, "48;5;22") {
+		t.Fatalf("user header is still inside the colored block: %q", userHeader)
+	}
+	if !strings.Contains(userHeader, "38;5;220") {
+		t.Fatalf("user header is not yellow: %q", userHeader)
+	}
+	if header := ansi.Strip(userHeader); !strings.Contains(header, "• user") || strings.Contains(header, "user>") {
+		t.Fatalf("unexpected user header: %q", header)
 	}
 	if !strings.Contains(assistantBlock, "48;5;24") {
 		t.Fatalf("assistant block has no colored background: %q", assistantBlock)
 	}
-	if strings.Contains(assistantBlock, "agent> \x1b[0mdone") || !strings.Contains(assistantBlock, "agent> \x1b[39mdone") {
-		t.Fatalf("assistant message background breaks after the colored label: %q", assistantBlock)
+	assistantHeader := strings.Split(assistantBlock, "\n")[0]
+	if strings.Contains(assistantHeader, "48;5;24") {
+		t.Fatalf("assistant header is still inside the colored block: %q", assistantHeader)
+	}
+	if !strings.Contains(assistantHeader, "38;5;220") {
+		t.Fatalf("assistant header is not yellow: %q", assistantHeader)
+	}
+	if header := ansi.Strip(assistantHeader); !strings.Contains(header, "• agent") || strings.Contains(header, "agent>") {
+		t.Fatalf("unexpected assistant header: %q", header)
 	}
 
 	m := New(runtime)
@@ -126,11 +140,14 @@ func TestMessageBlocksAreSpacedAndColored(t *testing.T) {
 		}
 		return false
 	}
-	if !hasBlankAfter("user> hello") {
+	if !hasBlankAfter("hello") {
 		t.Fatalf("user block is not separated from following text: %q", content)
 	}
-	if !hasBlankAfter("thinking · working") {
+	if !hasBlankAfter("working") {
 		t.Fatalf("text is not separated from following assistant block: %q", content)
+	}
+	if strings.Contains(content, "thinking · working") {
+		t.Fatalf("thinking label was duplicated in its block body: %q", content)
 	}
 }
 
@@ -147,16 +164,18 @@ func TestLeadingControlEventsStayOutOfMessageViewport(t *testing.T) {
 		{AgentID: runtime.Root().ID, Kind: "runtime", Text: "runtime started"},
 		{AgentID: runtime.Root().ID, Kind: "status", Text: "thinking"},
 		{AgentID: runtime.Root().ID, Kind: "user", Text: "hi"},
+		{AgentID: runtime.Root().ID, Kind: "status", Text: "idle"},
+		{AgentID: runtime.Root().ID, Kind: "usage", Text: "token usage should stay hidden"},
 		{AgentID: runtime.Root().ID, Kind: "inference_request", Text: "wire payload should stay hidden"},
 		{AgentID: runtime.Root().ID, Kind: "thinking", Text: "working"},
 		{AgentID: runtime.Root().ID, Kind: "turn_done", Text: "lifecycle event should stay hidden"},
 	}
 	m.refreshView()
 	content := ansi.Strip(m.viewport.View())
-	if strings.Contains(content, "runtime started") || strings.Contains(content, "status · thinking") {
-		t.Fatalf("leading control events leaked into the message viewport: %q", content)
+	if strings.Contains(content, "runtime started") || strings.Contains(content, "status · thinking") || strings.Contains(content, "status · idle") || strings.Contains(content, "usage ·") || strings.Contains(content, "token usage should stay hidden") {
+		t.Fatalf("control events leaked into the message viewport: %q", content)
 	}
-	if !strings.Contains(content, "user> hi") || !strings.Contains(content, "thinking · working") {
+	if !strings.Contains(content, "• user") || !strings.Contains(content, "hi") || !strings.Contains(content, "thinking") || !strings.Contains(content, "working") {
 		t.Fatalf("post-user content missing from the message viewport: %q", content)
 	}
 	if strings.Contains(content, "inference_request") || strings.Contains(content, "wire payload should stay hidden") {
@@ -274,6 +293,20 @@ func TestNonChatBlocksRollAtTenLines(t *testing.T) {
 	if !strings.Contains(nonChat, "48;5;236") {
 		t.Fatalf("non-chat block has no gray background: %q", nonChat)
 	}
+	header := renderNonChatBlock(
+		[]harness.Event{{Kind: "thinking", Text: "working"}},
+		[]string{nonChat},
+		40,
+	)
+	if firstLine := strings.Split(header, "\n")[0]; strings.Contains(firstLine, "48;5;236") {
+		t.Fatalf("non-chat header is still inside the gray block: %q", firstLine)
+	}
+	if firstLine := strings.Split(header, "\n")[0]; !strings.Contains(firstLine, "38;5;220") {
+		t.Fatalf("non-chat header is not yellow: %q", firstLine)
+	}
+	if firstLine := ansi.Strip(strings.Split(header, "\n")[0]); !strings.Contains(firstLine, "• thinking") {
+		t.Fatalf("non-chat header lacks bullet prefix: %q", firstLine)
+	}
 
 	m := New(runtime)
 	m.width = 40
@@ -283,8 +316,8 @@ func TestNonChatBlocksRollAtTenLines(t *testing.T) {
 		{AgentID: runtime.Root().ID, Kind: "tool_result", Text: text, Metadata: map[string]any{"name": "quick_bash"}},
 	}
 	m.refreshView()
-	if got := m.viewport.TotalLineCount(); got != nonChatBlockHeight+3 {
-		t.Fatalf("consecutive non-chat content used %d lines, want %d", got, nonChatBlockHeight+3)
+	if got := m.viewport.TotalLineCount(); got != nonChatBlockHeight+4 {
+		t.Fatalf("consecutive non-chat content used %d lines, want %d", got, nonChatBlockHeight+4)
 	}
 	content := ansi.Strip(m.viewport.View())
 	if !strings.Contains(content, "tool quick_bash") || strings.Contains(content, "line 01") || !strings.Contains(content, "line 12") {
