@@ -80,6 +80,7 @@ type HTTPProvider struct {
 	Endpoint string
 	APIKey   string
 	Client   *http.Client
+	Flavor   string
 }
 
 func NewHTTP(endpoint, key string) *HTTPProvider {
@@ -89,18 +90,51 @@ func NewHTTP(endpoint, key string) *HTTPProvider {
 // ForModel selects the native endpoint where available and falls back to
 // OpenRouter, keeping all providers on the same OpenAI-compatible wire shape.
 func ForModel(model, endpointOverride string) (*HTTPProvider, error) {
+	model = NormalizeModel(model)
 	endpoint := endpointOverride
 	key := os.Getenv("OPENROUTER_API_KEY")
-	if strings.HasPrefix(model, "deepseek/") && os.Getenv("DEEPSEEK_API_KEY") != "" {
+	flavor := "openrouter"
+	if (strings.HasPrefix(model, "deepseek/") || strings.HasPrefix(model, "deepseek-")) && os.Getenv("DEEPSEEK_API_KEY") != "" {
 		endpoint, key = "https://api.deepseek.com/chat/completions", os.Getenv("DEEPSEEK_API_KEY")
+		flavor = "deepseek"
 	}
 	if (strings.HasPrefix(model, "zai/") || strings.HasPrefix(model, "glm-")) && os.Getenv("ZAI_API_KEY") != "" {
 		endpoint, key = "https://api.z.ai/api/coding/paas/v4/chat/completions", os.Getenv("ZAI_API_KEY")
+		flavor = "zai"
 	}
 	if endpoint == "" {
 		return nil, fmt.Errorf("no provider endpoint configured")
 	}
-	return NewHTTP(endpoint, key), nil
+	provider := NewHTTP(endpoint, key)
+	provider.Flavor = flavor
+	return provider, nil
+}
+
+// NormalizeModel keeps the old draft spelling from producing a provider 400
+// while leaving user-selected model names untouched otherwise.
+func NormalizeModel(model string) string {
+	model = strings.TrimSpace(model)
+	switch model {
+	case "deepseek/deepseek-v4.1-flash", "deepseek-v4.1-flash":
+		return "deepseek-v4-flash"
+	default:
+		return model
+	}
+}
+
+func (p *HTTPProvider) modelID(model string) string {
+	model = NormalizeModel(model)
+	switch p.Flavor {
+	case "deepseek":
+		return strings.TrimPrefix(model, "deepseek/")
+	case "zai":
+		return strings.TrimPrefix(model, "zai/")
+	case "openrouter":
+		if strings.HasPrefix(model, "deepseek-") {
+			return "deepseek/" + model
+		}
+	}
+	return model
 }
 
 func (p *HTTPProvider) Stream(ctx context.Context, req Request, sink StreamSink) error {
@@ -108,7 +142,7 @@ func (p *HTTPProvider) Stream(ctx context.Context, req Request, sink StreamSink)
 		return fmt.Errorf("provider API key is not configured (set OPENROUTER_API_KEY, DEEPSEEK_API_KEY, or ZAI_API_KEY)")
 	}
 	body := map[string]any{
-		"model":    req.Model,
+		"model":    p.modelID(req.Model),
 		"stream":   true,
 		"messages": append([]Message{{Role: "system", Content: req.System}}, req.Messages...),
 	}

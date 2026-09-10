@@ -228,9 +228,10 @@ func (m *Model) resize() {
 	if m.width < 1 || m.height < 1 {
 		return
 	}
-	m.input.SetWidth(m.width - 2)
-	m.viewport.Width = m.chatWidth()
-	m.viewport.Height = max(5, m.height-9)
+	contentWidth := max(1, m.chatWidth())
+	m.input.SetWidth(contentWidth)
+	m.viewport.Width = contentWidth
+	m.viewport.Height = m.chatHeight()
 	m.refreshView()
 }
 
@@ -260,7 +261,7 @@ func (m *Model) refreshView() {
 	}
 	lines := make([]string, 0, len(visible))
 	for _, event := range visible {
-		lines = append(lines, renderEvent(event))
+		lines = append(lines, wrapToWidth(renderEvent(event), max(1, m.chatWidth())))
 	}
 	m.viewport.SetContent(strings.Join(lines, "\n"))
 	if !m.userScrolled {
@@ -313,13 +314,32 @@ func (m Model) View() string {
 	return view
 }
 
+func (m Model) chatHeight() int {
+	return max(1, m.height-m.footerHeight())
+}
+
+func (m Model) footerHeight() int {
+	// The newlines joining chat, input, and status separate blocks; they do
+	// not consume an additional terminal row beyond the first row of the next
+	// block.
+	return lipgloss.Height(m.input.View()) + lipgloss.Height(m.statusLine())
+}
+
+func wrapToWidth(text string, width int) string {
+	if width < 1 {
+		return text
+	}
+	return lipgloss.NewStyle().Width(width).Render(text)
+}
+
 func (m Model) statusLine() string {
 	root := m.runtime.Root()
 	model := "-"
 	if root != nil {
 		model = root.Model + " / " + root.Effort
 	}
-	return dim.Render(fmt.Sprintf("runtime %s · model %s · jobs %d · agents %d · %s", m.runtime.ID(), model, len(m.runtime.Jobs().List()), len(m.agents), "Enter send · Down agents · PgUp/PgDn scroll · Ctrl-C exit"))
+	status := dim.Render(fmt.Sprintf("runtime %s · model %s · jobs %d · agents %d · %s", m.runtime.ID(), model, len(m.runtime.Jobs().List()), len(m.agents), "Enter send · Down agents · PgUp/PgDn scroll · Ctrl-C exit"))
+	return wrapToWidth(status, max(1, m.chatWidth()))
 }
 
 func (m Model) agentPanel() string {

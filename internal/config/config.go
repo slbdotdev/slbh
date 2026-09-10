@@ -26,7 +26,7 @@ func Load() Config {
 	}
 	return Config{
 		Home:           home,
-		RootModel:      getenv("SLBH_MODEL", "deepseek/deepseek-v4.1-flash"),
+		RootModel:      getenv("SLBH_MODEL", "deepseek-v4-flash"),
 		RootEffort:     getenv("SLBH_EFFORT", "xhigh"),
 		SubagentModel:  getenv("SLBH_SUBAGENT_MODEL", "zai/glm-5.3-flash"),
 		SubagentEffort: getenv("SLBH_SUBAGENT_EFFORT", "high"),

@@ -8,7 +8,7 @@
 go run ./cmd/slbh
 ```
 
-The default root model is `deepseek/deepseek-v4.1-flash` with `xhigh` effort. Subagents default to `zai/glm-5.3-flash` with `high` effort. Set `SLBH_MODEL`, `SLBH_EFFORT`, and a provider API key (`OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, or `ZAI_API_KEY`) to change it. `SLBH_HOME` can be used to place runtime logs somewhere explicit.
+The default root model is `deepseek-v4-flash` with `xhigh` effort. Subagents default to `zai/glm-5.3-flash` with `high` effort. Set `SLBH_MODEL`, `SLBH_EFFORT`, and a provider API key (`OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, or `ZAI_API_KEY`) to change it. `SLBH_HOME` can be used to place runtime logs somewhere explicit.
 
 The app remains useful without a key: messages are recorded and the provider returns a clear configuration error in the transcript.
 

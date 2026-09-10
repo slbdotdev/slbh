@@ -21,6 +21,18 @@ func TestStablePrefixKeyIgnoresUserTurns(t *testing.T) {
 	}
 }
 
+func TestNormalizeDeepSeekModel(t *testing.T) {
+	if got := NormalizeModel("deepseek/deepseek-v4.1-flash"); got != "deepseek-v4-flash" {
+		t.Fatalf("got %q", got)
+	}
+	if got := (&HTTPProvider{Flavor: "deepseek"}).modelID("deepseek-v4-flash"); got != "deepseek-v4-flash" {
+		t.Fatalf("native model id got %q", got)
+	}
+	if got := (&HTTPProvider{Flavor: "openrouter"}).modelID("deepseek-v4-flash"); got != "deepseek/deepseek-v4-flash" {
+		t.Fatalf("OpenRouter model id got %q", got)
+	}
+}
+
 func TestParseSSE(t *testing.T) {
 	data := strings.NewReader("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\",\"content\":\"hello\",\"tool_calls\":[{\"id\":\"c1\",\"function\":{\"name\":\"glob\",\"arguments\":\"{}\"}}]}}]}\n\ndata: {\"usage\":{\"total_tokens\":4}}\n\ndata: [DONE]\n")
 	var got []Event
