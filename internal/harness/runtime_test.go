@@ -387,7 +387,7 @@ func TestLeafSubagentUsesLeafDefault(t *testing.T) {
 	}
 }
 
-func TestChildResultStartsParentTurn(t *testing.T) {
+func TestChildResultReachesParent(t *testing.T) {
 	r, err := New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high", SubagentModel: "test-child", SubagentEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return childResultProvider{}, nil }})
 	if err != nil {
 		t.Fatal(err)
@@ -408,6 +408,7 @@ func TestChildResultStartsParentTurn(t *testing.T) {
 		}
 	}
 
+	waitAgentTurn(t, r, r.Root().ID)
 	var resultCount int
 	for _, message := range r.Root().History() {
 		if strings.HasPrefix(message.Content, "[result from child] child answer") {

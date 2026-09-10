@@ -117,12 +117,25 @@ steering message. It does not create a new root turn.
 ## Agents and tools
 
 The root agent can create children through depth two. Agents have independent
-histories, models, efforts, working directories, and steering queues. A turn
+histories, models, efforts, working directories, and message inboxes. A turn
 may use up to 100 provider/tool rounds. Child launch requests return
-immediately; later results are delivered to the requesting agent.
+immediately; results use the same mandatory steering path as every other message.
 
-Subagents execute through this local runtime. Each child has its own working
-directory, harness, model, effort, history, and steering queue.
+**Mid-turn delivery is mandatory for every agent and every message.** Messages
+enter the recipient's context in FIFO order at the next API/tool call boundary,
+within its current turn. An idle recipient wakes immediately. This applies to
+user input, parent/child/sibling messages, follow-ups, and child results. There
+is no separate next-turn message queue. Waiting for the end of an agentic turn
+is a delivery failure, never an optional mode.
+
+A call boundary is the completion of an individual inference request or tool
+call, not the end of the agent's overall task. **Messages never cancel in-flight
+API or tool calls or discard paid-for output.** Completed inference text,
+already-produced tool calls, and tool results are retained. Tool calls from a
+completed response execute in order, with messages inserted between complete
+call/result pairs; the next inference receives all of that work and the new
+messages. A response without tools cannot end the turn while messages are
+pending. Message transport is independent of the lossy UI event channel.
 
 Available tools are:
 
@@ -131,6 +144,11 @@ Available tools are:
 - Jobs: `quick_bash`, `long_job`, `list_jobs`, `read_job`, and `kill_job`.
 - Agents: `list_subagents`, `launch_subagent`, `msg_subagent`, and
   `end_subagent`.
+
+`msg_subagent` addresses any agent in the runtime by ID, including a parent or
+sibling. Empty messages and delivery to stopped agents return errors. Successful
+submission acknowledges acceptance; the transcript records context insertion
+as `steer` or `child_result` at the call boundary.
 
 File operations are scoped to the active agent's working directory. Reads and
 job output are bounded. `quick_bash` is for short foreground commands with a
@@ -180,6 +198,13 @@ On Linux or WSL2, also run:
 ```sh
 go test -race ./...
 ```
+
+Messaging regression tests must verify model-visible delivery during an active
+turn, including a message arriving during the final inference response, idle
+wakeup, FIFO bursts, tool boundaries, and both directions of parent/child
+communication. They must also verify that in-flight calls finish, their output
+is preserved, and completed tool calls are not discarded or replayed. A queued
+message or UI event alone is not evidence of successful delivery.
 
 An optional live test makes real provider requests and requires a configured
 key:

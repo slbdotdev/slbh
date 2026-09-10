@@ -341,7 +341,9 @@ func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	agent.WorkDir = workingDir
 	r.emit(Event{AgentID: agent.ID, AgentTitle: spec.Title, Kind: "status", Text: "subagent launched", Metadata: map[string]any{"parent": parentID, "harness": agent.Harness, "working_dir": agent.WorkDir}})
 	if spec.Brief != "" {
-		agent.Send(spec.Brief)
+		if err := agent.Send(spec.Brief); err != nil {
+			return nil, err
+		}
 	}
 	return agent, nil
 }

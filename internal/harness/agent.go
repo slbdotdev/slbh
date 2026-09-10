@@ -16,10 +16,11 @@ const (
 	compactAtDenominator = 10
 )
 
-type turn struct {
-	prompt      string
-	steer       bool
-	childResult bool
+type agentMessage struct {
+	prompt   string
+	kind     string
+	text     string
+	metadata map[string]any
 }
 
 type Agent struct {
@@ -36,8 +37,9 @@ type Agent struct {
 	mu            sync.RWMutex
 	status        string
 	history       []provider.Message
-	turns         chan turn
-	steers        chan string
+	inbox         []agentMessage
+	wake          chan struct{}
+	stopped       bool
 	cancel        context.CancelFunc
 	done          chan struct{}
 	stopOnce      sync.Once
@@ -50,7 +52,7 @@ type Agent struct {
 }
 
 func newAgent(runtime *Runtime, agentID, title, parentID string, depth int, model, effort string) *Agent {
-	return &Agent{runtime: runtime, ID: agentID, Title: title, ParentID: parentID, Depth: depth, Model: model, Effort: effort, Harness: "native", WorkDir: runtime.workDir, status: "idle", turns: make(chan turn, 16), steers: make(chan string, 64), done: make(chan struct{})}
+	return &Agent{runtime: runtime, ID: agentID, Title: title, ParentID: parentID, Depth: depth, Model: model, Effort: effort, Harness: "native", WorkDir: runtime.workDir, status: "idle", wake: make(chan struct{}, 1), done: make(chan struct{})}
 }
 
 func (a *Agent) start() {
@@ -59,27 +61,52 @@ func (a *Agent) start() {
 	go a.loop(ctx)
 }
 
-func (a *Agent) Send(prompt string) {
-	if strings.TrimSpace(prompt) == "" {
-		return
-	}
-	select {
-	case a.turns <- turn{prompt: prompt}:
-	case <-a.runtime.ctx.Done():
-	}
+func (a *Agent) Send(prompt string) error {
+	return a.deliver(agentMessage{prompt: prompt, kind: "user", text: prompt})
 }
 
-// Steer is deliberately a separate queue. It is visible to the agent during
-// its current turn, but it cannot replace or reorder the next parent result.
-func (a *Agent) Steer(message string) {
+// Steer uses the same inbox as every other message, including child results.
+// A busy agent consumes it in the active turn; an idle agent wakes immediately.
+func (a *Agent) Steer(message string) error {
 	if strings.TrimSpace(message) == "" {
-		return
+		return fmt.Errorf("message is empty")
 	}
+	return a.deliver(agentMessage{prompt: "[steer] " + message, kind: "steer", text: message})
+}
+
+func (a *Agent) deliver(message agentMessage) error {
+	if strings.TrimSpace(message.prompt) == "" {
+		return fmt.Errorf("message is empty")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.stopped || a.runtime.ctx.Err() != nil {
+		return fmt.Errorf("agent %q is stopped", a.ID)
+	}
+	// The mutex defines FIFO acceptance order. The wake channel is only a
+	// notification: it never carries messages and cannot drop or block them.
+	a.inbox = append(a.inbox, message)
 	select {
-	case a.steers <- message:
-		a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "steer", Text: message})
-	case <-a.runtime.ctx.Done():
+	case a.wake <- struct{}{}:
+	default:
 	}
+	return nil
+}
+
+func (a *Agent) takeMessages() []agentMessage {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	messages := a.inbox
+	a.inbox = nil
+	return messages
+}
+
+func (a *Agent) appendMessages(history []provider.Message, messages []agentMessage) []provider.Message {
+	for _, message := range messages {
+		history = append(history, provider.Message{Role: "user", Content: message.prompt})
+		a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: message.kind, Text: message.text, Metadata: message.metadata})
+	}
+	return history
 }
 
 func (a *Agent) Snapshot() AgentSnapshot {
@@ -135,6 +162,9 @@ func (a *Agent) ClearHistory() {
 
 func (a *Agent) stop() {
 	a.stopOnce.Do(func() {
+		a.mu.Lock()
+		a.stopped = true
+		a.mu.Unlock()
 		if a.cancel != nil {
 			a.cancel()
 		}
@@ -152,32 +182,29 @@ func (a *Agent) loop(ctx context.Context) {
 		case <-ctx.Done():
 			a.setStatus("stopped")
 			return
-		case turn := <-a.turns:
-			a.handle(ctx, turn)
+		case <-a.wake:
+			if messages := a.takeMessages(); len(messages) > 0 {
+				a.handle(ctx, messages)
+			}
 		}
 	}
 }
 
-func (a *Agent) handle(ctx context.Context, turn turn) {
+func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 	a.setStatus("thinking")
-	if !turn.childResult {
-		a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "user", Text: turn.prompt})
-	}
 	a.mu.Lock()
 	epoch := a.historyEpoch
-	a.history = append(a.history, provider.Message{Role: "user", Content: turn.prompt})
 	history := append([]provider.Message(nil), a.history...)
 	a.mu.Unlock()
-	for {
-		select {
-		case steer := <-a.steers:
-			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "steer", Text: steer})
-			history = append(history, provider.Message{Role: "user", Content: "[steer] " + steer})
-		default:
-			goto drained
+	history = a.appendMessages(history, messages)
+	// Preserve consumed input even when provider setup or inference fails.
+	defer func() {
+		a.mu.Lock()
+		if a.historyEpoch == epoch {
+			a.history = history
 		}
-	}
-drained:
+		a.mu.Unlock()
+	}()
 	a.mu.RLock()
 	model := a.Model
 	effort := a.Effort
@@ -192,15 +219,31 @@ drained:
 		return
 	}
 	contextWindow := a.resolveContextWindow(ctx, p)
-	var finalAnswer strings.Builder
 	system := systemPrompt(a)
 	tools := ToolDefinitions()
-	for round := 0; round < 100; round++ {
+	for round := 0; ; {
+		if ctx.Err() != nil {
+			return
+		}
+		history = a.appendMessages(history, a.takeMessages())
 		history = a.compactHistoryIfNeeded(history, contextWindow, system, tools)
-		req := provider.Request{Model: model, Effort: effort, System: system, Messages: history, Tools: tools, CacheKey: provider.StablePrefixKey(provider.Request{Model: model, System: system, Tools: tools})}
+		if round >= 100 {
+			a.fail(fmt.Errorf("provider/tool round limit reached"))
+			return
+		}
 		var answer strings.Builder
 		calls := make(map[int]*provider.ToolCall)
 		err = provider.Retry(ctx, 3, func() error {
+			// A failed API attempt is also a call boundary. Retain partial prose
+			// and accept new input before retrying; incomplete tool fragments stay
+			// in the transcript and cannot be executed as successful calls.
+			if answer.Len() > 0 {
+				history = append(history, provider.Message{Role: "assistant", Content: answer.String() + "\n[API attempt failed before completion]"})
+			}
+			answer.Reset()
+			calls = make(map[int]*provider.ToolCall)
+			history = a.appendMessages(history, a.takeMessages())
+			req := provider.Request{Model: model, Effort: effort, System: system, Messages: history, Tools: tools, CacheKey: provider.StablePrefixKey(provider.Request{Model: model, System: system, Tools: tools})}
 			a.recordRequestContext(req, contextWindow)
 			a.runtime.recordInferenceRequest(a, round, req, p)
 			return p.Stream(ctx, req, func(event provider.Event) error {
@@ -231,17 +274,44 @@ drained:
 				return nil
 			})
 		})
+		if ctx.Err() != nil {
+			return
+		}
+		// Paid-for output is retained exactly once, even when new messages
+		// arrived during this request. Delivery never cancels or restarts it.
+		if answer.Len() > 0 {
+			history = append(history, provider.Message{Role: "assistant", Content: answer.String()})
+		}
 		if err != nil {
+			history = a.appendMessages(history, a.takeMessages())
 			a.fail(err)
 			return
 		}
-		if answer.Len() > 0 {
-			finalAnswer.WriteString(answer.String())
-		}
 		if len(calls) == 0 {
-			break
+			// Finish and message acceptance share one lock. Input accepted before
+			// this point must be consumed in THIS turn, even after stream EOF.
+			a.mu.Lock()
+			if len(a.inbox) > 0 {
+				a.mu.Unlock()
+				continue
+			}
+			if a.historyEpoch == epoch {
+				a.history = history
+			}
+			a.status = "idle"
+			a.mu.Unlock()
+			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: "idle"})
+			if a.ParentID != "" && answer.Len() > 0 {
+				if parent, ok := a.runtime.Agent(a.ParentID); ok {
+					if err := parent.receiveChildResult(a, answer.String()); err != nil {
+						a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "delivery_error", Text: err.Error()})
+					}
+				}
+			}
+			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "turn_done"})
+			return
 		}
-		assistant := provider.Message{Role: "assistant", Content: answer.String()}
+		history = a.appendMessages(history, a.takeMessages())
 		ordered := make([]int, 0, len(calls))
 		for index := range calls {
 			ordered = append(ordered, index)
@@ -254,34 +324,25 @@ drained:
 			}
 		}
 		for _, index := range ordered {
-			assistant.ToolCalls = append(assistant.ToolCalls, *calls[index])
-		}
-		history = append(history, assistant)
-		for _, index := range ordered {
+			if ctx.Err() != nil {
+				return
+			}
+			history = a.appendMessages(history, a.takeMessages())
 			call := calls[index]
+			// Represent a returned batch as ordered call/result pairs. This
+			// permits messages at EVERY tool boundary without orphaning a tool
+			// result or inserting user input inside an unresolved tool batch.
+			// Every already-produced tool call still executes exactly once.
+			history = append(history, provider.Message{Role: "assistant", ToolCalls: []provider.ToolCall{*call}})
 			result, toolErr := a.runtime.ExecuteTool(a.ID, call.Function.Name, call.Function.Arguments)
 			if toolErr != nil {
 				result = "tool error: " + toolErr.Error()
 			}
 			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool_result", Text: result, Metadata: map[string]any{"name": call.Function.Name, "call_id": call.ID}})
 			history = append(history, provider.Message{Role: "tool", ToolCallID: call.ID, Name: call.Function.Name, Content: result})
+			history = a.appendMessages(history, a.takeMessages())
 		}
-	}
-	a.mu.Lock()
-	if a.historyEpoch == epoch {
-		a.history = history
-		if finalAnswer.Len() > 0 {
-			a.history = append(a.history, provider.Message{Role: "assistant", Content: finalAnswer.String()})
-		}
-	}
-	a.mu.Unlock()
-	a.maybeCompact(contextWindow, system, tools)
-	a.setStatus("idle")
-	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "turn_done"})
-	if a.ParentID != "" && finalAnswer.Len() > 0 {
-		if parent, ok := a.runtime.Agent(a.ParentID); ok {
-			parent.receiveChildResult(a, finalAnswer.String())
-		}
+		round++
 	}
 }
 
@@ -363,16 +424,8 @@ func usageNestedInt(usage map[string]any, parent, key string) (int, bool) {
 	return usageInt(nested, key)
 }
 
-func (a *Agent) receiveChildResult(child *Agent, text string) {
-	// Queue the result as an internal turn instead of mutating history directly.
-	// The active turn owns a local history snapshot and would otherwise overwrite
-	// a result that arrives before it commits.
-	prompt := fmt.Sprintf("[result from %s] %s", child.Title, text)
-	select {
-	case a.turns <- turn{prompt: prompt, childResult: true}:
-		a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "child_result", Text: text, Metadata: map[string]any{"child": child.ID}})
-	case <-a.runtime.ctx.Done():
-	}
+func (a *Agent) receiveChildResult(child *Agent, text string) error {
+	return a.deliver(agentMessage{prompt: fmt.Sprintf("[result from %s] %s", child.Title, text), kind: "child_result", text: text, metadata: map[string]any{"child": child.ID}})
 }
 
 // Compact keeps the most recent work and leaves a durable marker in the
@@ -489,5 +542,5 @@ func compactMessages(history []provider.Message, keep int) ([]provider.Message, 
 }
 
 func systemPrompt(a *Agent) string {
-	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. The harness will deliver the child's result as a later [result from ...] message and wake you, and you should act on that result when it arrives. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
+	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message, is a mandatory mid-turn steer: read and act on it during your current work. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
 }

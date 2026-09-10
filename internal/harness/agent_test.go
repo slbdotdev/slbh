@@ -65,7 +65,10 @@ func TestSystemPromptDirectsAsyncChildHandling(t *testing.T) {
 		"do not block this turn waiting for a child",
 		"Do not use quick_bash, long_job, sleep, polling, or shell wait loops",
 		"end your turn",
-		"later [result from ...] message",
+		"mandatory mid-turn steer",
+		"next API/tool call boundary",
+		"In-flight API and tool calls finish normally",
+		"Deferring a message until the end of a turn is a failure",
 		"responsible for ending each subagent with end_subagent",
 		"subagents stay alive indefinitely",
 	} {

@@ -40,8 +40,8 @@ func ToolDefinitions() []provider.Tool {
 		{Name: "read_job", Description: "Read current stdout and stderr for a job.", Parameters: stringArg("job_id")},
 		{Name: "kill_job", Description: "Kill a job owned by the calling agent.", Parameters: stringArg("job_id")},
 		{Name: "list_subagents", Description: "List this runtime's agent tree.", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
-		{Name: "launch_subagent", Description: "Launch a child agent up to depth two; returns immediately. Omit model to use the configured subagent default and choose from the approved model guidance. Honor an explicit user request for another model. Do not wait or poll for it: its result is delivered automatically in a later parent turn.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"title": map[string]any{"type": "string"}, "harness": map[string]any{"type": "string"}, "model": map[string]any{"type": "string", "description": "Optional model ID; use the approved model guidance unless the user explicitly requests another model."}, "effort": map[string]any{"type": "string"}, "brief": map[string]any{"type": "string"}, "warn_after_seconds": map[string]any{"type": "integer"}, "working_dir": map[string]any{"type": "string"}}, "required": []string{"title", "brief"}}},
-		{Name: "msg_subagent", Description: "Steer an existing subagent without changing parent delivery ordering.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string"}, "message": map[string]any{"type": "string"}}, "required": []string{"agent_id", "message"}}},
+		{Name: "launch_subagent", Description: "Launch a child agent up to depth two; returns immediately. Omit model to use the configured subagent default and choose from the approved model guidance. Honor an explicit user request for another model. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"title": map[string]any{"type": "string"}, "harness": map[string]any{"type": "string"}, "model": map[string]any{"type": "string", "description": "Optional model ID; use the approved model guidance unless the user explicitly requests another model."}, "effort": map[string]any{"type": "string"}, "brief": map[string]any{"type": "string"}, "warn_after_seconds": map[string]any{"type": "integer"}, "working_dir": map[string]any{"type": "string"}}, "required": []string{"title", "brief"}}},
+		{Name: "msg_subagent", Description: "Send a mandatory mid-turn steer to any agent in this runtime, including your parent or siblings. FIFO delivery at the next API/tool call boundary; wakes idle recipients. Never waits for turn completion or cancels in-flight work.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string"}, "message": map[string]any{"type": "string"}}, "required": []string{"agent_id", "message"}}},
 		{Name: "end_subagent", Description: "Stop a child agent.", Parameters: stringArg("agent_id")},
 	}
 }
@@ -131,8 +131,18 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 		if !ok {
 			return "", fmt.Errorf("agent not found")
 		}
-		child.Steer(value(a.Values, "message"))
-		return "sent", nil
+		sender, ok := r.Agent(agentID)
+		if !ok {
+			return "", fmt.Errorf("sender agent not found")
+		}
+		message := value(a.Values, "message")
+		if strings.TrimSpace(message) == "" {
+			return "", fmt.Errorf("message is empty")
+		}
+		if err := child.Steer(fmt.Sprintf("[from %s (%s)] %s", sender.Title, sender.ID, message)); err != nil {
+			return "", err
+		}
+		return "accepted for delivery at the next API/tool call boundary; idle recipients wake immediately", nil
 	case "end_subagent":
 		if err := r.EndSubagent(agentID, value(a.Values, "agent_id")); err != nil {
 			return "", err

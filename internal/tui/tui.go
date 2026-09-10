@@ -314,10 +314,14 @@ func (m *Model) submit() tea.Cmd {
 	if a == nil {
 		return nil
 	}
+	var err error
 	if a.ID == rootID(m.runtime) {
-		a.Send(text)
+		err = a.Send(text)
 	} else {
-		a.Steer(text)
+		err = a.Steer(text)
+	}
+	if err != nil {
+		m.runtime.EmitStatus("error", err.Error())
 	}
 	return nil
 }
