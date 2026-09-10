@@ -63,11 +63,11 @@ func TestMessageBlocksAreSpacedAndColored(t *testing.T) {
 	thinking := harness.Event{AgentID: runtime.Root().ID, AgentTitle: "root", Kind: "thinking", Text: "working"}
 	assistant := harness.Event{AgentID: runtime.Root().ID, AgentTitle: "root", Kind: "assistant", Text: "done"}
 
-	if got := lipgloss.Width(renderEvent(user, width)); got != width {
-		t.Fatalf("user block width=%d, want %d", got, width)
+	if got := lipgloss.Width(renderEvent(user, width)); got != lipgloss.Width("you> hello") {
+		t.Fatalf("user block width=%d, want content width %d", got, lipgloss.Width("you> hello"))
 	}
-	if got := lipgloss.Width(renderEvent(assistant, width)); got != width {
-		t.Fatalf("assistant block width=%d, want %d", got, width)
+	if got := lipgloss.Width(renderEvent(assistant, width)); got != lipgloss.Width("root> done") {
+		t.Fatalf("assistant block width=%d, want content width %d", got, lipgloss.Width("root> done"))
 	}
 
 	profile := lipgloss.DefaultRenderer().ColorProfile()
