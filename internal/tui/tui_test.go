@@ -63,11 +63,11 @@ func TestMessageBlocksAreSpacedAndColored(t *testing.T) {
 	thinking := harness.Event{AgentID: runtime.Root().ID, AgentTitle: "root", Kind: "thinking", Text: "working"}
 	assistant := harness.Event{AgentID: runtime.Root().ID, AgentTitle: "root", Kind: "assistant", Text: "done"}
 
-	if got := lipgloss.Width(renderEvent(user, width)); got != lipgloss.Width("you> hello") {
-		t.Fatalf("user block width=%d, want content width %d", got, lipgloss.Width("you> hello"))
+	if got := lipgloss.Width(renderEvent(user, width)); got != width {
+		t.Fatalf("user block width=%d, want %d", got, width)
 	}
-	if got := lipgloss.Width(renderEvent(assistant, width)); got != lipgloss.Width("root> done") {
-		t.Fatalf("assistant block width=%d, want content width %d", got, lipgloss.Width("root> done"))
+	if got := lipgloss.Width(renderEvent(assistant, width)); got != width {
+		t.Fatalf("assistant block width=%d, want %d", got, width)
 	}
 
 	profile := lipgloss.DefaultRenderer().ColorProfile()
@@ -78,8 +78,14 @@ func TestMessageBlocksAreSpacedAndColored(t *testing.T) {
 	if !strings.Contains(userBlock, "48;5;24") {
 		t.Fatalf("user block has no colored background: %q", userBlock)
 	}
+	if strings.Contains(userBlock, "you> \x1b[0mhello") || !strings.Contains(userBlock, "you> \x1b[39mhello") {
+		t.Fatalf("user message background breaks after the colored label: %q", userBlock)
+	}
 	if !strings.Contains(assistantBlock, "48;5;236") {
 		t.Fatalf("assistant block has no colored background: %q", assistantBlock)
+	}
+	if strings.Contains(assistantBlock, "root> \x1b[0mdone") || !strings.Contains(assistantBlock, "root> \x1b[39mdone") {
+		t.Fatalf("assistant message background breaks after the colored label: %q", assistantBlock)
 	}
 
 	m := New(runtime)

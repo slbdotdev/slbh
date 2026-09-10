@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/slbdotdev/slbh/internal/harness"
 )
 
@@ -309,18 +308,12 @@ func isMessage(event harness.Event) bool {
 }
 
 func messageBlock(text string, width int, background lipgloss.TerminalColor) string {
-	wrapped := wrapToWidth(text, width)
-	lines := strings.Split(wrapped, "\n")
-	for i, line := range lines {
-		plain := ansi.Strip(line)
-		contentWidth := ansi.StringWidth(strings.TrimRight(plain, " "))
-		if contentWidth == 0 {
-			lines[i] = ""
-			continue
-		}
-		lines[i] = lipgloss.NewStyle().Background(background).Render(ansi.Cut(line, 0, contentWidth))
-	}
-	return strings.Join(lines, "\n")
+	// The label is foreground-styled before this block is rendered. Lipgloss's
+	// foreground style emits a full reset, which would clear the block
+	// background before the message text. Keep the foreground reset scoped so
+	// the background remains continuous across the whole rectangle.
+	text = strings.ReplaceAll(text, "\x1b[0m", "\x1b[39m")
+	return lipgloss.NewStyle().Width(width).Background(background).Render(text)
 }
 
 func toolIndex(event harness.Event) string {
