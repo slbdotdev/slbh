@@ -28,16 +28,20 @@ type Event struct {
 }
 
 type AgentSnapshot struct {
-	ID       string
-	Title    string
-	ParentID string
-	Depth    int
-	Model    string
-	Effort   string
-	Status   string
-	Harness  string
-	WorkDir  string
-	SSH      string
+	ID              string
+	Title           string
+	ParentID        string
+	Depth           int
+	Model           string
+	Effort          string
+	Status          string
+	Harness         string
+	WorkDir         string
+	SSH             string
+	ContextWindow   int
+	ContextUsed     int
+	CacheHitTokens  int
+	CacheMissTokens int
 }
 
 type LaunchSpec struct {
@@ -51,6 +55,12 @@ type LaunchSpec struct {
 	SSH              string
 }
 
+type agentSession struct {
+	id   string
+	path string
+	log  *logx.JSONL
+}
+
 type Runtime struct {
 	mu        sync.RWMutex
 	id        string
@@ -59,9 +69,11 @@ type Runtime struct {
 	config    config.Config
 	ctx       context.Context
 	cancel    context.CancelFunc
-	log       *logx.JSONL
 	jobs      *job.Manager
 	agents    map[string]*Agent
+	rootID    string
+	current   map[string]*agentSession
+	sessions  []*agentSession
 	events    chan Event
 	provider  func(model string) (provider.Provider, error)
 	closeOnce sync.Once
@@ -82,13 +94,9 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	log, err := logx.Open(filepath.Join(dir, "transcript.jsonl"), runtimeID)
-	if err != nil {
-		return nil, err
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	r := &Runtime{id: runtimeID, rootPath: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, log: log, agents: make(map[string]*Agent), events: options.Events, provider: options.Provider}
+	r := &Runtime{id: runtimeID, rootPath: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), events: options.Events, provider: options.Provider}
 	if r.events == nil {
 		r.events = make(chan Event, 1024)
 	}
@@ -97,22 +105,31 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 			return provider.ForModel(model, cfg.Endpoint)
 		}
 	}
-	r.jobs = job.NewManager(log)
+	r.jobs = job.NewManagerWithLogger(r.sessionLogger)
 	r.jobs.SetWarningHandler(func(snapshot job.Snapshot) {
 		r.emit(Event{AgentID: snapshot.Author, Kind: "job_warning", Text: "job is still running", Metadata: map[string]any{"job": snapshot.ID, "warn_after": snapshot.WarnAfter.String()}})
 	})
 	if err := r.writeMarker(); err != nil {
-		_ = log.Close()
 		cancel()
 		return nil, err
 	}
-	root := r.newAgent("root", "", 0, cfg.RootModel, cfg.RootEffort)
+	root, err := r.newAgent("root", "", 0, cfg.RootModel, cfg.RootEffort)
+	if err != nil {
+		cancel()
+		_ = os.Remove(filepath.Join(r.rootPath, "runtime.json"))
+		r.closeSessions()
+		return nil, err
+	}
+	r.mu.Lock()
+	r.rootID = root.ID
+	r.mu.Unlock()
 	r.emit(Event{AgentID: root.ID, AgentTitle: root.Title, Kind: "runtime", Text: "runtime started"})
 	return r, nil
 }
 
 func (r *Runtime) ID() string           { return r.id }
 func (r *Runtime) Dir() string          { return r.rootPath }
+func (r *Runtime) Home() string         { return r.config.Home }
 func (r *Runtime) Events() <-chan Event { return r.events }
 func (r *Runtime) Jobs() *job.Manager   { return r.jobs }
 func (r *Runtime) Root() *Agent {
@@ -126,13 +143,60 @@ func (r *Runtime) Root() *Agent {
 	return nil
 }
 
-func (r *Runtime) newAgent(title, parentID string, depth int, model, effort string) *Agent {
+func (r *Runtime) newAgent(title, parentID string, depth int, model, effort string) (*Agent, error) {
 	agent := newAgent(r, id.New("agent"), title, parentID, depth, model, effort)
+	session, err := r.openAgentSession(agent.ID)
+	if err != nil {
+		return nil, err
+	}
 	r.mu.Lock()
 	r.agents[agent.ID] = agent
+	r.current[agent.ID] = session
+	r.sessions = append(r.sessions, session)
 	r.mu.Unlock()
 	agent.start()
-	return agent
+	return agent, nil
+}
+
+func (r *Runtime) openAgentSession(agentID string) (*agentSession, error) {
+	sessionID := id.New("session")
+	path := filepath.Join(r.rootPath, "agents", agentID, "sessions", sessionID, "transcript.jsonl")
+	log, err := logx.OpenSession(path, r.id, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return &agentSession{id: sessionID, path: path, log: log}, nil
+}
+
+func (r *Runtime) sessionLogger(agentID string) *logx.JSONL {
+	r.mu.RLock()
+	if agentID == "" {
+		agentID = r.rootID
+	}
+	session := r.current[agentID]
+	r.mu.RUnlock()
+	if session == nil {
+		return nil
+	}
+	return session.log
+}
+
+func (r *Runtime) currentSession(agentID string) (*agentSession, error) {
+	r.mu.RLock()
+	session := r.current[agentID]
+	r.mu.RUnlock()
+	if session == nil {
+		return nil, fmt.Errorf("agent %q not found", agentID)
+	}
+	return session, nil
+}
+
+func (r *Runtime) TranscriptPath(agentID string) (string, error) {
+	session, err := r.currentSession(agentID)
+	if err != nil {
+		return "", err
+	}
+	return session.path, nil
 }
 
 func (r *Runtime) LaunchSubagent(parentID, title, brief string) (*Agent, error) {
@@ -174,7 +238,10 @@ func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 			return nil, fmt.Errorf("working directory %q is not a directory", spec.WorkingDir)
 		}
 	}
-	agent := r.newAgent(spec.Title, parentID, parent.Depth+1, model, effort)
+	agent, err := r.newAgent(spec.Title, parentID, parent.Depth+1, model, effort)
+	if err != nil {
+		return nil, err
+	}
 	agent.Harness, agent.SSH = spec.Harness, spec.SSH
 	if agent.Harness == "" {
 		agent.Harness = "native"
@@ -218,19 +285,62 @@ func (r *Runtime) Compact(agentID string, keep int) (int, error) {
 	return agent.Compact(keep), nil
 }
 
+func (r *Runtime) Clear(agentID string) error {
+	agent, ok := r.Agent(agentID)
+	if !ok {
+		return fmt.Errorf("agent %q not found", agentID)
+	}
+	session, err := r.openAgentSession(agentID)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.current[agentID] = session
+	r.sessions = append(r.sessions, session)
+	agent.ClearHistory()
+	r.mu.Unlock()
+	return nil
+}
+
 func (r *Runtime) emit(event Event) {
 	if event.Time.IsZero() {
 		event.Time = time.Now().UTC()
 	}
 	event.RuntimeID = r.id
-	if r.log != nil {
-		_ = r.log.Append(logx.Entry{Time: event.Time, Agent: event.AgentID, Kind: event.Kind, Text: event.Text, Metadata: event.Metadata})
+	r.mu.RLock()
+	agentID := event.AgentID
+	if agentID == "" {
+		agentID = r.rootID
+	}
+	session := r.current[agentID]
+	r.mu.RUnlock()
+	if session != nil {
+		_ = session.log.Append(logx.Entry{Time: event.Time, Agent: event.AgentID, Session: session.id, Kind: event.Kind, Text: event.Text, Metadata: event.Metadata})
 	}
 	select {
 	case r.events <- event:
 	default:
 		// The transcript is lossless; a slow UI must not stall token streaming.
 	}
+}
+
+func (r *Runtime) recordInferenceRequest(agent *Agent, round int, req provider.Request, p provider.Provider) {
+	metadata := map[string]any{"round": round}
+	if payloadProvider, ok := p.(provider.RequestPayloadProvider); ok {
+		payload, err := payloadProvider.RequestPayload(req)
+		if err != nil {
+			metadata["payload_error"] = err.Error()
+		} else {
+			metadata["payload"] = json.RawMessage(payload)
+			metadata["payload_sha256"] = provider.PayloadSHA256(payload)
+		}
+	} else if context, err := provider.ContextPayload(req); err != nil {
+		metadata["context_error"] = err.Error()
+	} else {
+		metadata["context"] = json.RawMessage(context)
+		metadata["context_sha256"] = provider.PayloadSHA256(context)
+	}
+	r.emit(Event{AgentID: agent.ID, AgentTitle: agent.Title, Kind: "inference_request", Metadata: metadata})
 }
 
 // EmitStatus lets front ends record local control-plane events without
@@ -257,11 +367,25 @@ func (r *Runtime) Close() error {
 		if removeErr := os.Remove(filepath.Join(r.rootPath, "runtime.json")); removeErr != nil && !os.IsNotExist(removeErr) {
 			err = removeErr
 		}
-		if closeErr := r.log.Close(); err == nil {
-			err = closeErr
+		r.mu.RLock()
+		sessions := append([]*agentSession(nil), r.sessions...)
+		r.mu.RUnlock()
+		for _, session := range sessions {
+			if closeErr := session.log.Close(); err == nil {
+				err = closeErr
+			}
 		}
 	})
 	return err
+}
+
+func (r *Runtime) closeSessions() {
+	r.mu.RLock()
+	sessions := append([]*agentSession(nil), r.sessions...)
+	r.mu.RUnlock()
+	for _, session := range sessions {
+		_ = session.log.Close()
+	}
 }
 
 func (r *Runtime) writeMarker() error {

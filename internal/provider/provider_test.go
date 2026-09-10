@@ -1,10 +1,12 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -22,6 +24,51 @@ func TestStablePrefixKeyIgnoresUserTurns(t *testing.T) {
 	changed.System = "different system"
 	if StablePrefixKey(first) == StablePrefixKey(changed) {
 		t.Fatal("system prefix changes must change the cache key")
+	}
+	descriptionChanged := base
+	descriptionChanged.Tools = []Tool{{Name: "read_file", Description: "different", Parameters: map[string]any{"type": "object"}}}
+	if StablePrefixKey(first) == StablePrefixKey(descriptionChanged) {
+		t.Fatal("tool description changes must change the cache key")
+	}
+}
+
+func TestRequestPayloadRoundTripsExactly(t *testing.T) {
+	temperature := 0.2
+	req := Request{
+		Model:       "vendor/model",
+		Effort:      "high",
+		System:      "stable system",
+		Messages:    []Message{{Role: "user", Content: "hello"}},
+		Tools:       []Tool{{Name: "read_file", Description: "read", Parameters: map[string]any{"type": "object"}}},
+		CacheKey:    "slbh-test-cache",
+		Temperature: &temperature,
+	}
+	p := NewHTTP("https://example.invalid/v1/chat/completions", "test-key")
+	payload, err := p.RequestPayload(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := RequestFromPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(req, decoded) {
+		t.Fatalf("decoded request differs:\nwant %#v\n got %#v", req, decoded)
+	}
+	reencoded, err := p.RequestPayload(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(payload, reencoded) {
+		t.Fatalf("request payload changed after transcript round trip:\nwant %s\n got %s", payload, reencoded)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		t.Fatal(err)
+	}
+	streamOptions, ok := body["stream_options"].(map[string]any)
+	if !ok || streamOptions["include_usage"] != true {
+		t.Fatalf("stream usage reporting was not enabled: %s", payload)
 	}
 }
 

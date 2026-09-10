@@ -11,7 +11,14 @@ tool plumbing in code so an agent can focus on the work.
 
 - A streaming terminal REPL with a scrollable message viewport.
 - Full-width, wrapped user and assistant message blocks, with thinking,
-  tool-call, status, usage, and error events shown separately.
+  tool-call, status, usage, and error events shown separately. Consecutive
+  non-chat events share one rolling block while streaming. Each block has a
+  fixed, bold yellow header showing the latest response type, such as
+  thinking or the tool name, while its ten-line body shows only the newest
+  visual lines on a gray background. User messages use green blocks, assistant
+  messages use blue blocks, and the transcript remains lossless.
+  Startup control events before the first user message are omitted from the
+  viewport but remain in the transcript.
 - A root agent plus child agents up to depth two. Each agent has its own
   history, model, effort, working directory, and steer queue.
 - Foreground commands with a five-second timeout and background jobs that can
@@ -20,8 +27,8 @@ tool plumbing in code so an agent can focus on the work.
   tools scoped to the active agent's working directory.
 - Stable-prefix request construction and provider cache keys for input
   caching.
-- Per-launch runtime directories and append-only transcripts so concurrent
-  launches do not share state.
+- Per-launch runtime directories with append-only transcripts split by agent
+  and agent session, so concurrent launches do not share state.
 
 ## Requirements
 
@@ -114,30 +121,41 @@ history. Compaction keeps the most recent 24 messages plus a durable marker;
 ## TUI controls
 
 The upper portion of the terminal is the scrollable event viewport. The input
-bar stays at the bottom, followed by the conditional agent list and a compact
-status line. The root-only runtime hides the agent list; it appears when a
-child exists.
+bar stays at the bottom as a minimum three-row frame: a horizontal top rule,
+the text entry area, and a horizontal bottom rule. The text entry has no pipe,
+prompt glyph, or leading space. It grows to show wrapped and explicitly
+multiline input, while the message viewport contracts so the agent list and
+status footer remain visible inside the terminal. The footer follows the input
+frame and shows the current agent's model and effort, followed by compact
+`used/available · cache%` context and prompt-cache statistics. This unlabeled,
+space-efficient layout is the intended UI/UX. The root-only runtime hides the
+agent list; it appears when a child exists.
 
 | Key | Action |
 | --- | --- |
 | `Enter` | Send the input or run a slash command. |
-| `Down` | Move from a single-line input into the agent list. |
-| `Up` / `Esc` | Move back toward the input; `Esc` from a child view returns to root. |
+| `Ctrl-J` | Insert a newline into the input. |
+| `Up` / `Down` | Recall input history; Down from a fresh single-line input enters the agent list. |
+| `Tab` | Complete an unambiguous slash command. |
+| `Esc` | Move back toward the input from the agent list; from a child view, return to root. |
 | `Enter` in agent list | View that agent's transcript without interrupting it. |
-| `PgUp` / `PgDn` | Scroll the message viewport. |
+| `PgUp` / `PgDn` | Scroll the message viewport by five lines. |
 | `Ctrl-U` / `Ctrl-D` | Scroll the viewport by a smaller page step. |
 | `Ctrl-C` / `Ctrl-Q` | Shut down the runtime and exit. |
 
-Mouse reporting is intentionally disabled so the terminal emulator owns drag
-selection and copy/paste. The UI keeps token streaming anchored to the bottom
-unless the user has scrolled away.
+Mouse-wheel scrolling is enabled for the message viewport. The UI keeps token
+streaming anchored to the bottom unless the user has scrolled away.
+
+Sent user messages are stored as JSON-lines in the machine-global
+`$SLBH_HOME/history` file (normally `~/.slbh/history`) and are shared by
+launches from every working directory.
 
 ## Slash commands
 
 | Command | Action |
 | --- | --- |
-| `/exit`, `/quit`, `/q` | Stop agents and jobs, close the transcript, and exit. |
-| `/clear` | Clear the currently visible agent view. |
+| `/exit`, `/quit`, `/q` | Stop agents and jobs, close all session transcripts, and exit. |
+| `/clear` | Clear the selected agent view and start a new agent session. |
 | `/model NAME` | Change the root agent's model for subsequent turns. |
 | `/effort LEVEL` | Change the root agent's reasoning effort. |
 | `/agents` | Print the current agent tree as a status event. |
@@ -192,18 +210,38 @@ directory:
 $SLBH_HOME/
 └── runtimes/
     └── run-.../
-        └── transcript.jsonl
+        ├── runtime.json
+        └── agents/
+            └── agent-.../
+                └── sessions/
+                    └── session-.../
+                        └── transcript.jsonl
 ```
 
-`transcript.jsonl` contains runtime lifecycle events, user and assistant
-messages, streamed reasoning, tool calls and results, usage, agent status,
-and job start/end records. It is append-only and can be replayed after the
-UI exits. `runtime.json` exists as a live marker and is removed during normal
-shutdown.
+Each `transcript.jsonl` contains the user and assistant messages, streamed
+reasoning, tool calls and results, usage, agent status, lifecycle, and job
+records for one agent session. It is append-only and can be replayed after the
+UI exits. `/clear` starts a new session directory for only the selected agent;
+the agent ID remains stable for the lifetime of the TUI. `runtime.json` exists
+as a live marker and is removed during normal shutdown.
+
+The billed transcript/cache integration test is opt-in and is excluded from
+normal builds and test runs. Run it manually from WSL only when a live provider
+key is configured:
+
+```sh
+SLBH_RUN_LIVE_TESTS=1 go test -tags live_integration ./internal/harness \
+  -run TestLiveTranscriptReplayAndCache -count=1 -timeout 10m
+```
+
+It records the exact wire request in the agent session transcript, reloads the
+conversation from that record after clearing in-memory history, sends a second
+turn, and requires the provider's usage response to report cached input tokens.
+Session transcripts are retained under `$SLBH_HOME` (or `$HOME/.slbh`).
 
 Closing the runtime cancels provider requests, stops all agents, kills and
-drains all jobs, and closes the transcript. The same cleanup path is used by
-the UI exit commands, `Ctrl-C`, `Ctrl-Q`, and termination signals.
+drains all jobs, and closes every session transcript. The same cleanup path is
+used by the UI exit commands, `Ctrl-C`, `Ctrl-Q`, and termination signals.
 
 ## Development
 

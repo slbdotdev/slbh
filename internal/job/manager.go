@@ -96,11 +96,20 @@ func (j *Job) Kill() error {
 type Manager struct {
 	mu        sync.RWMutex
 	jobs      map[string]*Job
-	log       *logx.JSONL
+	logger    func(string) *logx.JSONL
 	onWarning func(Snapshot)
 }
 
-func NewManager(log *logx.JSONL) *Manager { return &Manager{jobs: make(map[string]*Job), log: log} }
+func NewManager(log *logx.JSONL) *Manager {
+	if log == nil {
+		return NewManagerWithLogger(nil)
+	}
+	return NewManagerWithLogger(func(string) *logx.JSONL { return log })
+}
+
+func NewManagerWithLogger(logger func(string) *logx.JSONL) *Manager {
+	return &Manager{jobs: make(map[string]*Job), logger: logger}
+}
 
 func (m *Manager) SetWarningHandler(handler func(Snapshot)) {
 	m.mu.Lock()
@@ -120,7 +129,11 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 	}
 	cmd.Env = append(cmd.Environ(), spec.Environment...)
 	setProcessGroup(cmd)
-	job := &Job{id: id.New("job"), author: spec.Author, script: spec.Script, status: Running, started: time.Now().UTC(), warnAfter: spec.WarnAfter, cancel: cancel, done: make(chan struct{}), cmd: cmd, log: m.log}
+	var log *logx.JSONL
+	if m.logger != nil {
+		log = m.logger(spec.Author)
+	}
+	job := &Job{id: id.New("job"), author: spec.Author, script: spec.Script, status: Running, started: time.Now().UTC(), warnAfter: spec.WarnAfter, cancel: cancel, done: make(chan struct{}), cmd: cmd, log: log}
 	stdout, stderr := &limitedBuffer{}, &limitedBuffer{}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	m.mu.Lock()
@@ -133,8 +146,8 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 		m.mu.Unlock()
 		return nil, err
 	}
-	if m.log != nil {
-		_ = m.log.Append(logx.Entry{Agent: spec.Author, Kind: "job_start", Text: spec.Script, Metadata: map[string]any{"job": job.id}})
+	if job.log != nil {
+		_ = job.log.Append(logx.Entry{Agent: spec.Author, Kind: "job_start", Text: spec.Script, Metadata: map[string]any{"job": job.id}})
 	}
 	if spec.WarnAfter > 0 {
 		go func() {
@@ -174,8 +187,8 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 		job.mu.Unlock()
 		close(job.done)
 		cancel()
-		if m.log != nil {
-			_ = m.log.Append(logx.Entry{Agent: spec.Author, Kind: "job_end", Metadata: map[string]any{"job": job.id, "status": job.Snapshot().Status, "exit_code": job.Snapshot().ExitCode}})
+		if job.log != nil {
+			_ = job.log.Append(logx.Entry{Agent: spec.Author, Kind: "job_end", Metadata: map[string]any{"job": job.id, "status": job.Snapshot().Status, "exit_code": job.Snapshot().ExitCode}})
 		}
 	}()
 	return job, nil

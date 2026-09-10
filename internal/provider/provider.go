@@ -52,6 +52,40 @@ type Request struct {
 	Temperature *float64
 }
 
+// RequestPayloadProvider exposes the exact JSON payload that a provider will
+// send for an inference request. The harness uses this to make transcript
+// request records byte-replayable without recording credentials or headers.
+type RequestPayloadProvider interface {
+	RequestPayload(Request) ([]byte, error)
+}
+
+type wireRequest struct {
+	Model            string        `json:"model"`
+	Stream           bool          `json:"stream"`
+	Messages         []Message     `json:"messages"`
+	ReasoningEffort  string        `json:"reasoning_effort,omitempty"`
+	IncludeReasoning bool          `json:"include_reasoning,omitempty"`
+	PromptCacheKey   string        `json:"prompt_cache_key"`
+	Temperature      *float64      `json:"temperature,omitempty"`
+	StreamOptions    streamOptions `json:"stream_options"`
+	Tools            []wireTool    `json:"tools,omitempty"`
+}
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+type wireTool struct {
+	Type     string           `json:"type"`
+	Function wireToolFunction `json:"function"`
+}
+
+type wireToolFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
 type EventKind string
 
 const (
@@ -277,40 +311,94 @@ func sameModelID(wanted, candidate string) bool {
 	return strings.SplitN(wanted, ":", 2)[0] == strings.SplitN(candidate, ":", 2)[0]
 }
 
+// RequestPayload returns the exact request body used by Stream. It is kept as
+// one function so transcript records and the actual HTTP request cannot drift.
+func (p *HTTPProvider) RequestPayload(req Request) ([]byte, error) {
+	if req.CacheKey == "" {
+		req.CacheKey = StablePrefixKey(req)
+	}
+	body := wireRequest{
+		Model:            p.modelID(req.Model),
+		Stream:           true,
+		Messages:         append([]Message{{Role: "system", Content: req.System}}, req.Messages...),
+		ReasoningEffort:  req.Effort,
+		IncludeReasoning: req.Effort != "",
+		PromptCacheKey:   req.CacheKey,
+		Temperature:      req.Temperature,
+		StreamOptions:    streamOptions{IncludeUsage: true},
+	}
+	if len(req.Tools) > 0 {
+		body.Tools = make([]wireTool, 0, len(req.Tools))
+		for _, tool := range req.Tools {
+			body.Tools = append(body.Tools, wireTool{
+				Type: "function",
+				Function: wireToolFunction{
+					Name:        tool.Name,
+					Description: tool.Description,
+					Parameters:  tool.Parameters,
+				},
+			})
+		}
+	}
+	return json.Marshal(body)
+}
+
+// RequestFromPayload reconstructs the provider request context from a
+// transcripted wire payload. The returned Messages omit the leading system
+// message because Request stores that context separately.
+func RequestFromPayload(payload []byte) (Request, error) {
+	var body wireRequest
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return Request{}, fmt.Errorf("decode request payload: %w", err)
+	}
+	if len(body.Messages) == 0 || body.Messages[0].Role != "system" {
+		return Request{}, fmt.Errorf("request payload has no leading system message")
+	}
+	request := Request{
+		Model:       body.Model,
+		Effort:      body.ReasoningEffort,
+		System:      body.Messages[0].Content,
+		Messages:    append([]Message(nil), body.Messages[1:]...),
+		CacheKey:    body.PromptCacheKey,
+		Temperature: body.Temperature,
+	}
+	if len(body.Tools) > 0 {
+		request.Tools = make([]Tool, 0, len(body.Tools))
+		for _, tool := range body.Tools {
+			request.Tools = append(request.Tools, Tool{
+				Name:        tool.Function.Name,
+				Description: tool.Function.Description,
+				Parameters:  tool.Function.Parameters,
+			})
+		}
+	}
+	return request, nil
+}
+
+// ContextPayload serializes the provider-independent context that is sent to
+// inference. HTTPProvider records the fuller wire payload, while other
+// providers can still leave a replayable context record in the transcript.
+func ContextPayload(req Request) ([]byte, error) {
+	return json.Marshal(struct {
+		System   string    `json:"system"`
+		Messages []Message `json:"messages"`
+		Tools    []Tool    `json:"tools"`
+	}{System: req.System, Messages: req.Messages, Tools: req.Tools})
+}
+
+func PayloadSHA256(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
 func (p *HTTPProvider) Stream(ctx context.Context, req Request, sink StreamSink) error {
 	if p.APIKey == "" {
 		return fmt.Errorf("provider API key is not configured (set OPENROUTER_API_KEY, DEEPSEEK_API_KEY, or ZAI_API_KEY)")
 	}
-	body := map[string]any{
-		"model":    p.modelID(req.Model),
-		"stream":   true,
-		"messages": append([]Message{{Role: "system", Content: req.System}}, req.Messages...),
-	}
-	if req.Effort != "" {
-		body["reasoning_effort"] = req.Effort
-		body["include_reasoning"] = true
-	}
-	if req.CacheKey == "" {
-		req.CacheKey = StablePrefixKey(req)
-	}
 	// OpenRouter accepts prompt_cache_key; native providers safely ignore the
 	// extra metadata in their compatible endpoint. The prefix itself is kept
 	// stable by Runtime and is never mixed with user turns.
-	body["prompt_cache_key"] = req.CacheKey
-	if req.Temperature != nil {
-		body["temperature"] = *req.Temperature
-	}
-	if len(req.Tools) > 0 {
-		tools := make([]map[string]any, 0, len(req.Tools))
-		for _, t := range req.Tools {
-			tools = append(tools, map[string]any{
-				"type":     "function",
-				"function": map[string]any{"name": t.Name, "description": t.Description, "parameters": t.Parameters},
-			})
-		}
-		body["tools"] = tools
-	}
-	payload, err := json.Marshal(body)
+	payload, err := p.RequestPayload(req)
 	if err != nil {
 		return err
 	}
@@ -337,18 +425,14 @@ func (p *HTTPProvider) Stream(ctx context.Context, req Request, sink StreamSink)
 }
 
 func StablePrefixKey(req Request) string {
-	var b strings.Builder
-	b.WriteString(req.Model)
-	b.WriteByte('\x00')
-	b.WriteString(req.System)
-	b.WriteByte('\x00')
-	for _, tool := range req.Tools {
-		b.WriteString(tool.Name)
-		b.WriteByte('\x00')
-		encoded, _ := json.Marshal(tool.Parameters)
-		b.Write(encoded)
-	}
-	sum := sha256.Sum256([]byte(b.String()))
+	// Hash the complete stable prefix, including tool descriptions. User turns
+	// are deliberately absent so the key remains reusable across a session.
+	encoded, _ := json.Marshal(struct {
+		Model  string `json:"model"`
+		System string `json:"system"`
+		Tools  []Tool `json:"tools"`
+	}{Model: req.Model, System: req.System, Tools: req.Tools})
+	sum := sha256.Sum256(encoded)
 	return "slbh-" + hex.EncodeToString(sum[:])
 }
 

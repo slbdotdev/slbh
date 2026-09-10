@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/slbdotdev/slbh/internal/config"
+	"github.com/slbdotdev/slbh/internal/logx"
 	"github.com/slbdotdev/slbh/internal/provider"
 )
 
@@ -34,6 +35,19 @@ func (toolProvider) Stream(ctx context.Context, request provider.Request, sink p
 		}
 	}
 	return sink(provider.Event{Kind: provider.EventTool, ToolIndex: 0, ToolCallID: "call-1", ToolName: "list_subagents", Input: "{}"})
+}
+
+type usageProvider struct{}
+
+func (usageProvider) Stream(ctx context.Context, _ provider.Request, sink provider.StreamSink) error {
+	if err := sink(provider.Event{Kind: provider.EventUsage, Usage: map[string]any{
+		"prompt_tokens":            float64(100),
+		"prompt_cache_hit_tokens":  float64(60),
+		"prompt_cache_miss_tokens": float64(40),
+	}}); err != nil {
+		return err
+	}
+	return sink(provider.Event{Kind: provider.EventText, Text: "done"})
 }
 
 func testRuntime(t *testing.T) *Runtime {
@@ -61,7 +75,11 @@ func TestRuntimeStreamsAndLogs(t *testing.T) {
 			t.Fatal("agent turn did not finish")
 		}
 	}
-	entries, err := readTranscript(r)
+	transcriptPath, err := r.TranscriptPath(r.Root().ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := readTranscript(transcriptPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +89,146 @@ func TestRuntimeStreamsAndLogs(t *testing.T) {
 	}
 	if !strings.Contains(text, "done") {
 		t.Fatalf("transcript missing response: %q", text)
+	}
+	loggedEntries, err := logx.Read(transcriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requestRecorded bool
+	for _, entry := range loggedEntries {
+		if entry.Kind != "inference_request" {
+			continue
+		}
+		requestRecorded = true
+		if _, ok := entry.Metadata["context"].(map[string]any); !ok {
+			t.Fatalf("generic provider request did not record replayable context: %#v", entry.Metadata)
+		}
+	}
+	if !requestRecorded {
+		t.Fatal("transcript missing inference request context")
+	}
+}
+
+func TestAgentSessionsHaveSeparateTranscriptsAndClearRotatesSelectedAgent(t *testing.T) {
+	r := testRuntime(t)
+	root := r.Root()
+	firstPath, err := r.TranscriptPath(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := r.LaunchSubagent(root.ID, "child", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	childPath, err := r.TranscriptPath(child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstPath == childPath {
+		t.Fatalf("root and child share transcript path %q", firstPath)
+	}
+
+	root.Send("first session")
+	waitAgentTurn(t, r, root.ID)
+	firstEntries, err := logx.Read(firstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !transcriptContains(firstEntries, "first session") {
+		t.Fatalf("first session transcript lacks prompt: %#v", firstEntries)
+	}
+
+	if err := r.Clear(root.ID); err != nil {
+		t.Fatal(err)
+	}
+	secondPath, err := r.TranscriptPath(root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstPath == secondPath {
+		t.Fatalf("clear reused transcript path %q", secondPath)
+	}
+	if got := r.Root().ID; got != root.ID {
+		t.Fatalf("clear changed root ID from %q to %q", root.ID, got)
+	}
+	if got, err := r.TranscriptPath(child.ID); err != nil || got != childPath {
+		t.Fatalf("clear changed child transcript path to %q (err=%v)", got, err)
+	}
+
+	root.Send("second session")
+	waitAgentTurn(t, r, root.ID)
+	firstEntries, err = logx.Read(firstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondEntries, err := logx.Read(secondPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !transcriptContains(firstEntries, "first session") || transcriptContains(firstEntries, "second session") {
+		t.Fatalf("old transcript changed across clear: %#v", firstEntries)
+	}
+	if transcriptContains(secondEntries, "first session") || !transcriptContains(secondEntries, "second session") {
+		t.Fatalf("new transcript has incorrect session contents: %#v", secondEntries)
+	}
+	for _, entry := range secondEntries {
+		if entry.Session == "" {
+			t.Fatalf("new transcript entry lacks session ID: %#v", entry)
+		}
+	}
+}
+
+func waitAgentTurn(t *testing.T, r *Runtime, agentID string) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case event := <-r.Events():
+			if event.AgentID == agentID && event.Kind == "turn_done" {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("agent %q turn did not finish", agentID)
+		}
+	}
+}
+
+func transcriptContains(entries []logx.Entry, text string) bool {
+	for _, entry := range entries {
+		if strings.Contains(entry.Text, text) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAgentTracksContextAndCacheStats(t *testing.T) {
+	r, err := New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return usageProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	r.Root().Send("hello")
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case event := <-r.Events():
+			if event.Kind == "turn_done" {
+				snapshot := r.Root().Snapshot()
+				if snapshot.ContextWindow != provider.FallbackContextWindow {
+					t.Fatalf("context window = %d, want %d", snapshot.ContextWindow, provider.FallbackContextWindow)
+				}
+				if snapshot.ContextUsed != 100 {
+					t.Fatalf("context used = %d, want 100", snapshot.ContextUsed)
+				}
+				if snapshot.CacheHitTokens != 60 || snapshot.CacheMissTokens != 40 {
+					t.Fatalf("cache tokens = %d/%d, want 60/40", snapshot.CacheHitTokens, snapshot.CacheMissTokens)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("agent turn did not finish")
+		}
 	}
 }
 
@@ -157,8 +315,8 @@ func TestProviderToolCallsExecuteAndContinue(t *testing.T) {
 	}
 }
 
-func readTranscript(r *Runtime) ([]logEntry, error) {
-	data, err := os.ReadFile(filepath.Join(r.Dir(), "transcript.jsonl"))
+func readTranscript(path string) ([]logEntry, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}

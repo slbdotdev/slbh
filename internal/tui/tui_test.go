@@ -2,13 +2,15 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
 	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/harness"
 	"github.com/slbdotdev/slbh/internal/provider"
@@ -27,9 +29,12 @@ func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 	m := New(runtime)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = updated.(Model)
-	m.events = append(m.events, harness.Event{AgentID: runtime.Root().ID, AgentTitle: "root", Kind: "error", Text: strings.Repeat("long error ", 20)})
+	m.events = append(m.events,
+		harness.Event{AgentID: runtime.Root().ID, AgentTitle: "root", Kind: "user", Text: "hi"},
+		harness.Event{AgentID: runtime.Root().ID, AgentTitle: "root", Kind: "error", Text: strings.Repeat("long error ", 20)},
+	)
 	m.refreshView()
-	view := m.View()
+	view := m.View().Content
 	if got := lipgloss.Height(view); got != 24 {
 		t.Fatalf("view height=%d, want 24", got)
 	}
@@ -46,8 +51,29 @@ func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 	if strings.Contains(m.statusLine(), "Enter send") || strings.Contains(m.statusLine(), "agents 1") || strings.Contains(m.statusLine(), "jobs 0") {
 		t.Fatal("footer contains hidden help or zero-count metadata")
 	}
-	if strings.Contains(m.statusLine(), " / ") || !strings.Contains(m.statusLine(), runtime.Root().Model+" "+runtime.Root().Effort) {
+	if !strings.Contains(m.statusLine(), runtime.Root().Model+" "+runtime.Root().Effort) || !strings.Contains(m.statusLine(), "--/--") || !strings.Contains(m.statusLine(), " · --") {
 		t.Fatal("footer should show the actual model identifier followed by effort")
+	}
+}
+
+func TestStatusLineFormatsContextAndCacheStats(t *testing.T) {
+	agent := harness.AgentSnapshot{
+		ContextWindow:   128000,
+		ContextUsed:     1326,
+		CacheHitTokens:  1152,
+		CacheMissTokens: 246,
+	}
+	if got := formatContextStats(agent); got != "1.3k/126.7k" {
+		t.Fatalf("context stats = %q", got)
+	}
+	if got := formatCacheStats(agent); got != "82%" {
+		t.Fatalf("cache stats = %q", got)
+	}
+	if got := formatContextStats(harness.AgentSnapshot{}); got != "--/--" {
+		t.Fatalf("empty context stats = %q", got)
+	}
+	if got := formatCacheStats(harness.AgentSnapshot{}); got != "--" {
+		t.Fatalf("empty cache stats = %q", got)
 	}
 }
 
@@ -70,21 +96,18 @@ func TestMessageBlocksAreSpacedAndColored(t *testing.T) {
 		t.Fatalf("assistant block width=%d, want %d", got, width)
 	}
 
-	profile := lipgloss.DefaultRenderer().ColorProfile()
-	lipgloss.SetColorProfile(termenv.ANSI256)
-	t.Cleanup(func() { lipgloss.SetColorProfile(profile) })
 	userBlock := renderEvent(user, width)
 	assistantBlock := renderEvent(assistant, width)
-	if !strings.Contains(userBlock, "48;5;24") {
+	if !strings.Contains(userBlock, "48;5;22") {
 		t.Fatalf("user block has no colored background: %q", userBlock)
 	}
-	if strings.Contains(userBlock, "you> \x1b[0mhello") || !strings.Contains(userBlock, "you> \x1b[39mhello") {
+	if strings.Contains(userBlock, "user> \x1b[0mhello") || !strings.Contains(userBlock, "user> \x1b[39mhello") {
 		t.Fatalf("user message background breaks after the colored label: %q", userBlock)
 	}
-	if !strings.Contains(assistantBlock, "48;5;236") {
+	if !strings.Contains(assistantBlock, "48;5;24") {
 		t.Fatalf("assistant block has no colored background: %q", assistantBlock)
 	}
-	if strings.Contains(assistantBlock, "root> \x1b[0mdone") || !strings.Contains(assistantBlock, "root> \x1b[39mdone") {
+	if strings.Contains(assistantBlock, "agent> \x1b[0mdone") || !strings.Contains(assistantBlock, "agent> \x1b[39mdone") {
 		t.Fatalf("assistant message background breaks after the colored label: %q", assistantBlock)
 	}
 
@@ -103,10 +126,361 @@ func TestMessageBlocksAreSpacedAndColored(t *testing.T) {
 		}
 		return false
 	}
-	if !hasBlankAfter("you> hello") {
+	if !hasBlankAfter("user> hello") {
 		t.Fatalf("user block is not separated from following text: %q", content)
 	}
 	if !hasBlankAfter("thinking · working") {
 		t.Fatalf("text is not separated from following assistant block: %q", content)
+	}
+}
+
+func TestLeadingControlEventsStayOutOfMessageViewport(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	m := New(runtime)
+	m.width = 40
+	m.events = []harness.Event{
+		{AgentID: runtime.Root().ID, Kind: "runtime", Text: "runtime started"},
+		{AgentID: runtime.Root().ID, Kind: "status", Text: "thinking"},
+		{AgentID: runtime.Root().ID, Kind: "user", Text: "hi"},
+		{AgentID: runtime.Root().ID, Kind: "inference_request", Text: "wire payload should stay hidden"},
+		{AgentID: runtime.Root().ID, Kind: "thinking", Text: "working"},
+		{AgentID: runtime.Root().ID, Kind: "turn_done", Text: "lifecycle event should stay hidden"},
+	}
+	m.refreshView()
+	content := ansi.Strip(m.viewport.View())
+	if strings.Contains(content, "runtime started") || strings.Contains(content, "status · thinking") {
+		t.Fatalf("leading control events leaked into the message viewport: %q", content)
+	}
+	if !strings.Contains(content, "user> hi") || !strings.Contains(content, "thinking · working") {
+		t.Fatalf("post-user content missing from the message viewport: %q", content)
+	}
+	if strings.Contains(content, "inference_request") || strings.Contains(content, "wire payload should stay hidden") {
+		t.Fatalf("inference request leaked into the message viewport: %q", content)
+	}
+	if strings.Contains(content, "turn_done") || strings.Contains(content, "lifecycle event should stay hidden") {
+		t.Fatalf("turn completion leaked into the message viewport: %q", content)
+	}
+}
+
+func TestClearCommandKeepsSubsequentMessagesVisible(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	m := New(runtime)
+	m.width = 40
+	rootID := runtime.Root().ID
+	runtime.Root().Send("old prompt")
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case event := <-runtime.Events():
+			if event.Kind == "turn_done" {
+				goto initialTurnDone
+			}
+		case <-deadline:
+			t.Fatal("initial turn did not finish")
+		}
+	}
+initialTurnDone:
+	m.events = []harness.Event{
+		{AgentID: rootID, Kind: "user", Text: "old prompt"},
+		{AgentID: rootID, Kind: "assistant", Text: "old answer"},
+	}
+	m.refreshView()
+	if content := ansi.Strip(m.viewport.View()); !strings.Contains(content, "old answer") {
+		t.Fatalf("initial message missing before clear: %q", content)
+	}
+
+	m.handleCommand("/clear")
+	if history := runtime.Root().History(); len(history) != 0 {
+		t.Fatalf("agent history survived clear: %#v", history)
+	}
+	if content := ansi.Strip(m.viewport.View()); strings.Contains(content, "old prompt") || strings.Contains(content, "old answer") {
+		t.Fatalf("cleared messages remain visible: %q", content)
+	}
+
+	runtime.Root().Send("new prompt")
+	deadline = time.After(time.Second)
+	for {
+		select {
+		case event := <-runtime.Events():
+			if event.Kind == "turn_done" {
+				goto newTurnDone
+			}
+		case <-deadline:
+			t.Fatal("post-clear turn did not finish")
+		}
+	}
+newTurnDone:
+	history := runtime.Root().History()
+	if len(history) != 1 || history[0].Content != "new prompt" {
+		t.Fatalf("post-clear turn reused old history: %#v", history)
+	}
+
+	updated, _ := m.Update(eventMsg(harness.Event{AgentID: rootID, Kind: "status", Text: "thinking"}))
+	m = updated.(Model)
+	updated, _ = m.Update(eventMsg(harness.Event{AgentID: rootID, Kind: "user", Text: "new prompt"}))
+	m = updated.(Model)
+	updated, _ = m.Update(eventMsg(harness.Event{AgentID: rootID, Kind: "assistant", Text: "new answer"}))
+	m = updated.(Model)
+	content := ansi.Strip(m.viewport.View())
+	if !strings.Contains(content, "new prompt") || !strings.Contains(content, "new answer") {
+		t.Fatalf("messages after clear are missing: %q", content)
+	}
+}
+
+func TestNonChatBlocksRollAtTenLines(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	lines := make([]string, 12)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %02d", i+1)
+	}
+	text := strings.Join(lines, "\n")
+
+	thinking := ansi.Strip(renderEvent(harness.Event{Kind: "thinking", Text: text}, 40))
+	if got := lipgloss.Height(thinking); got != nonChatBlockHeight {
+		t.Fatalf("thinking block height=%d, want %d", got, nonChatBlockHeight)
+	}
+	if strings.Contains(thinking, "line 01") || !strings.Contains(thinking, "line 12") {
+		t.Fatalf("thinking block did not keep the newest lines: %q", thinking)
+	}
+
+	toolResult := ansi.Strip(renderEvent(harness.Event{Kind: "tool_result", Text: text}, 40))
+	if got := lipgloss.Height(toolResult); got != nonChatBlockHeight {
+		t.Fatalf("tool result block height=%d, want %d", got, nonChatBlockHeight)
+	}
+	if strings.Contains(toolResult, "line 01") || !strings.Contains(toolResult, "line 12") {
+		t.Fatalf("tool result block did not keep the newest lines: %q", toolResult)
+	}
+
+	short := renderEvent(harness.Event{Kind: "thinking", Text: "working"}, 40)
+	if got := lipgloss.Height(short); got != 1 {
+		t.Fatalf("short thinking block height=%d, want 1", got)
+	}
+
+	nonChat := renderEvent(harness.Event{Kind: "thinking", Text: "working"}, 40)
+	if !strings.Contains(nonChat, "48;5;236") {
+		t.Fatalf("non-chat block has no gray background: %q", nonChat)
+	}
+
+	m := New(runtime)
+	m.width = 40
+	m.events = []harness.Event{
+		{AgentID: runtime.Root().ID, Kind: "user", Text: "hi"},
+		{AgentID: runtime.Root().ID, Kind: "thinking", Text: text},
+		{AgentID: runtime.Root().ID, Kind: "tool_result", Text: text, Metadata: map[string]any{"name": "quick_bash"}},
+	}
+	m.refreshView()
+	if got := m.viewport.TotalLineCount(); got != nonChatBlockHeight+3 {
+		t.Fatalf("consecutive non-chat content used %d lines, want %d", got, nonChatBlockHeight+3)
+	}
+	content := ansi.Strip(m.viewport.View())
+	if !strings.Contains(content, "tool quick_bash") || strings.Contains(content, "line 01") || !strings.Contains(content, "line 12") {
+		t.Fatalf("shared non-chat block did not keep the newest lines: %q", content)
+	}
+}
+
+func TestMessageViewportScrollsWithKeyboardAndMouse(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	m := New(runtime)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
+	m = updated.(Model)
+	m.events = append(m.events, harness.Event{AgentID: runtime.Root().ID, AgentTitle: "root", Kind: "user", Text: "hi"})
+	for i := 0; i < 20; i++ {
+		m.events = append(m.events, harness.Event{AgentID: runtime.Root().ID, AgentTitle: "root", Kind: "assistant", Text: fmt.Sprintf("message %02d %s", i, strings.Repeat("content ", 8))})
+	}
+	m.refreshView()
+	if !m.viewport.AtBottom() {
+		t.Fatal("viewport should start at the bottom")
+	}
+
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	m = updated.(Model)
+	if m.viewport.AtBottom() || !m.userScrolled {
+		t.Fatalf("PageUp did not move the viewport or mark it as user-scrolled (offset=%d max=%d lines=%d height=%d)", m.viewport.YOffset(), m.viewport.TotalLineCount()-m.viewport.Height(), m.viewport.TotalLineCount(), m.viewport.Height())
+	}
+	yOffset := m.viewport.YOffset()
+	updated, _ = m.Update(eventMsg(harness.Event{AgentID: runtime.Root().ID, AgentTitle: "root", Kind: "status", Text: "streaming"}))
+	m = updated.(Model)
+	if m.viewport.YOffset() != yOffset {
+		t.Fatalf("stream refresh changed scrolled offset from %d to %d", yOffset, m.viewport.YOffset())
+	}
+
+	updated, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	m = updated.(Model)
+	if m.viewport.YOffset() <= yOffset {
+		t.Fatal("mouse wheel down did not move the viewport")
+	}
+	for !m.viewport.AtBottom() {
+		updated, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+		m = updated.(Model)
+	}
+	if m.userScrolled {
+		t.Fatal("viewport remained marked as scrolled after reaching the bottom")
+	}
+}
+
+func TestInputFrameExpandsForMultilineMessages(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	m := New(runtime)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
+	m = updated.(Model)
+	if got := lipgloss.Height(ansi.Strip(m.inputFrame())); got != 3 {
+		t.Fatalf("single-line input frame height=%d, want 3", got)
+	}
+	m.input.SetValue("first\nsecond")
+	m.syncInputHeight()
+	if got := lipgloss.Height(ansi.Strip(m.inputFrame())); got != 4 {
+		t.Fatalf("multiline input frame height=%d, want 4", got)
+	}
+	lines := strings.Split(ansi.Strip(m.inputFrame()), "\n")
+	if !strings.Contains(lines[0], "─") || !strings.Contains(lines[len(lines)-1], "─") {
+		t.Fatalf("input frame lacks horizontal rules: %q", lines)
+	}
+	m.input.Reset()
+	m.input.InsertString(strings.Repeat("x", 80))
+	m.syncInputHeight()
+	if got := lipgloss.Height(ansi.Strip(m.inputFrame())); got != 5 {
+		t.Fatalf("long input frame height=%d, want two content lines plus a viewport row and rules", got)
+	}
+	m.input.SetValue(strings.Repeat("x", 60))
+	if got := lipgloss.Height(ansi.Strip(m.inputFrame())); got != 4 {
+		t.Fatalf("soft-wrapped input frame height=%d, want two content lines plus rules", got)
+	}
+	m.input.SetValue(strings.Repeat("x", 40) + "\n" + strings.Repeat("x", 20))
+	center := strings.Split(ansi.Strip(m.inputFrame()), "\n")
+	if !strings.Contains(center[1], strings.Repeat("x", 40)) || !strings.Contains(center[3], strings.Repeat("x", 20)) {
+		t.Fatalf("explicit multiline input lost its first line: %q", center)
+	}
+	m.input.SetValue(strings.Repeat("abcd ", 8) + "s")
+	if rendered := ansi.Strip(m.inputFrame()); !strings.Contains(rendered, "abcd") || !strings.Contains(rendered, "s") {
+		t.Fatalf("spaced line lost content at the wrap boundary: %q", rendered)
+	}
+	m.input.Reset()
+	m.input.InsertString(strings.Repeat("a", 40))
+	m.syncInputHeight()
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	m = updated.(Model)
+	boundaryLines := strings.Split(ansi.Strip(m.inputFrame()), "\n")
+	if len(boundaryLines) < 4 || !strings.Contains(boundaryLines[1], strings.Repeat("a", 40)) || !strings.Contains(boundaryLines[2], "a") {
+		t.Fatalf("boundary keystroke lost the first row: %q", boundaryLines)
+	}
+	m.input.Reset()
+	m.input.InsertString("first")
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
+	m = updated.(Model)
+	if got := m.input.Value(); got != "first\n" {
+		t.Fatalf("Ctrl-J input=%q, want a newline", got)
+	}
+}
+
+func TestExpandedInputKeepsFooterVisible(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	m := New(runtime)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
+	m = updated.(Model)
+	m.input.SetValue(strings.Repeat("a", 240))
+	m.syncInputHeight()
+
+	view := ansi.Strip(m.View().Content)
+	if got := lipgloss.Height(view); got != 12 {
+		t.Fatalf("expanded view height=%d, want 12: %q", got, view)
+	}
+	if !strings.Contains(view, runtime.ID()) || !strings.Contains(view, "test high") {
+		t.Fatalf("expanded view lost the status footer: %q", view)
+	}
+	if got := m.viewport.Height(); got < 1 {
+		t.Fatalf("expanded input left no chat viewport row: %d", got)
+	}
+}
+
+func TestHistoryIsMachineGlobalAndBashStyle(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, historyFileName)
+	if err := appendHistory(path, "first\nline"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendHistory(path, "second"); err != nil {
+		t.Fatal(err)
+	}
+	history, err := loadHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(history, "|"), "first\nline|second"; got != want {
+		t.Fatalf("loaded history=%q, want %q", got, want)
+	}
+
+	runtime, err := harness.New(config.Config{Home: home, RootModel: "test", RootEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	m := New(runtime)
+	m.input.SetValue("draft")
+	updated, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(Model)
+	if got := m.input.Value(); got != "second" {
+		t.Fatalf("first Up recalled %q, want second", got)
+	}
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(Model)
+	if got := m.input.Value(); got != "first\nline" {
+		t.Fatalf("second Up recalled %q, want multiline first message", got)
+	}
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(Model)
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(Model)
+	if got := m.input.Value(); got != "draft" {
+		t.Fatalf("Down past newest history returned %q, want draft", got)
+	}
+}
+
+func TestSlashCommandTabCompletion(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	m := New(runtime)
+	m.input.SetValue("/mo")
+	updated, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updated.(Model)
+	if got := m.input.Value(); got != "/model" {
+		t.Fatalf("completed command=%q, want /model", got)
+	}
+	m.input.SetValue("/c")
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updated.(Model)
+	if got := m.input.Value(); got != "/c" {
+		t.Fatalf("ambiguous command changed to %q", got)
 	}
 }

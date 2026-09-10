@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/harness"
 	"github.com/slbdotdev/slbh/internal/tui"
@@ -22,9 +22,9 @@ func main() {
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	// Leave mouse reporting disabled so the terminal emulator owns drag
-	// selection and copy/paste. Keyboard scrolling remains handled by the TUI.
-	program := tea.NewProgram(tui.New(runtime), tea.WithAltScreen())
+	// Enable cell-motion mouse reporting so the TUI receives wheel events and
+	// can scroll the message viewport while the app is in the alternate screen.
+	program := tea.NewProgram(tui.New(runtime))
 	go func() {
 		<-signals
 		_ = runtime.Close()

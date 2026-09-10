@@ -43,6 +43,10 @@ type Agent struct {
 	stopOnce      sync.Once
 	contextModel  string
 	contextWindow int
+	contextUsed   int
+	cacheHits     int
+	cacheMisses   int
+	historyEpoch  uint64
 }
 
 func newAgent(runtime *Runtime, agentID, title, parentID string, depth int, model, effort string) *Agent {
@@ -81,13 +85,39 @@ func (a *Agent) Steer(message string) {
 func (a *Agent) Snapshot() AgentSnapshot {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return AgentSnapshot{ID: a.ID, Title: a.Title, ParentID: a.ParentID, Depth: a.Depth, Model: a.Model, Effort: a.Effort, Status: a.status, Harness: a.Harness, WorkDir: a.WorkDir, SSH: a.SSH}
+	return AgentSnapshot{
+		ID:              a.ID,
+		Title:           a.Title,
+		ParentID:        a.ParentID,
+		Depth:           a.Depth,
+		Model:           a.Model,
+		Effort:          a.Effort,
+		Status:          a.status,
+		Harness:         a.Harness,
+		WorkDir:         a.WorkDir,
+		SSH:             a.SSH,
+		ContextWindow:   a.contextWindow,
+		ContextUsed:     a.contextUsed,
+		CacheHitTokens:  a.cacheHits,
+		CacheMissTokens: a.cacheMisses,
+	}
 }
 
 func (a *Agent) History() []provider.Message {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return append([]provider.Message(nil), a.history...)
+}
+
+// ClearHistory starts the next turn with no conversation messages. A running
+// provider request keeps its local snapshot, but its result cannot restore the
+// history that was cleared while it was in flight.
+func (a *Agent) ClearHistory() {
+	a.mu.Lock()
+	a.history = nil
+	a.contextUsed = 0
+	a.historyEpoch++
+	a.mu.Unlock()
 }
 
 func (a *Agent) stop() {
@@ -119,6 +149,7 @@ func (a *Agent) handle(ctx context.Context, turn turn) {
 	a.setStatus("thinking")
 	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "user", Text: turn.prompt})
 	a.mu.Lock()
+	epoch := a.historyEpoch
 	a.history = append(a.history, provider.Message{Role: "user", Content: turn.prompt})
 	history := append([]provider.Message(nil), a.history...)
 	a.mu.Unlock()
@@ -147,6 +178,8 @@ drained:
 		var answer strings.Builder
 		calls := make(map[int]*provider.ToolCall)
 		err = provider.Retry(ctx, 3, func() error {
+			a.recordRequestContext(req, contextWindow)
+			a.runtime.recordInferenceRequest(a, round, req, p)
 			return p.Stream(ctx, req, func(event provider.Event) error {
 				switch event.Kind {
 				case provider.EventText:
@@ -169,6 +202,7 @@ drained:
 					call.Function.Arguments += event.Input
 					a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool", Text: event.Input, Metadata: map[string]any{"name": event.ToolName, "call_id": event.ToolCallID, "index": event.ToolIndex}})
 				case provider.EventUsage:
+					a.recordUsage(event.Usage)
 					a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "usage", Metadata: event.Usage})
 				}
 				return nil
@@ -211,9 +245,11 @@ drained:
 		}
 	}
 	a.mu.Lock()
-	a.history = history
-	if finalAnswer.Len() > 0 {
-		a.history = append(a.history, provider.Message{Role: "assistant", Content: finalAnswer.String()})
+	if a.historyEpoch == epoch {
+		a.history = history
+		if finalAnswer.Len() > 0 {
+			a.history = append(a.history, provider.Message{Role: "assistant", Content: finalAnswer.String()})
+		}
 	}
 	a.mu.Unlock()
 	a.maybeCompact(contextWindow, system, tools)
@@ -236,6 +272,72 @@ func (a *Agent) setStatus(status string) {
 	a.status = status
 	a.mu.Unlock()
 	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: status})
+}
+
+func (a *Agent) recordRequestContext(req provider.Request, contextWindow int) {
+	encoded, err := provider.ContextPayload(req)
+	if err != nil {
+		return
+	}
+	a.mu.Lock()
+	a.contextWindow = contextWindow
+	a.contextUsed = (len(encoded) + 3) / 4
+	a.mu.Unlock()
+}
+
+func (a *Agent) recordUsage(usage map[string]any) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if promptTokens, ok := usageInt(usage, "prompt_tokens"); ok {
+		a.contextUsed = promptTokens
+	}
+	hit, hitOK := usageInt(usage, "prompt_cache_hit_tokens")
+	miss, missOK := usageInt(usage, "prompt_cache_miss_tokens")
+	if !hitOK {
+		hit, hitOK = usageNestedInt(usage, "prompt_tokens_details", "cached_tokens")
+	}
+	if hitOK {
+		a.cacheHits += hit
+	}
+	if !missOK && hitOK {
+		if promptTokens, ok := usageInt(usage, "prompt_tokens"); ok && promptTokens >= hit {
+			miss = promptTokens - hit
+			missOK = true
+		}
+	}
+	if missOK {
+		a.cacheMisses += miss
+	}
+}
+
+func usageInt(usage map[string]any, key string) (int, bool) {
+	value, ok := usage[key]
+	if !ok {
+		return 0, false
+	}
+	switch number := value.(type) {
+	case float64:
+		return int(number), true
+	case float32:
+		return int(number), true
+	case int:
+		return number, true
+	case int64:
+		return int(number), true
+	case json.Number:
+		parsed, err := number.Int64()
+		return int(parsed), err == nil
+	default:
+		return 0, false
+	}
+}
+
+func usageNestedInt(usage map[string]any, parent, key string) (int, bool) {
+	nested, ok := usage[parent].(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	return usageInt(nested, key)
 }
 
 func (a *Agent) receiveChildResult(child *Agent, text string) {

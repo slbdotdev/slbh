@@ -14,21 +14,27 @@ type Entry struct {
 	Time     time.Time      `json:"time"`
 	Runtime  string         `json:"runtime"`
 	Agent    string         `json:"agent,omitempty"`
+	Session  string         `json:"session,omitempty"`
 	Kind     string         `json:"kind"`
 	Text     string         `json:"text,omitempty"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
-// JSONL is a process-local, append-only log. A single logger is shared by
-// messages, tool calls, jobs, and lifecycle events so the complete transcript
-// can be replayed after a crash.
+// JSONL is a process-local, append-only log for one agent session. Messages,
+// tool calls, jobs, and lifecycle events for that session share the logger so
+// the complete session can be replayed after a crash.
 type JSONL struct {
 	mu      sync.Mutex
 	file    *os.File
 	runtime string
+	session string
 }
 
 func Open(path, runtime string) (*JSONL, error) {
+	return OpenSession(path, runtime, "")
+}
+
+func OpenSession(path, runtime, session string) (*JSONL, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
@@ -36,7 +42,7 @@ func Open(path, runtime string) (*JSONL, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &JSONL{file: f, runtime: runtime}, nil
+	return &JSONL{file: f, runtime: runtime, session: session}, nil
 }
 
 func (l *JSONL) Append(entry Entry) error {
@@ -50,6 +56,9 @@ func (l *JSONL) Append(entry Entry) error {
 	}
 	if entry.Runtime == "" {
 		entry.Runtime = l.runtime
+	}
+	if entry.Session == "" {
+		entry.Session = l.session
 	}
 	b, err := json.Marshal(entry)
 	if err != nil {
