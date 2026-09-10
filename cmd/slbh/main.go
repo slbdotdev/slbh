@@ -22,7 +22,9 @@ func main() {
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	program := tea.NewProgram(tui.New(runtime), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// Leave mouse reporting disabled so the terminal emulator owns drag
+	// selection and copy/paste. Keyboard scrolling remains handled by the TUI.
+	program := tea.NewProgram(tui.New(runtime), tea.WithAltScreen())
 	go func() {
 		<-signals
 		_ = runtime.Close()
