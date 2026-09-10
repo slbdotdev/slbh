@@ -329,8 +329,10 @@ func (m Model) statusLine() string {
 	if root != nil {
 		model = root.Model + " / " + root.Effort
 	}
-	status := dim.Render(fmt.Sprintf("runtime %s · model %s · jobs %d · agents %d · %s", m.runtime.ID(), model, len(m.runtime.Jobs().List()), len(m.agents), "Enter send · Down agents · PgUp/PgDn scroll · Ctrl-C exit"))
-	return wrapToWidth(status, max(1, m.chatWidth()))
+	width := max(1, m.chatWidth())
+	metadata := dim.Render(fmt.Sprintf("runtime %s · model %s · jobs %d · agents %d", m.runtime.ID(), model, len(m.runtime.Jobs().List()), len(m.agents)))
+	controls := dim.Render("Enter send · Down agents · PgUp/PgDn scroll · Ctrl-C exit")
+	return wrapToWidth(metadata, width) + "\n" + wrapToWidth(controls, width)
 }
 
 func (m Model) agentPanel() string {
