@@ -17,8 +17,9 @@ const (
 )
 
 type turn struct {
-	prompt string
-	steer  bool
+	prompt      string
+	steer       bool
+	childResult bool
 }
 
 type Agent struct {
@@ -103,6 +104,20 @@ func (a *Agent) Snapshot() AgentSnapshot {
 	}
 }
 
+func (a *Agent) SetModel(model string) {
+	a.mu.Lock()
+	a.Model = strings.TrimSpace(model)
+	a.contextModel = ""
+	a.contextWindow = 0
+	a.mu.Unlock()
+}
+
+func (a *Agent) SetEffort(effort string) {
+	a.mu.Lock()
+	a.Effort = strings.TrimSpace(effort)
+	a.mu.Unlock()
+}
+
 func (a *Agent) History() []provider.Message {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -147,7 +162,9 @@ func (a *Agent) loop(ctx context.Context) {
 
 func (a *Agent) handle(ctx context.Context, turn turn) {
 	a.setStatus("thinking")
-	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "user", Text: turn.prompt})
+	if !turn.childResult {
+		a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "user", Text: turn.prompt})
+	}
 	a.mu.Lock()
 	epoch := a.historyEpoch
 	a.history = append(a.history, provider.Message{Role: "user", Content: turn.prompt})
@@ -163,7 +180,15 @@ func (a *Agent) handle(ctx context.Context, turn turn) {
 		}
 	}
 drained:
-	p, err := a.runtime.provider(a.Model)
+	a.mu.RLock()
+	model := a.Model
+	effort := a.Effort
+	a.mu.RUnlock()
+	if strings.TrimSpace(model) == "" {
+		a.fail(fmt.Errorf("no model selected; configure an approved model with /models or honor an explicit user model request"))
+		return
+	}
+	p, err := a.runtime.provider(model)
 	if err != nil {
 		a.fail(err)
 		return
@@ -172,9 +197,9 @@ drained:
 	var finalAnswer strings.Builder
 	system := systemPrompt(a)
 	tools := ToolDefinitions()
-	for round := 0; round < 8; round++ {
+	for round := 0; round < 100; round++ {
 		history = a.compactHistoryIfNeeded(history, contextWindow, system, tools)
-		req := provider.Request{Model: a.Model, Effort: a.Effort, System: system, Messages: history, Tools: tools, CacheKey: provider.StablePrefixKey(provider.Request{Model: a.Model, System: system, Tools: tools})}
+		req := provider.Request{Model: model, Effort: effort, System: system, Messages: history, Tools: tools, CacheKey: provider.StablePrefixKey(provider.Request{Model: model, System: system, Tools: tools})}
 		var answer strings.Builder
 		calls := make(map[int]*provider.ToolCall)
 		err = provider.Retry(ctx, 3, func() error {
@@ -341,10 +366,15 @@ func usageNestedInt(usage map[string]any, parent, key string) (int, bool) {
 }
 
 func (a *Agent) receiveChildResult(child *Agent, text string) {
-	a.mu.Lock()
-	a.history = append(a.history, provider.Message{Role: "user", Content: fmt.Sprintf("[result from %s] %s", child.Title, text)})
-	a.mu.Unlock()
-	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "child_result", Text: text, Metadata: map[string]any{"child": child.ID}})
+	// Queue the result as an internal turn instead of mutating history directly.
+	// The active turn owns a local history snapshot and would otherwise overwrite
+	// a result that arrives before it commits.
+	prompt := fmt.Sprintf("[result from %s] %s", child.Title, text)
+	select {
+	case a.turns <- turn{prompt: prompt, childResult: true}:
+		a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "child_result", Text: text, Metadata: map[string]any{"child": child.ID}})
+	case <-a.runtime.ctx.Done():
+	}
 }
 
 // Compact keeps the most recent work and leaves a durable marker in the
@@ -461,5 +491,5 @@ func compactMessages(history []provider.Message, keep int) ([]provider.Message, 
 }
 
 func systemPrompt(a *Agent) string {
-	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise.", a.Title, a.runtime.ID(), a.Depth)
+	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. The harness will deliver the child's result as a later [result from ...] message and wake you, and you should act on that result when it arrives. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
 }

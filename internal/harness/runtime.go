@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,6 +77,7 @@ type Runtime struct {
 	sessions  []*agentSession
 	events    chan Event
 	provider  func(model string) (provider.Provider, error)
+	catalog   []provider.Catalog
 	closeOnce sync.Once
 }
 
@@ -113,7 +115,11 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 		cancel()
 		return nil, err
 	}
-	root, err := r.newAgent("root", "", 0, cfg.RootModel, cfg.RootEffort)
+	rootModel := cfg.RootModel
+	if !cfg.ModelApproved(rootModel) {
+		rootModel = ""
+	}
+	root, err := r.newAgent("root", "", 0, rootModel, cfg.RootEffort)
 	if err != nil {
 		cancel()
 		_ = os.Remove(filepath.Join(r.rootPath, "runtime.json"))
@@ -132,6 +138,85 @@ func (r *Runtime) Dir() string          { return r.rootPath }
 func (r *Runtime) Home() string         { return r.config.Home }
 func (r *Runtime) Events() <-chan Event { return r.events }
 func (r *Runtime) Jobs() *job.Manager   { return r.jobs }
+
+func (r *Runtime) Config() config.Config {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.config
+}
+
+// SetModelCatalog makes the live provider tree available to every agent's
+// next context. Catalog discovery is intentionally initiated by the TUI, not
+// during startup, so launching slbh never spends a network request merely to
+// render the terminal.
+func (r *Runtime) SetModelCatalog(catalog []provider.Catalog) {
+	r.mu.Lock()
+	r.catalog = append([]provider.Catalog(nil), catalog...)
+	r.mu.Unlock()
+}
+
+func (r *Runtime) ModelCatalog() []provider.Catalog {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]provider.Catalog(nil), r.catalog...)
+}
+
+// ConfigureModels preserves the older two-slot API while keeping the leaf
+// default aligned with the level-one subagent model.
+func (r *Runtime) ConfigureModels(rootModel, subagentModel string, approved []string) error {
+	cfg := r.Config()
+	return r.ConfigureModelSlots(rootModel, subagentModel, cfg.LeafModel, approved)
+}
+
+// ConfigureModelSlots persists the user's model choices and updates the root
+// agent immediately. An unapproved configured default is retained in the
+// dotfile but resolves to no model until it is approved again.
+func (r *Runtime) ConfigureModelSlots(rootModel, subagentModel, leafModel string, approved []string) error {
+	r.mu.Lock()
+	r.config.RootModel = rootModel
+	r.config.SubagentModel = subagentModel
+	r.config.LeafModel = leafModel
+	r.config.ApprovedModels = append([]string(nil), approved...)
+	cfg := r.config
+	rootID := r.rootID
+	r.mu.Unlock()
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	if root, ok := r.Agent(rootID); ok {
+		model := rootModel
+		if !cfg.ModelApproved(model) {
+			model = ""
+		}
+		root.SetModel(model)
+	}
+	return nil
+}
+
+func (r *Runtime) ModelGuidance() string {
+	r.mu.RLock()
+	cfg := r.config
+	catalog := append([]provider.Catalog(nil), r.catalog...)
+	r.mu.RUnlock()
+
+	approved := "none"
+	if len(cfg.ApprovedModels) > 0 {
+		approved = fmt.Sprintf("%v", cfg.ApprovedModels)
+	}
+	var branches []string
+	for _, branch := range catalog {
+		if branch.Err != "" {
+			branches = append(branches, branch.Name+" (unavailable: "+branch.Err+")")
+			continue
+		}
+		branches = append(branches, fmt.Sprintf("%s (%d models; choose in /models)", branch.Name, len(branch.Models)))
+	}
+	if len(branches) == 0 {
+		branches = append(branches, "no provider catalog loaded; use the configured default or honor an explicit user model request")
+	}
+	defaults := fmt.Sprintf("defaults are root=%q, subagent=%q, leaf=%q", cfg.RootModel, cfg.SubagentModel, cfg.LeafModel)
+	return "Model guidance: approved models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". Use the configured subagent default for level-one children and the leaf default for level-two children when no model is requested. A model explicitly requested by the user may override the approved list; do not invent model IDs."
+}
 func (r *Runtime) Root() *Agent {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -217,11 +302,20 @@ func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 		return nil, fmt.Errorf("subagent title is required")
 	}
 	model, effort := spec.Model, spec.Effort
+	r.mu.RLock()
+	cfg := r.config
+	r.mu.RUnlock()
 	if model == "" {
-		model = r.config.SubagentModel
+		model = cfg.SubagentModel
+		if parent.Depth >= 1 && cfg.LeafModel != "" {
+			model = cfg.LeafModel
+		}
+		if !cfg.ModelApproved(model) {
+			model = ""
+		}
 	}
 	if effort == "" {
-		effort = r.config.SubagentEffort
+		effort = cfg.SubagentEffort
 	}
 	workingDir := parent.WorkDir
 	if spec.WorkingDir != "" {

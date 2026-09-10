@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"image/color"
 	"path/filepath"
@@ -12,11 +13,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/slbdotdev/slbh/internal/harness"
+	"github.com/slbdotdev/slbh/internal/provider"
 )
 
 var (
 	accent          = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	dim             = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	green           = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	headerStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220"))
 	red             = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	assistantBubble = lipgloss.Color("24")
@@ -36,6 +39,7 @@ var slashCommands = []string{
 	"/q",
 	"/clear",
 	"/model",
+	"/models",
 	"/effort",
 	"/agents",
 	"/jobs",
@@ -44,24 +48,50 @@ var slashCommands = []string{
 
 type eventMsg harness.Event
 
+type modelCatalogMsg struct {
+	catalog []provider.Catalog
+	err     error
+}
+
+type modelTreeNode struct {
+	provider int
+	model    int
+	branch   bool
+	save     bool
+}
+
 type Model struct {
-	runtime      *harness.Runtime
-	viewport     viewport.Model
-	input        textarea.Model
-	events       []harness.Event
-	agents       []harness.AgentSnapshot
-	viewAgentID  string
-	selected     int
-	focusAgents  bool
-	userScrolled bool
-	width        int
-	height       int
-	quitting     bool
-	commandLine  string
-	history      []string
-	historyPath  string
-	historyIndex int
-	historyDraft string
+	runtime        *harness.Runtime
+	viewport       viewport.Model
+	input          textarea.Model
+	events         []harness.Event
+	agents         []harness.AgentSnapshot
+	viewAgentID    string
+	selected       int
+	focusAgents    bool
+	userScrolled   bool
+	width          int
+	height         int
+	quitting       bool
+	commandLine    string
+	history        []string
+	historyPath    string
+	historyIndex   int
+	historyDraft   string
+	modelsOpen     bool
+	modelsLoading  bool
+	modelCatalog   []provider.Catalog
+	modelExpanded  map[string]bool
+	modelCursor    int
+	modelNotice    string
+	modelSubmenu   bool
+	modelSubnode   modelTreeNode
+	modelSubcursor int
+	modelRoot      string
+	modelSubagent  string
+	modelLeaf      string
+	modelNoticeErr bool
+	modelNoticeOK  bool
 }
 
 func New(runtime *harness.Runtime) Model {
@@ -85,7 +115,7 @@ func New(runtime *harness.Runtime) Model {
 		historyPath = filepath.Join(runtime.Home(), historyFileName)
 		history, _ = loadHistory(historyPath)
 	}
-	return Model{runtime: runtime, viewport: view, input: input, viewAgentID: viewID, agents: runtime.Agents(), history: history, historyPath: historyPath, historyIndex: -1}
+	return Model{runtime: runtime, viewport: view, input: input, viewAgentID: viewID, agents: activeAgents(runtime.Agents()), history: history, historyPath: historyPath, historyIndex: -1, modelCatalog: runtime.ModelCatalog(), modelExpanded: make(map[string]bool)}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -104,18 +134,48 @@ func waitEvent(runtime *harness.Runtime) tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case modelCatalogMsg:
+		m.modelsLoading = false
+		m.modelCatalog = msg.catalog
+		m.runtime.SetModelCatalog(msg.catalog)
+		if msg.err != nil {
+			m.modelNotice = msg.err.Error()
+			m.modelNoticeErr = true
+			m.modelNoticeOK = false
+		} else {
+			m.modelNotice = ""
+			m.modelNoticeErr = false
+			m.modelNoticeOK = false
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.resize()
 		return m, nil
 	case eventMsg:
 		m.events = append(m.events, harness.Event(msg))
-		m.agents = m.runtime.Agents()
-		m.refreshView()
+		m.agents = activeAgents(m.runtime.Agents())
+		if !containsAgent(m.agents, m.viewAgentID) {
+			m.viewAgentID = rootID(m.runtime)
+			m.userScrolled = false
+		}
+		if m.selected >= len(m.agents) {
+			m.selected = max(0, len(m.agents)-1)
+		}
+		// Agent and job events can change the footer height. Reflow the chat
+		// viewport before rendering so newly spawned agents cannot push the
+		// last panel row below the terminal.
+		m.resize()
+		if m.width < 1 || m.height < 1 {
+			m.refreshView()
+		}
 		return m, waitEvent(m.runtime)
 	case tea.MouseMsg:
 		return m.updateMouse(msg)
 	case tea.KeyPressMsg:
+		if m.modelsOpen {
+			return m.updateModelMenu(msg)
+		}
 		return m.updateKey(msg)
 	}
 	var cmd tea.Cmd
@@ -168,11 +228,11 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.Code == tea.KeyEnter {
-		m.submit()
+		cmd := m.submit()
 		if m.quitting {
 			return m, tea.Quit
 		}
-		return m, nil
+		return m, cmd
 	}
 	switch {
 	case msg.Code == tea.KeyPgUp || isControlKey(msg, 'u'):
@@ -236,30 +296,30 @@ func (m *Model) scrollDownBy(lines int) {
 	m.userScrolled = !m.viewport.AtBottom()
 }
 
-func (m *Model) submit() {
+func (m *Model) submit() tea.Cmd {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
-		return
+		return nil
 	}
 	m.input.Reset()
 	m.resetHistoryNavigation()
 	m.recordHistory(text)
 	if strings.HasPrefix(text, "/") {
-		m.handleCommand(text)
-		return
+		return m.handleCommand(text)
 	}
 	a, ok := m.runtime.Agent(m.viewAgentID)
 	if !ok {
 		a = m.runtime.Root()
 	}
 	if a == nil {
-		return
+		return nil
 	}
 	if a.ID == rootID(m.runtime) {
 		a.Send(text)
 	} else {
 		a.Steer(text)
 	}
+	return nil
 }
 
 func (m *Model) updateInput(msg tea.Msg) (Model, tea.Cmd) {
@@ -329,13 +389,29 @@ func (m *Model) completeSlashCommand() bool {
 		return false
 	}
 	partial := strings.ToLower(value)
-	var match string
+	matches := make([]string, 0, len(slashCommands))
 	for _, command := range slashCommands {
 		if strings.HasPrefix(command, partial) {
+			matches = append(matches, command)
+		}
+	}
+	if len(matches) == 0 {
+		return false
+	}
+	match := ""
+	for _, candidate := range matches {
+		prefixOfOther := false
+		for _, other := range matches {
+			if other != candidate && strings.HasPrefix(other, candidate) {
+				prefixOfOther = true
+				break
+			}
+		}
+		if prefixOfOther {
 			if match != "" {
 				return false
 			}
-			match = command
+			match = candidate
 		}
 	}
 	if match == "" || match == partial {
@@ -347,7 +423,7 @@ func (m *Model) completeSlashCommand() bool {
 	return true
 }
 
-func (m *Model) handleCommand(command string) {
+func (m *Model) handleCommand(command string) tea.Cmd {
 	parts := strings.Fields(command)
 	name := strings.ToLower(parts[0])
 	arg := ""
@@ -358,29 +434,46 @@ func (m *Model) handleCommand(command string) {
 	case "/exit", "/quit", "/q":
 		m.quitting = true
 		_ = m.runtime.Close()
-		return
+		return nil
 	case "/clear":
 		if err := m.runtime.Clear(m.viewAgentID); err != nil {
 			m.addLocal("error", err.Error())
-			return
+			return nil
 		}
 		m.clearCurrentView()
+	case "/models":
+		return m.openModelMenu()
 	case "/model":
 		if arg != "" {
-			if root := m.runtime.Root(); root != nil {
-				root.Model = arg
+			cfg := m.runtime.Config()
+			approved := append([]string(nil), cfg.ApprovedModels...)
+			if approved == nil {
+				approved = []string{}
 			}
-			m.addLocal("status", "root model set to "+arg)
+			if !containsModel(approved, arg) {
+				approved = append(approved, arg)
+			}
+			if err := m.runtime.ConfigureModels(arg, cfg.SubagentModel, approved); err != nil {
+				m.addLocal("error", "save model configuration: "+err.Error())
+			} else {
+				m.addLocal("status", "root model set to "+arg)
+			}
 		}
 	case "/effort":
 		if arg != "" {
 			if root := m.runtime.Root(); root != nil {
-				root.Effort = arg
+				root.SetEffort(arg)
+			}
+			cfg := m.runtime.Config()
+			cfg.RootEffort = arg
+			if err := cfg.Save(); err != nil {
+				m.addLocal("error", "save effort configuration: "+err.Error())
+				return nil
 			}
 			m.addLocal("status", "root effort set to "+arg)
 		}
 	case "/agents":
-		m.addLocal("status", formatAgents(m.runtime.Agents()))
+		m.addLocal("status", formatAgents(m.agents))
 	case "/jobs":
 		m.addLocal("status", fmt.Sprintf("%v", m.runtime.Jobs().List()))
 	case "/compact":
@@ -392,11 +485,329 @@ func (m *Model) handleCommand(command string) {
 	default:
 		m.addLocal("error", "unknown command: "+name)
 	}
+	return nil
 }
 
 func (m *Model) addLocal(kind, text string) {
 	m.events = append(m.events, harness.Event{Time: time.Now(), AgentID: m.viewAgentID, AgentTitle: "local", Kind: kind, Text: text})
 	m.refreshView()
+}
+
+func (m *Model) openModelMenu() tea.Cmd {
+	if m.modelExpanded == nil {
+		m.modelExpanded = make(map[string]bool)
+	}
+	cfg := m.runtime.Config()
+	m.modelRoot, m.modelSubagent, m.modelLeaf = "", "", ""
+	if cfg.ModelApproved(cfg.RootModel) {
+		m.modelRoot = cfg.RootModel
+	}
+	if cfg.ModelApproved(cfg.SubagentModel) {
+		m.modelSubagent = cfg.SubagentModel
+	}
+	leaf := cfg.LeafModel
+	if leaf == "" {
+		leaf = cfg.SubagentModel
+	}
+	if cfg.ModelApproved(leaf) {
+		m.modelLeaf = leaf
+	}
+	m.modelsOpen = true
+	m.modelsLoading = true
+	m.modelNotice = "loading provider catalogs…"
+	m.modelNoticeErr = false
+	m.modelNoticeOK = false
+	m.input.Blur()
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		catalog, err := provider.DiscoverCatalog(ctx, m.runtime.Config().Endpoint)
+		return modelCatalogMsg{catalog: catalog, err: err}
+	}
+}
+
+func (m *Model) updateModelMenu(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.Code == tea.KeyEsc {
+		if m.modelSubmenu {
+			m.modelSubmenu = false
+			return m, nil
+		}
+		m.saveAndCloseModelMenu()
+		return m, nil
+	}
+	if m.modelSubmenu {
+		return m.updateModelSubmenu(msg)
+	}
+	if m.modelsLoading {
+		return m, nil
+	}
+	nodes := m.modelNodes()
+	if len(nodes) > 0 && m.modelCursor >= len(nodes) {
+		m.modelCursor = len(nodes) - 1
+	}
+	switch msg.Code {
+	case tea.KeyUp:
+		if m.modelCursor > 0 {
+			m.modelCursor--
+		}
+	case tea.KeyDown:
+		if m.modelCursor < len(nodes)-1 {
+			m.modelCursor++
+		}
+	case tea.KeyLeft:
+		if len(nodes) > 0 && !nodes[m.modelCursor].save {
+			m.modelExpanded[m.modelCatalog[nodes[m.modelCursor].provider].Name] = false
+		}
+	case tea.KeyRight:
+		if len(nodes) > 0 && nodes[m.modelCursor].branch {
+			m.modelExpanded[m.modelCatalog[nodes[m.modelCursor].provider].Name] = true
+		}
+	case tea.KeyEnter:
+		if len(nodes) > 0 {
+			node := nodes[m.modelCursor]
+			switch {
+			case node.save:
+				m.saveAndCloseModelMenu()
+			case node.branch:
+				name := m.modelCatalog[node.provider].Name
+				m.modelExpanded[name] = !m.modelExpanded[name]
+			default:
+				m.modelSubmenu = true
+				m.modelSubnode = node
+				m.modelSubcursor = 0
+			}
+		}
+	case 'r', 'R', 's', 'S', 'l', 'L':
+		if len(nodes) > 0 && !nodes[m.modelCursor].branch && !nodes[m.modelCursor].save {
+			slot := "root"
+			switch strings.ToLower(string(msg.Code)) {
+			case "s":
+				slot = "subagent"
+			case "l":
+				slot = "leaf"
+			}
+			m.assignModel(nodes[m.modelCursor], slot)
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) updateModelSubmenu(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	options := []string{"root", "subagent", "leaf"}
+	switch msg.Code {
+	case tea.KeyUp:
+		if m.modelSubcursor > 0 {
+			m.modelSubcursor--
+		}
+	case tea.KeyDown:
+		if m.modelSubcursor < len(options)-1 {
+			m.modelSubcursor++
+		}
+	case tea.KeyEnter:
+		m.assignModel(m.modelSubnode, options[m.modelSubcursor])
+		m.modelSubmenu = false
+	case 'r', 'R':
+		m.assignModel(m.modelSubnode, "root")
+		m.modelSubmenu = false
+	case 's', 'S':
+		m.assignModel(m.modelSubnode, "subagent")
+		m.modelSubmenu = false
+	case 'l', 'L':
+		m.assignModel(m.modelSubnode, "leaf")
+		m.modelSubmenu = false
+	}
+	return m, nil
+}
+
+func (m Model) modelNodes() []modelTreeNode {
+	nodes := make([]modelTreeNode, 0)
+	for i, catalog := range m.modelCatalog {
+		nodes = append(nodes, modelTreeNode{provider: i, model: -1, branch: true})
+		if !m.modelExpanded[catalog.Name] {
+			continue
+		}
+		for j := range catalog.Models {
+			nodes = append(nodes, modelTreeNode{provider: i, model: j})
+		}
+	}
+	nodes = append(nodes, modelTreeNode{save: true})
+	return nodes
+}
+
+func (m *Model) assignModel(node modelTreeNode, slot string) {
+	model := m.modelCatalog[node.provider].Models[node.model].ID
+	switch slot {
+	case "root":
+		m.modelRoot = model
+	case "subagent":
+		m.modelSubagent = model
+	case "leaf":
+		m.modelLeaf = model
+	default:
+		return
+	}
+	if err := m.runtime.ConfigureModelSlots(m.modelRoot, m.modelSubagent, m.modelLeaf, approvedSlots(m.modelRoot, m.modelSubagent, m.modelLeaf)); err != nil {
+		m.modelNotice = "save failed: " + err.Error()
+		m.modelNoticeErr = true
+		m.modelNoticeOK = false
+		return
+	}
+	m.modelNotice = slot + " model set to " + displayModelID(m.modelCatalog[node.provider].Name, model)
+	m.modelNoticeErr = false
+	m.modelNoticeOK = true
+}
+
+func (m *Model) saveAndCloseModelMenu() {
+	if err := m.runtime.ConfigureModelSlots(m.modelRoot, m.modelSubagent, m.modelLeaf, approvedSlots(m.modelRoot, m.modelSubagent, m.modelLeaf)); err != nil {
+		m.modelNotice = "save failed: " + err.Error()
+		m.modelNoticeErr = true
+		m.modelNoticeOK = false
+		return
+	}
+	m.modelsOpen = false
+	m.modelsLoading = false
+	m.modelSubmenu = false
+	m.input.Focus()
+	m.addLocal("status", "model configuration saved")
+}
+
+func approvedSlots(root, subagent, leaf string) []string {
+	result := make([]string, 0, 3)
+	for _, model := range []string{root, subagent, leaf} {
+		if model != "" && !containsModel(result, model) {
+			result = append(result, model)
+		}
+	}
+	return result
+}
+
+func (m Model) modelSlotMarker(model string) string {
+	markers := make([]string, 0, 3)
+	if strings.EqualFold(m.modelRoot, model) && model != "" {
+		markers = append(markers, "r")
+	}
+	if strings.EqualFold(m.modelSubagent, model) && model != "" {
+		markers = append(markers, "s")
+	}
+	if strings.EqualFold(m.modelLeaf, model) && model != "" {
+		markers = append(markers, "l")
+	}
+	return strings.Join(markers, "/")
+}
+
+func modelSlotValue(model string) string {
+	if model == "" {
+		return "none"
+	}
+	return model
+}
+
+func (m Model) modelSubmenuView() string {
+	width := max(1, m.width)
+	model := m.modelCatalog[m.modelSubnode.provider].Models[m.modelSubnode.model]
+	options := []string{"root", "subagent", "leaf"}
+	lines := []string{
+		accent.Render("ASSIGN MODEL"),
+		"Choose a slot for " + displayModelID(m.modelCatalog[m.modelSubnode.provider].Name, model.ID) + ":",
+		"",
+	}
+	for i, option := range options {
+		prefix := "  "
+		if i == m.modelSubcursor {
+			prefix = "> "
+		}
+		lines = append(lines, prefix+option)
+	}
+	lines = append(lines, "", dim.Render("Enter assign · r/s/l assign directly · Esc back"))
+	return wrapToWidth(strings.Join(lines, "\n"), width)
+}
+
+func displayModelID(providerName, model string) string {
+	prefix := strings.ToLower(strings.TrimSpace(providerName)) + "/"
+	if strings.HasPrefix(strings.ToLower(model), prefix) {
+		return model[len(prefix):]
+	}
+	return model
+}
+
+func containsModel(models []string, wanted string) bool {
+	for _, model := range models {
+		if strings.EqualFold(strings.TrimSpace(model), strings.TrimSpace(wanted)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) modelMenuView() string {
+	if m.modelSubmenu {
+		return m.modelSubmenuView()
+	}
+	width := max(1, m.width)
+	lines := []string{
+		accent.Render("MODELS"),
+		"Providers with configured keys; OpenRouter shows models created within the last year.",
+		fmt.Sprintf("Slots: root=%s · subagent=%s · leaf=%s", modelSlotValue(m.modelRoot), modelSlotValue(m.modelSubagent), modelSlotValue(m.modelLeaf)),
+		"r=root · s=subagent · l=leaf · Enter=assign · Esc=save and close",
+		"",
+	}
+	if m.modelsLoading {
+		lines = append(lines, "Loading provider catalogs…")
+	} else {
+		if len(m.modelCatalog) == 0 {
+			lines = append(lines, "No provider keys found or no models returned.")
+		}
+		nodes := m.modelNodes()
+		available := max(1, m.height-len(lines)-2)
+		start := max(0, m.modelCursor-available/2)
+		if start+available > len(nodes) {
+			start = max(0, len(nodes)-available)
+		}
+		end := min(len(nodes), start+available)
+		for i := start; i < end; i++ {
+			node := nodes[i]
+			prefix := "  "
+			if i == m.modelCursor {
+				prefix = "> "
+			}
+			if node.save {
+				lines = append(lines, accent.Render(wrapToWidth(prefix+"Save and Close", width)))
+				continue
+			}
+			catalog := m.modelCatalog[node.provider]
+			if node.branch {
+				marker := "▸"
+				if m.modelExpanded[catalog.Name] {
+					marker = "▾"
+				}
+				line := fmt.Sprintf("%s%s %s (%d models)", prefix, marker, catalog.Name, len(catalog.Models))
+				if catalog.Err != "" {
+					line += " [" + catalog.Err + "]"
+				}
+				lines = append(lines, dim.Render(wrapToWidth(line, width)))
+				continue
+			}
+			model := catalog.Models[node.model]
+			lines = append(lines, wrapToWidth(fmt.Sprintf("%s  [%s] %s", prefix, m.modelSlotMarker(model.ID), displayModelID(catalog.Name, model.ID)), width))
+		}
+	}
+	if m.modelNotice != "" {
+		notice := dim
+		if m.modelNoticeErr {
+			notice = red
+		} else if m.modelNoticeOK {
+			notice = green
+		}
+		lines = append(lines, "", notice.Render(wrapToWidth(m.modelNotice, width)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (m *Model) resize() {
@@ -574,6 +985,8 @@ func (m Model) View() tea.View {
 	var content string
 	if m.quitting {
 		content = dim.Render("shutting down…")
+	} else if m.modelsOpen {
+		content = m.modelMenuView()
 	} else {
 		chat := m.viewport.View()
 		if chatHeight := lipgloss.Height(chat); chatHeight < m.chatHeight() {
@@ -688,9 +1101,13 @@ func (m Model) statusLine() string {
 		current = root.Snapshot()
 	}
 	width := max(1, m.chatWidth())
+	model := current.Model
+	if model == "" {
+		model = "no-model"
+	}
 	parts := []string{
 		m.runtime.ID(),
-		current.Model + " " + current.Effort,
+		model + " " + current.Effort,
 		formatContextStats(current),
 		formatCacheStats(current),
 	}
@@ -735,23 +1152,26 @@ func formatTokens(tokens int) string {
 }
 
 func (m Model) agentPanel() string {
-	if len(m.agents) <= 1 {
+	if len(m.agents) == 0 {
 		return ""
 	}
-	lines := []string{accent.Render("AGENTS")}
+	lines := make([]string, 0, len(m.agents))
 	for i, a := range m.agents {
-		marker := "  "
+		line := strings.Repeat("  ", a.Depth)
 		if m.focusAgents && i == m.selected {
-			marker = "> "
+			line += "> "
+		} else {
+			switch {
+			case a.Depth == 1:
+				line += "• "
+			case a.Depth >= 2:
+				line += "⚬ "
+			}
 		}
-		prefix := strings.Repeat("  ", a.Depth)
-		lines = append(lines, marker+prefix+a.Title+" ["+a.Status+"]")
+		line += a.Title + " [" + a.Status + "]"
+		lines = append(lines, accent.Render(wrapToWidth(line, max(1, m.chatWidth()))))
 	}
-	wrapped := make([]string, 0, len(lines))
-	for _, line := range lines {
-		wrapped = append(wrapped, wrapToWidth(line, max(1, m.chatWidth())))
-	}
-	return strings.Join(wrapped, "\n")
+	return strings.Join(lines, "\n")
 }
 
 func rootID(runtime *harness.Runtime) string {
@@ -767,6 +1187,25 @@ func formatAgents(agents []harness.AgentSnapshot) string {
 		lines = append(lines, fmt.Sprintf("%s depth=%d status=%s", a.Title, a.Depth, a.Status))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func activeAgents(agents []harness.AgentSnapshot) []harness.AgentSnapshot {
+	active := make([]harness.AgentSnapshot, 0, len(agents))
+	for _, agent := range agents {
+		if agent.Status != "stopped" {
+			active = append(active, agent)
+		}
+	}
+	return active
+}
+
+func containsAgent(agents []harness.AgentSnapshot, id string) bool {
+	for _, agent := range agents {
+		if agent.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func max(a, b int) int {

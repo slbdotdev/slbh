@@ -258,6 +258,7 @@ func (p *HTTPProvider) ContextWindow(ctx context.Context, model string) (int, er
 
 type modelMetadata struct {
 	ID            string `json:"id"`
+	Created       int64  `json:"created"`
 	ContextLength int    `json:"context_length"`
 	TopProvider   struct {
 		ContextLength int `json:"context_length"`

@@ -50,6 +50,25 @@ func (usageProvider) Stream(ctx context.Context, _ provider.Request, sink provid
 	return sink(provider.Event{Kind: provider.EventText, Text: "done"})
 }
 
+type childResultProvider struct{}
+
+func (childResultProvider) Stream(_ context.Context, request provider.Request, sink provider.StreamSink) error {
+	if request.Model == "test-child" {
+		return sink(provider.Event{Kind: provider.EventText, Text: "child answer"})
+	}
+	for _, message := range request.Messages {
+		if message.Role == "user" && strings.HasPrefix(message.Content, "[result from child]") {
+			return sink(provider.Event{Kind: provider.EventText, Text: "parent saw child"})
+		}
+	}
+	for _, message := range request.Messages {
+		if message.Role == "tool" {
+			return sink(provider.Event{Kind: provider.EventText, Text: "parent waiting"})
+		}
+	}
+	return sink(provider.Event{Kind: provider.EventTool, ToolIndex: 0, ToolCallID: "launch-1", ToolName: "launch_subagent", Input: `{"title":"child","brief":"child brief"}`})
+}
+
 func testRuntime(t *testing.T) *Runtime {
 	t.Helper()
 	r, err := New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high", SubagentModel: "test-child", SubagentEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
@@ -312,6 +331,109 @@ func TestProviderToolCallsExecuteAndContinue(t *testing.T) {
 	}
 	if !sawResult {
 		t.Fatal("tool result event was not emitted")
+	}
+}
+
+func TestEmptyApprovalPolicyDoesNotCallProviderButExplicitLaunchModelWorks(t *testing.T) {
+	providerCalls := 0
+	r, err := New(config.Config{
+		Home: t.TempDir(), RootModel: "root-model", RootEffort: "high",
+		SubagentModel: "default-child", SubagentEffort: "high", ApprovedModels: []string{},
+	}, Options{Provider: func(string) (provider.Provider, error) {
+		providerCalls++
+		return fakeProvider{}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if got := r.Root().Snapshot().Model; got != "" {
+		t.Fatalf("root model = %q, want fail-closed empty model", got)
+	}
+	child, err := r.LaunchSubagentSpec(r.Root().ID, LaunchSpec{Title: "explicit", Model: "user-requested"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := child.Snapshot().Model; got != "user-requested" {
+		t.Fatalf("explicit child model = %q, want user-requested", got)
+	}
+	if providerCalls != 0 {
+		t.Fatalf("provider calls before any turn = %d, want zero", providerCalls)
+	}
+}
+
+func TestLeafSubagentUsesLeafDefault(t *testing.T) {
+	r, err := New(config.Config{
+		Home: t.TempDir(), RootModel: "root", RootEffort: "high",
+		SubagentModel: "level-one", LeafModel: "level-two", SubagentEffort: "high",
+	}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	levelOne, err := r.LaunchSubagentSpec(r.Root().ID, LaunchSpec{Title: "level one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	levelTwo, err := r.LaunchSubagentSpec(levelOne.ID, LaunchSpec{Title: "level two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := levelOne.Snapshot().Model; got != "level-one" {
+		t.Fatalf("level-one model = %q, want level-one", got)
+	}
+	if got := levelTwo.Snapshot().Model; got != "level-two" {
+		t.Fatalf("level-two model = %q, want level-two", got)
+	}
+}
+
+func TestChildResultStartsParentTurn(t *testing.T) {
+	r, err := New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high", SubagentModel: "test-child", SubagentEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return childResultProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	r.Root().Send("ask a child")
+	deadline := time.After(5 * time.Second)
+	var sawParentResult bool
+	for !sawParentResult {
+		select {
+		case event := <-r.Events():
+			if event.AgentID == r.Root().ID && event.Kind == "assistant" && event.Text == "parent saw child" {
+				sawParentResult = true
+			}
+		case <-deadline:
+			t.Fatal("parent never received the child result")
+		}
+	}
+
+	var resultCount int
+	for _, message := range r.Root().History() {
+		if strings.HasPrefix(message.Content, "[result from child] child answer") {
+			resultCount++
+		}
+	}
+	if resultCount != 1 {
+		t.Fatalf("parent history has %d child results, want one: %#v", resultCount, r.Root().History())
+	}
+	transcriptPath, err := r.TranscriptPath(r.Root().ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := logx.Read(transcriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawChildResult bool
+	for _, entry := range entries {
+		if entry.Kind == "child_result" && entry.Text == "child answer" {
+			sawChildResult = true
+			break
+		}
+	}
+	if !sawChildResult {
+		t.Fatalf("parent transcript missing child result: %#v", entries)
 	}
 }
 

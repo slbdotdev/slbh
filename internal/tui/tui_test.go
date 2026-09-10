@@ -41,8 +41,8 @@ func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 	if strings.Contains(view, "long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error") {
 		t.Fatal("long content was not wrapped")
 	}
-	if got := m.agentPanel(); got != "" {
-		t.Fatal("root-only runtime should hide the agent list")
+	if got := ansi.Strip(m.agentPanel()); !strings.Contains(got, "root [idle]") {
+		t.Fatalf("root-only runtime should show the root agent: %q", got)
 	}
 	m.agents = append(m.agents, harness.AgentSnapshot{ID: "child", Title: "child", Status: "idle", Depth: 1})
 	if got := lipgloss.Width(m.agentPanel()); got != 80 {
@@ -53,6 +53,146 @@ func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 	}
 	if !strings.Contains(m.statusLine(), runtime.Root().Model+" "+runtime.Root().Effort) || !strings.Contains(m.statusLine(), "--/--") || !strings.Contains(m.statusLine(), " · --") {
 		t.Fatal("footer should show the actual model identifier followed by effort")
+	}
+}
+
+func TestAgentPanelKeepsAllAgentsInsideTerminal(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	m := New(runtime)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+	child, err := runtime.LaunchSubagent(runtime.Root().ID, "child", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, _ = m.Update(eventMsg(harness.Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "status", Text: "subagent launched"}))
+	m = updated.(Model)
+
+	view := ansi.Strip(m.View().Content)
+	if got := lipgloss.Height(view); got != 24 {
+		t.Fatalf("view height=%d, want 24: %q", got, view)
+	}
+	if !strings.Contains(view, "child [idle]") {
+		t.Fatalf("agent panel clipped child row: %q", view)
+	}
+	if !strings.Contains(view, "  • child [idle]") {
+		t.Fatalf("level 1 child has incorrect marker or indentation: %q", view)
+	}
+}
+
+func TestAgentPanelUsesPinkTreeMarkers(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	m := New(runtime)
+	m.width = 80
+	m.agents = []harness.AgentSnapshot{
+		{ID: "root", Title: "root", Status: "idle", Depth: 0},
+		{ID: "child", Title: "child", Status: "idle", Depth: 1},
+		{ID: "leaf", Title: "leaf", Status: "idle", Depth: 2},
+	}
+	panel := m.agentPanel()
+	plain := ansi.Strip(panel)
+	if strings.Contains(plain, "AGENTS") {
+		t.Fatalf("agent header was not removed: %q", plain)
+	}
+	for _, want := range []string{"root [idle]", "  • child [idle]", "    ⚬ leaf [idle]"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("agent panel missing %q: %q", want, plain)
+		}
+	}
+	if !strings.Contains(panel, "38;5;205") {
+		t.Fatalf("agent lines are not pink: %q", panel)
+	}
+}
+
+func TestModelMenuAssignsRootSubagentAndLeafSlots(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), RootModel: "root", RootEffort: "high", SubagentModel: "child"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	m := New(runtime)
+	m.width, m.height = 80, 24
+	m.modelsOpen = true
+	m.modelCatalog = []provider.Catalog{{Name: "deepseek", Models: []provider.ModelInfo{{ID: "deepseek/model"}}}}
+	m.modelExpanded = map[string]bool{"deepseek": true}
+	m.modelRoot, m.modelSubagent, m.modelLeaf = "root", "child", ""
+	m.modelCursor = 1
+
+	updated, _ := m.updateModelMenu(tea.KeyPressMsg{Code: 'l'})
+	m = *updated.(*Model)
+	if got := runtime.Config().LeafModel; got != "deepseek/model" {
+		t.Fatalf("leaf model = %q, want deepseek/model", got)
+	}
+	if !strings.Contains(ansi.Strip(m.modelMenuView()), "[l] model") {
+		t.Fatalf("leaf marker or provider prefix is wrong: %q", ansi.Strip(m.modelMenuView()))
+	}
+	if !strings.Contains(ansi.Strip(m.modelMenuView()), "Save and Close") {
+		t.Fatal("model menu is missing Save and Close")
+	}
+	if !strings.Contains(ansi.Strip(m.modelMenuView()), "Slots: root=root · subagent=child · leaf=deepseek/model") {
+		t.Fatalf("model menu is missing slot summary: %q", ansi.Strip(m.modelMenuView()))
+	}
+
+	updated, _ = m.updateModelMenu(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = *updated.(*Model)
+	if !m.modelSubmenu || !strings.Contains(ansi.Strip(m.modelMenuView()), "subagent") {
+		t.Fatalf("Enter did not open the slot submenu: %q", ansi.Strip(m.modelMenuView()))
+	}
+	updated, _ = m.updateModelMenu(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = *updated.(*Model)
+	if m.modelSubmenu {
+		t.Fatal("Esc did not return from the slot submenu")
+	}
+}
+
+func TestEndedSubagentLeavesActivePanelButKeepsTranscript(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	m := New(runtime)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+	child, err := runtime.LaunchSubagent(runtime.Root().ID, "child", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, _ = m.Update(eventMsg(harness.Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "status", Text: "subagent launched"}))
+	m = updated.(Model)
+	m.viewAgentID = child.ID
+	m.focusAgents = true
+	m.selected = 1
+
+	if err := runtime.EndSubagent(runtime.Root().ID, child.ID); err != nil {
+		t.Fatal(err)
+	}
+	updated, _ = m.Update(eventMsg(harness.Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "status", Text: "stopped"}))
+	m = updated.(Model)
+
+	if containsAgent(m.agents, child.ID) {
+		t.Fatalf("stopped child remains in active agents: %#v", m.agents)
+	}
+	if m.viewAgentID != runtime.Root().ID {
+		t.Fatalf("view stayed on ended child %q, want root %q", m.viewAgentID, runtime.Root().ID)
+	}
+	if strings.Contains(m.agentPanel(), "child") {
+		t.Fatalf("ended child remains selectable in panel: %q", m.agentPanel())
+	}
+	if _, err := runtime.TranscriptPath(child.ID); err != nil {
+		t.Fatalf("ended child transcript was not preserved: %v", err)
 	}
 }
 

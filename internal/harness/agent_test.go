@@ -57,6 +57,24 @@ func TestCompactMessagesPreservesTurnBoundary(t *testing.T) {
 	}
 }
 
+func TestSystemPromptDirectsAsyncChildHandling(t *testing.T) {
+	r := testRuntime(t)
+	prompt := systemPrompt(r.Root())
+	for _, phrase := range []string{
+		"launch_subagent returns immediately",
+		"do not block this turn waiting for a child",
+		"Do not use quick_bash, long_job, sleep, polling, or shell wait loops",
+		"end your turn",
+		"later [result from ...] message",
+		"responsible for ending each subagent with end_subagent",
+		"subagents stay alive indefinitely",
+	} {
+		if !strings.Contains(prompt, phrase) {
+			t.Fatalf("system prompt missing async guidance %q: %s", phrase, prompt)
+		}
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

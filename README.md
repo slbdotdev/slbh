@@ -1,36 +1,16 @@
 # slbh
 
 `slbh` is a small, Linux-first agent harness for coding work. It provides a
-responsive Bubble Tea terminal UI, isolated agents, streaming provider
-responses, durable JSONL transcripts, and non-blocking shell jobs.
-
-## Features
-
-- A streaming terminal REPL with a scrollable message viewport.
-- User and assistant messages use standalone bold-yellow bullet headers, with
-  green and blue full-width message bodies.
-- Thinking, tool, steer, error, and tool-result output share a gray rolling
-  context block with a bold-yellow bullet header. The body keeps the newest
-  ten visual lines. Status and usage telemetry is retained in the event data
-  and transcript but hidden from the message viewport.
-- Events before the first user message for the selected agent are omitted from
-  the viewport but remain available in the transcript.
-- A root agent with children up to depth two. Agents have independent history,
-  model, effort, working directory, and steer queues.
-- Five-second foreground shell commands and inspectable, killable background
-  jobs.
-- File search, reads, atomic edits, patch application, and new-file tools
-  scoped to the active agent's working directory.
-- Stable-prefix request construction and provider cache keys for input caching.
-- Per-launch runtime directories with separate agent and session transcripts.
+Bubble Tea terminal UI, independent root and child agents, streaming
+OpenAI-compatible provider responses, durable JSONL transcripts, and managed
+shell jobs.
 
 ## Requirements
 
 - Go 1.27 or newer.
-- Linux is the primary target. WSL2 is supported for development and testing;
-  non-Linux builds use a shell fallback and do not provide Linux process-group
-  semantics.
 - An API key for the provider used by the selected model.
+- Linux is the primary target. WSL2 is supported; non-Linux builds use a
+  shell fallback and do not provide Linux process-group semantics.
 
 ## Quick start
 
@@ -40,98 +20,83 @@ From the repository root:
 go run ./cmd/slbh
 ```
 
-To build a reusable binary:
+Or build a reusable binary:
 
 ```sh
 go build -o slbh ./cmd/slbh
 ./slbh
 ```
 
-The default root model is `deepseek-v4-flash` at `xhigh` effort. Child agents
-default to `zai/glm-5.3-flash` at `high` effort. The UI starts without an API
-key, but inference turns finish with a provider configuration error.
+The defaults are a `deepseek-v4-flash` root agent at `xhigh` effort and
+`zai/glm-5.3-flash` child agents at `high` effort. A new configuration has no
+approved models, so the harness fails closed until models are selected.
 
-## Providers
+After starting a fresh configuration, run `/models`, wait for the catalogs,
+and assign the root, subagent, and leaf defaults with `r`, `s`, and `l`.
+Press `Esc` to save and close the model menu. `/model NAME` is a shortcut that
+approves and selects `NAME` for the root agent only; child defaults still need
+to be approved or supplied explicitly when a child is launched.
 
-`slbh` sends OpenAI-compatible streaming requests. It selects a native
-endpoint when the model prefix and matching key are present:
+## Providers and configuration
 
-- `DEEPSEEK_API_KEY` routes `deepseek/` and `deepseek-` models to DeepSeek.
-- `ZAI_API_KEY` routes `zai/` and `glm-` models to Z.ai.
-- Other models use `SLBH_ENDPOINT`, which defaults to the OpenRouter chat
-  completions endpoint, with `OPENROUTER_API_KEY`.
+Provider routing is automatic:
 
-Native routes take precedence over the configured endpoint when their matching
-key is available. A custom compatible endpoint can be set with
-`SLBH_ENDPOINT`; it uses `OPENROUTER_API_KEY` unless a native route wins.
+- `DEEPSEEK_API_KEY` routes `deepseek/` and `deepseek-` model names to
+  DeepSeek.
+- `ZAI_API_KEY` routes `zai/` and `glm-` model names to Z.ai.
+- Other models use `SLBH_ENDPOINT` with `OPENROUTER_API_KEY`. The endpoint
+  defaults to the OpenRouter chat-completions endpoint.
 
-Example using OpenRouter:
-
-```sh
-export OPENROUTER_API_KEY="..."
-export SLBH_MODEL="deepseek-v4-flash"
-export SLBH_EFFORT="xhigh"
-go run ./cmd/slbh
-```
-
-Example using native Z.ai for child agents:
-
-```sh
-export ZAI_API_KEY="..."
-export SLBH_SUBAGENT_MODEL="zai/glm-5.3-flash"
-go run ./cmd/slbh
-```
-
-Requests include streaming, reasoning effort where supported, tool
-definitions, and a stable `prompt_cache_key`. The system prompt and tool
-schema stay in the stable request prefix so providers can reuse their cache.
-
-## Configuration
+A matching native route takes precedence over the configured endpoint,
+including when the same model is also listed by OpenRouter. A custom
+OpenAI-compatible endpoint uses `OPENROUTER_API_KEY` unless a native route
+wins.
 
 These environment variables are read at startup:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SLBH_HOME` | `$HOME/.slbh` | Root directory for runtime records. |
+| `SLBH_HOME` | `$HOME/.slbh` | Root directory for configuration, history, and runtime records. |
 | `SLBH_MODEL` | `deepseek-v4-flash` | Root agent model. |
 | `SLBH_EFFORT` | `xhigh` | Root reasoning effort. |
 | `SLBH_SUBAGENT_MODEL` | `zai/glm-5.3-flash` | Default child-agent model. |
+| `SLBH_LEAF_MODEL` | Same as `SLBH_SUBAGENT_MODEL` | Default depth-two child model. |
 | `SLBH_SUBAGENT_EFFORT` | `high` | Default child-agent effort. |
 | `SLBH_ENDPOINT` | OpenRouter chat-completions endpoint | Compatible provider endpoint. |
+
+The model policy is persisted at `$SLBH_HOME/config.json`. `/models` refreshes
+catalogs for providers whose keys are present. The OpenRouter catalog is
+limited to models created within the last year. Model and effort settings from
+the environment take precedence over their persisted counterparts.
 
 Before a request, the harness estimates context usage and compacts history at
 70% of the active model's discovered context window. If model metadata is
 unavailable, it uses a 128,000-token fallback. Automatic compaction keeps the
-most recent 24 messages and a durable marker; `/compact` performs the same
-operation on demand.
+most recent 24 messages and writes a durable marker; `/compact` does the same
+on demand. Requests stream responses and include tool definitions, reasoning
+options where supported, usage, and a stable `prompt_cache_key`.
 
 ## TUI controls
 
-The message viewport occupies the upper portion of the terminal. The input
-bar stays at the bottom with a top rule, text-entry area, and bottom rule. It
-grows for wrapped or explicitly multiline input while the viewport contracts
-to keep the agent panel and footer visible.
-
-The footer shows the selected agent's model and effort, context used and
-available, cache-hit percentage, and nonzero job or agent counts. The agent
-panel is hidden until a child agent exists. Mouse-wheel scrolling is enabled,
-and streaming remains anchored to the bottom unless the user scrolls away.
+The message viewport, multiline input bar, agent panel, and footer resize with
+the terminal. Streaming stays anchored to the bottom unless the viewport has
+been scrolled. Status, usage, and lifecycle telemetry remains in the event
+stream and transcript but is hidden from the normal message viewport.
 
 | Key | Action |
 | --- | --- |
 | `Enter` | Send input or run a slash command. |
 | `Ctrl-J` | Insert a newline into the input. |
-| `Up` / `Down` | Recall input history; Down moves toward the agent list. |
+| `Up` / `Down` | Recall input history; Down can move toward the agent list. |
 | `Tab` | Complete an unambiguous slash command. |
 | `Esc` | Return from the agent list or a child view toward the root. |
 | `Enter` in agent list | View that agent without interrupting it. |
-| `PgUp` / `PgDn` | Scroll the message viewport by five lines. |
-| `Ctrl-U` / `Ctrl-D` | Scroll the message viewport up or down. |
+| `PgUp` / `PgDn` | Scroll the viewport by five lines. |
+| `Ctrl-U` / `Ctrl-D` | Scroll the viewport up or down. |
 | `Ctrl-C` / `Ctrl-Q` | Shut down and exit. |
 
-Sent user messages are stored as JSON-lines in the machine-global
-`$SLBH_HOME/history` file, normally `~/.slbh/history`, and are shared by
-launches from every working directory.
+Input history is stored as JSON lines in `$SLBH_HOME/history`, normally
+`~/.slbh/history`, and is shared by launches using the same home directory.
 
 ## Slash commands
 
@@ -139,30 +104,45 @@ launches from every working directory.
 | --- | --- |
 | `/exit`, `/quit`, `/q` | Stop agents and jobs, close transcripts, and exit. |
 | `/clear` | Clear the selected agent and start a new session. |
-| `/model NAME` | Change the root agent's model for later turns. |
-| `/effort LEVEL` | Change the root agent's effort for later turns. |
-| `/agents` | Record the current agent tree as a status event; status output is hidden. |
-| `/jobs` | Record current jobs as a status event; status output is hidden. |
+| `/models` | Refresh provider catalogs and open the model menu. |
+| `/model NAME` | Approve and select a model for the root agent. |
+| `/effort LEVEL` | Change the root agent's effort. |
+| `/agents` | Record the current agent tree as a status event. |
+| `/jobs` | Record current jobs as a status event. |
 | `/compact` | Compact the selected agent's history. |
 
-## Agent tools
+When a child agent is selected, submitted text is sent to that child as a
+steering message. It does not create a new root turn.
 
-The root and child agents share these tools:
+## Agents and tools
 
-- Files: `glob`, `grep`, `read_file`, `read_bytes`, `read_lines`,
-  `edit_file`, `apply_patch`, and `write_file`.
+The root agent can create children through depth two. Agents have independent
+histories, models, efforts, working directories, and steering queues. A turn
+may use up to 100 provider/tool rounds. Child launch requests return
+immediately; later results are delivered to the requesting agent.
+
+Subagents currently execute through this local runtime. `working_dir`,
+`harness`, and `ssh` values in a launch request are recorded as agent metadata;
+the current harness does not use them to execute a remote process.
+
+Available tools are:
+
+- Files: `glob`, `grep`, `read_file`, `read_bytes`, `read_lines`, `edit_file`,
+  `apply_patch`, and `write_file`.
 - Jobs: `quick_bash`, `long_job`, `list_jobs`, `read_job`, and `kill_job`.
 - Agents: `list_subagents`, `launch_subagent`, `msg_subagent`, and
   `end_subagent`.
 
-File operations are scoped to the active agent's working directory. Reads are
-bounded where noted by the tool schema; `quick_bash` has a five-second
-timeout, while `long_job` runs asynchronously and captures bounded output.
-Jobs and agent activity are recorded in the active session transcript.
+File operations are scoped to the active agent's working directory. Reads and
+job output are bounded. `quick_bash` is for short foreground commands with a
+five-second direct-command timeout; `long_job` is the asynchronous option for
+work that may take longer. Jobs and agent activity are recorded in the active
+session transcript.
 
-## Runtime data and cleanup
+## Runtime data
 
-Each launch gets a unique runtime directory:
+Each launch gets a unique runtime directory with per-agent, per-session
+transcripts:
 
 ```text
 $SLBH_HOME/
@@ -176,26 +156,18 @@ $SLBH_HOME/
                         └── transcript.jsonl
 ```
 
-Transcripts are append-only and retain messages, reasoning, tool calls and
-results, usage, status, lifecycle, and job records. `/clear` creates a new
-session for only the selected agent while preserving its agent ID.
-`runtime.json` is a live marker removed during normal shutdown.
+Transcripts are append-only JSONL and retain messages, reasoning, tool calls
+and results, usage, status, lifecycle, and job records. `/clear` creates a new
+session for the selected agent while preserving its agent ID. `runtime.json`
+is a live marker removed during normal shutdown.
 
 Shutdown cancels provider requests, stops agents, kills and drains jobs, and
 closes session transcripts. The same cleanup path handles slash-command exit,
 `Ctrl-C`, `Ctrl-Q`, and termination signals.
 
-An optional live provider test verifies transcript request replay and cache
-hits. It makes real provider requests, so run it only with a configured key:
-
-```sh
-SLBH_RUN_LIVE_TESTS=1 go test -tags live_integration ./internal/harness \
-  -run TestLiveTranscriptReplayAndCache -count=1 -timeout 10m
-```
-
 ## Development
 
-Run the local checks from the repository root:
+Run these checks from the repository root:
 
 ```sh
 gofmt -w cmd/slbh/main.go internal/config/*.go internal/harness/*.go internal/id/*.go internal/job/*.go internal/logx/*.go internal/provider/*.go internal/tui/*.go
@@ -210,6 +182,10 @@ On Linux or WSL2, also run:
 go test -race ./...
 ```
 
-The test suite covers provider request construction and caching, model routing,
-agent delivery and compaction, tool and path behavior, job lifecycle, cleanup,
-and TUI rendering and interaction.
+An optional live test makes real provider requests and requires a configured
+key:
+
+```sh
+SLBH_RUN_LIVE_TESTS=1 go test -tags live_integration ./internal/harness \
+  -run TestLiveTranscriptReplayAndCache -count=1 -timeout 10m
+```

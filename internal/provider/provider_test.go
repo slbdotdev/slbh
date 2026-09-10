@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStablePrefixKeyIgnoresUserTurns(t *testing.T) {
@@ -109,6 +111,38 @@ func TestContextWindowReadsAndCachesLiveMetadata(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("metadata calls = %d, want one cached lookup", calls)
+	}
+}
+
+func TestOpenRouterCatalogFiltersModelsOlderThanOneYear(t *testing.T) {
+	now := time.Now().Unix()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"data":[{"id":"new/model","created":%d},{"id":"old/model","created":%d},{"id":"unknown/model"}]}`, now, now-366*24*60*60)
+	}))
+	defer server.Close()
+
+	catalog, err := fetchCatalog(context.Background(), catalogSpec{name: "openrouter", endpoint: server.URL + "/v1/chat/completions", key: "test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Models) != 1 || catalog.Models[0].ID != "new/model" {
+		t.Fatalf("fresh OpenRouter models = %#v, want only new/model", catalog.Models)
+	}
+}
+
+func TestProviderCatalogPrefersNativeRoute(t *testing.T) {
+	catalogs := []Catalog{
+		{Name: "openrouter", Models: []ModelInfo{{ID: "deepseek/deepseek-chat"}}},
+		{Name: "deepseek", Models: []ModelInfo{{ID: "deepseek/deepseek-chat"}}},
+	}
+	markPreferred(catalogs)
+	if !catalogs[1].Models[0].Preferred || catalogs[0].Models[0].Preferred {
+		t.Fatalf("native route was not preferred: %#v", catalogs)
 	}
 }
 
