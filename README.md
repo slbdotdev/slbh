@@ -121,9 +121,8 @@ histories, models, efforts, working directories, and steering queues. A turn
 may use up to 100 provider/tool rounds. Child launch requests return
 immediately; later results are delivered to the requesting agent.
 
-Subagents currently execute through this local runtime. `working_dir`,
-`harness`, and `ssh` values in a launch request are recorded as agent metadata;
-the current harness does not use them to execute a remote process.
+Subagents execute through this local runtime. Each child has its own working
+directory, harness, model, effort, history, and steering queue.
 
 Available tools are:
 

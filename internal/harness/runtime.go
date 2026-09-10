@@ -38,7 +38,6 @@ type AgentSnapshot struct {
 	Status          string
 	Harness         string
 	WorkDir         string
-	SSH             string
 	ContextWindow   int
 	ContextUsed     int
 	CacheHitTokens  int
@@ -53,7 +52,6 @@ type LaunchSpec struct {
 	Brief            string
 	WarnAfterSeconds int
 	WorkingDir       string
-	SSH              string
 }
 
 type agentSession struct {
@@ -336,12 +334,12 @@ func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	if err != nil {
 		return nil, err
 	}
-	agent.Harness, agent.SSH = spec.Harness, spec.SSH
+	agent.Harness = spec.Harness
 	if agent.Harness == "" {
 		agent.Harness = "native"
 	}
 	agent.WorkDir = workingDir
-	r.emit(Event{AgentID: agent.ID, AgentTitle: spec.Title, Kind: "status", Text: "subagent launched", Metadata: map[string]any{"parent": parentID, "harness": agent.Harness, "ssh": agent.SSH, "working_dir": agent.WorkDir}})
+	r.emit(Event{AgentID: agent.ID, AgentTitle: spec.Title, Kind: "status", Text: "subagent launched", Metadata: map[string]any{"parent": parentID, "harness": agent.Harness, "working_dir": agent.WorkDir}})
 	if spec.Brief != "" {
 		agent.Send(spec.Brief)
 	}

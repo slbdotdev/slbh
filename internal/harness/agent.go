@@ -32,7 +32,6 @@ type Agent struct {
 	Effort   string
 	Harness  string
 	WorkDir  string
-	SSH      string
 
 	mu            sync.RWMutex
 	status        string
@@ -96,7 +95,6 @@ func (a *Agent) Snapshot() AgentSnapshot {
 		Status:          a.status,
 		Harness:         a.Harness,
 		WorkDir:         a.WorkDir,
-		SSH:             a.SSH,
 		ContextWindow:   a.contextWindow,
 		ContextUsed:     a.contextUsed,
 		CacheHitTokens:  a.cacheHits,
