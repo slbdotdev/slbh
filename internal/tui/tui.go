@@ -236,9 +236,6 @@ func (m *Model) resize() {
 }
 
 func (m Model) chatWidth() int {
-	if m.width > 100 {
-		return m.width - 34
-	}
 	return m.width
 }
 
@@ -301,17 +298,12 @@ func (m Model) View() string {
 		return dim.Render("shutting down…")
 	}
 	chat := m.viewport.View()
-	if m.width > 100 {
-		chat = lipgloss.NewStyle().Width(m.chatWidth()).Render(chat)
-	}
 	bar := m.input.View()
+	agents := m.agentPanel()
 	status := m.statusLine()
-	view := chat + "\n" + bar + "\n" + status
-	if m.width > 100 {
-		panel := m.agentPanel()
-		view = lipgloss.JoinHorizontal(lipgloss.Top, view, panel)
-	}
-	return view
+	// Keep the agent list in the bottom control area. Besides matching the
+	// layout contract, this makes Down from the input naturally enter it.
+	return chat + "\n" + bar + "\n" + agents + "\n" + status
 }
 
 func (m Model) chatHeight() int {
@@ -319,10 +311,9 @@ func (m Model) chatHeight() int {
 }
 
 func (m Model) footerHeight() int {
-	// The newlines joining chat, input, and status separate blocks; they do
-	// not consume an additional terminal row beyond the first row of the next
-	// block.
-	return lipgloss.Height(m.input.View()) + lipgloss.Height(m.statusLine())
+	// The newlines joining blocks do not consume an additional terminal row
+	// beyond the first row of the next block.
+	return lipgloss.Height(m.input.View()) + lipgloss.Height(m.agentPanel()) + lipgloss.Height(m.statusLine())
 }
 
 func wrapToWidth(text string, width int) string {
@@ -352,7 +343,11 @@ func (m Model) agentPanel() string {
 		prefix := strings.Repeat("  ", a.Depth)
 		lines = append(lines, marker+prefix+a.Title+" ["+a.Status+"]")
 	}
-	return lipgloss.NewStyle().Width(31).PaddingLeft(1).BorderLeft(true).BorderStyle(lipgloss.NormalBorder()).Render(strings.Join(lines, "\n"))
+	wrapped := make([]string, 0, len(lines))
+	for _, line := range lines {
+		wrapped = append(wrapped, wrapToWidth(line, max(1, m.chatWidth())))
+	}
+	return strings.Join(wrapped, "\n")
 }
 
 func rootID(runtime *harness.Runtime) string {

@@ -34,4 +34,7 @@ func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 	if strings.Contains(view, "long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error") {
 		t.Fatal("long content was not wrapped")
 	}
+	if got := lipgloss.Width(m.agentPanel()); got != 80 {
+		t.Fatalf("agent list width=%d, want full terminal width", got)
+	}
 }
