@@ -16,8 +16,10 @@ import (
 )
 
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
+	Role string `json:"role"`
+	// Content must remain present even for assistant messages that contain
+	// only tool_calls. DeepSeek rejects those messages when content is omitted.
+	Content    string     `json:"content"`
 	Name       string     `json:"name,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`

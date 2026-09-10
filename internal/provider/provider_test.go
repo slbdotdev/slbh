@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -30,6 +31,16 @@ func TestNormalizeDeepSeekModel(t *testing.T) {
 	}
 	if got := (&HTTPProvider{Flavor: "openrouter"}).modelID("deepseek-v4-flash"); got != "deepseek/deepseek-v4-flash" {
 		t.Fatalf("OpenRouter model id got %q", got)
+	}
+}
+
+func TestToolCallMessageIncludesEmptyContent(t *testing.T) {
+	data, err := json.Marshal(Message{Role: "assistant", ToolCalls: []ToolCall{{ID: "call-1", Type: "function"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"content":""`) {
+		t.Fatalf("tool-call message omitted content: %s", data)
 	}
 }
 

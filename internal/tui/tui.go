@@ -249,7 +249,7 @@ func (m *Model) refreshView() {
 			if event.AgentID != m.viewAgentID {
 				continue
 			}
-			if len(visible) > 0 && visible[len(visible)-1].AgentID == event.AgentID && visible[len(visible)-1].Kind == event.Kind && (event.Kind == "assistant" || event.Kind == "thinking") {
+			if len(visible) > 0 && visible[len(visible)-1].AgentID == event.AgentID && visible[len(visible)-1].Kind == event.Kind && (event.Kind == "assistant" || event.Kind == "thinking" || (event.Kind == "tool" && toolIndex(visible[len(visible)-1]) == toolIndex(event))) {
 				visible[len(visible)-1].Text += event.Text
 				continue
 			}
@@ -279,7 +279,11 @@ func renderEvent(event harness.Event) string {
 	case "thinking":
 		return dim.Render("thinking · ") + event.Text
 	case "tool":
-		return yellow.Render("tool · ") + event.Text
+		name, _ := event.Metadata["name"].(string)
+		if name == "" {
+			name = "call"
+		}
+		return yellow.Render("tool "+name+" · ") + event.Text
 	case "error":
 		return red.Render("error · ") + event.Text
 	case "steer":
@@ -291,6 +295,13 @@ func renderEvent(event harness.Event) string {
 	default:
 		return event.Text
 	}
+}
+
+func toolIndex(event harness.Event) string {
+	if event.Metadata == nil {
+		return ""
+	}
+	return fmt.Sprint(event.Metadata["index"])
 }
 
 func (m Model) View() string {
