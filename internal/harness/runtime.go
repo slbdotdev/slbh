@@ -91,7 +91,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	if cfg.Home == "" {
 		cfg = config.Load()
 	}
-	runtimeID := id.New("run")
+	runtimeID := id.NewShort("run")
 	dir := filepath.Join(cfg.Home, "runtimes", runtimeID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -230,7 +230,7 @@ func (r *Runtime) Seat() *Agent {
 }
 
 func (r *Runtime) newAgent(title, parentID string, depth int, model, effort string) (*Agent, error) {
-	agent := newAgent(r, id.New("agent"), title, parentID, depth, model, effort)
+	agent := newAgent(r, id.NewShort("agent"), title, parentID, depth, model, effort)
 	session, err := r.openAgentSession(agent.ID)
 	if err != nil {
 		return nil, err

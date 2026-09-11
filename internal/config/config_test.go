@@ -1,7 +1,9 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -37,5 +39,36 @@ func TestEmptyApprovedListFailsClosed(t *testing.T) {
 	}
 	if !(Config{}).ModelApproved("legacy/model") {
 		t.Fatal("nil approval list should preserve programmatic compatibility")
+	}
+}
+
+func TestLoadMigratesLegacyRootModelConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SLBH_HOME", home)
+	for _, name := range []string{"SLBH_MODEL", "SLBH_EFFORT", "SLBH_SUBAGENT_MODEL", "SLBH_LEAF_MODEL", "SLBH_SUBAGENT_EFFORT"} {
+		t.Setenv(name, "")
+	}
+	legacy := map[string]string{
+		"root_model":     "deepseek/deepseek-chat",
+		"root_effort":    "high",
+		"subagent_model": "zai/glm-5.3-flash",
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "config.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Load()
+	if got.SeatModel != legacy["root_model"] || got.SeatEffort != legacy["root_effort"] {
+		t.Fatalf("legacy seat settings were not migrated: %#v", got)
+	}
+	if got.SubagentModel != legacy["subagent_model"] {
+		t.Fatalf("subagent model = %q, want %q", got.SubagentModel, legacy["subagent_model"])
+	}
+	if got.ApprovedModels != nil || !got.ModelApproved(got.SeatModel) {
+		t.Fatalf("legacy approval policy = %#v, want permissive nil policy", got.ApprovedModels)
 	}
 }

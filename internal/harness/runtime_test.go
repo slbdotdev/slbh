@@ -115,6 +115,12 @@ func testRuntime(t *testing.T) *Runtime {
 
 func TestRuntimeStreamsAndLogs(t *testing.T) {
 	r := testRuntime(t)
+	if got := len(strings.TrimPrefix(r.ID(), "run-")); got != 8 {
+		t.Fatalf("runtime ID suffix length = %d, want 8", got)
+	}
+	if got := len(strings.TrimPrefix(r.Seat().ID, "agent-")); got != 8 {
+		t.Fatalf("agent ID suffix length = %d, want 8", got)
+	}
 	r.Seat().Send("hello")
 	deadline := time.After(5 * time.Second)
 	var sawDone bool

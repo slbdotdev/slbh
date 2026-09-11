@@ -44,11 +44,23 @@ func Load() Config {
 		ApprovedModels: []string{},
 	}
 	if persisted, ok := loadFile(home); ok {
-		if os.Getenv("SLBH_MODEL") == "" && persisted.SeatModel != "" {
-			cfg.SeatModel = persisted.SeatModel
+		if os.Getenv("SLBH_MODEL") == "" {
+			seatModel := persisted.SeatModel
+			if seatModel == "" {
+				seatModel = persisted.RootModel
+			}
+			if seatModel != "" {
+				cfg.SeatModel = seatModel
+			}
 		}
-		if os.Getenv("SLBH_EFFORT") == "" && persisted.SeatEffort != "" {
-			cfg.SeatEffort = persisted.SeatEffort
+		if os.Getenv("SLBH_EFFORT") == "" {
+			seatEffort := persisted.SeatEffort
+			if seatEffort == "" {
+				seatEffort = persisted.RootEffort
+			}
+			if seatEffort != "" {
+				cfg.SeatEffort = seatEffort
+			}
 		}
 		if os.Getenv("SLBH_SUBAGENT_MODEL") == "" && persisted.SubagentModel != "" {
 			cfg.SubagentModel = persisted.SubagentModel
@@ -61,6 +73,10 @@ func Load() Config {
 		}
 		if persisted.ApprovedModels != nil {
 			cfg.ApprovedModels = unique(persisted.ApprovedModels)
+		} else {
+			// Config files written before model approval was introduced did not
+			// have an approved_models field. Preserve their permissive behavior.
+			cfg.ApprovedModels = nil
 		}
 	}
 	if cfg.LeafModel == "" {
@@ -72,6 +88,8 @@ func Load() Config {
 type fileConfig struct {
 	SeatModel      string   `json:"seat_model,omitempty"`
 	SeatEffort     string   `json:"seat_effort,omitempty"`
+	RootModel      string   `json:"root_model,omitempty"`
+	RootEffort     string   `json:"root_effort,omitempty"`
 	SubagentModel  string   `json:"subagent_model,omitempty"`
 	LeafModel      string   `json:"leaf_model,omitempty"`
 	SubagentEffort string   `json:"subagent_effort,omitempty"`
