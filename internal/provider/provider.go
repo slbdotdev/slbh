@@ -126,6 +126,21 @@ type ContextWindowProvider interface {
 
 const FallbackContextWindow = 128000
 
+const (
+	LocalProviderName  = "local"
+	LocalModelID       = "local/q27-IQ2_M-96k"
+	localWireModelID   = "q27-IQ2_M-96k"
+	LocalContextWindow = 98304
+	localDefaultURL    = "http://fractal.wyvern-temperature.ts.net:11434/v1/chat/completions"
+)
+
+func localEndpoint() string {
+	if endpoint := strings.TrimSpace(os.Getenv("SLBH_LOCAL_ENDPOINT")); endpoint != "" {
+		return endpoint
+	}
+	return localDefaultURL
+}
+
 type HTTPProvider struct {
 	Endpoint       string
 	APIKey         string
@@ -143,6 +158,11 @@ func NewHTTP(endpoint, key string) *HTTPProvider {
 // OpenRouter, keeping all providers on the same OpenAI-compatible wire shape.
 func ForModel(model, endpointOverride string) (*HTTPProvider, error) {
 	model = NormalizeModel(model)
+	if strings.HasPrefix(model, LocalProviderName+"/") || strings.EqualFold(model, localWireModelID) {
+		provider := NewHTTP(localEndpoint(), "")
+		provider.Flavor = LocalProviderName
+		return provider, nil
+	}
 	endpoint := endpointOverride
 	key := os.Getenv("OPENROUTER_API_KEY")
 	flavor := "openrouter"
@@ -177,6 +197,8 @@ func NormalizeModel(model string) string {
 func (p *HTTPProvider) modelID(model string) string {
 	model = NormalizeModel(model)
 	switch p.Flavor {
+	case LocalProviderName:
+		return strings.TrimPrefix(model, LocalProviderName+"/")
 	case "deepseek":
 		return strings.TrimPrefix(model, "deepseek/")
 	case "zai":
@@ -194,6 +216,9 @@ func (p *HTTPProvider) modelID(model string) string {
 // so a runtime does not repeatedly fetch metadata for the same model.
 func (p *HTTPProvider) ContextWindow(ctx context.Context, model string) (int, error) {
 	wanted := p.modelID(model)
+	if p.Flavor == LocalProviderName && strings.EqualFold(wanted, localWireModelID) {
+		return LocalContextWindow, nil
+	}
 	p.metadataMu.Lock()
 	if p.contextWindows == nil {
 		p.contextWindows = make(map[string]int)
@@ -396,7 +421,7 @@ func PayloadSHA256(payload []byte) string {
 }
 
 func (p *HTTPProvider) Stream(ctx context.Context, req Request, sink StreamSink) error {
-	if p.APIKey == "" {
+	if p.Flavor != LocalProviderName && p.APIKey == "" {
 		return fmt.Errorf("provider API key is not configured (set OPENROUTER_API_KEY, DEEPSEEK_API_KEY, or ZAI_API_KEY)")
 	}
 	// OpenRouter accepts prompt_cache_key; native providers safely ignore the
@@ -410,7 +435,9 @@ func (p *HTTPProvider) Stream(ctx context.Context, req Request, sink StreamSink)
 	if err != nil {
 		return err
 	}
-	request.Header.Set("Authorization", "Bearer "+p.APIKey)
+	if p.APIKey != "" {
+		request.Header.Set("Authorization", "Bearer "+p.APIKey)
+	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
 	resp, err := p.Client.Do(request)

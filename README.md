@@ -30,8 +30,9 @@ go build -o slbh ./cmd/slbh
 ./slbh
 ```
 
-The defaults are a `deepseek-v4-flash` seat agent at `xhigh` effort and
-`zai/glm-5.3-flash` child agents at `high` effort. A new configuration has no
+The defaults are a `deepseek-v4-flash` seat agent at `xhigh` effort,
+`zai/glm-5.3-flash` child agents at `high` effort, and the local 5080
+workhorse `local/q27-IQ2_M-96k` for leaf agents. A new configuration has no
 approved models, so the default native seat model stays disabled until models
 are selected.
 
@@ -45,6 +46,9 @@ to be approved or supplied explicitly when a child is launched.
 
 Provider routing is automatic:
 
+- `local/` model names route to the desktop RTX 5080's Ollama server without
+  an API key. The default local model is `local/q27-IQ2_M-96k`, the campaign's
+  best long-context quant, served as `q27-IQ2_M-96k` on Ollama.
 - `DEEPSEEK_API_KEY` routes `deepseek/` and `deepseek-` model names to
   DeepSeek.
 - `ZAI_API_KEY` routes `zai/` and `glm-` model names to Z.ai.
@@ -64,14 +68,16 @@ These environment variables are read at startup:
 | `SLBH_MODEL` | `deepseek-v4-flash` | Seat agent model. |
 | `SLBH_EFFORT` | `xhigh` | Seat reasoning effort. |
 | `SLBH_SUBAGENT_MODEL` | `zai/glm-5.3-flash` | Default child-agent model. |
-| `SLBH_LEAF_MODEL` | Same as `SLBH_SUBAGENT_MODEL` | Default depth-two child model. |
+| `SLBH_LEAF_MODEL` | `local/q27-IQ2_M-96k` | Default depth-two child model. |
 | `SLBH_SUBAGENT_EFFORT` | `high` | Default child-agent effort. |
 | `SLBH_ENDPOINT` | OpenRouter chat-completions endpoint | Compatible provider endpoint. |
+| `SLBH_LOCAL_ENDPOINT` | `http://fractal.wyvern-temperature.ts.net:11434/v1/chat/completions` | Desktop Ollama chat-completions endpoint. |
 
-The model policy is persisted at `$SLBH_HOME/config.json`. `/models` refreshes
-catalogs for providers whose keys are present. The OpenRouter catalog is
-limited to models created within the last year. Model and effort settings from
-the environment take precedence over their persisted counterparts.
+The model policy is persisted at `$SLBH_HOME/config.json`. `/models` always
+shows the configured local Ollama model and refreshes catalogs for providers
+whose keys are present. The OpenRouter catalog is limited to models created
+within the last year. Model and effort settings from the environment take
+precedence over their persisted counterparts.
 
 For native provider agents, the harness estimates context usage before a
 request and compacts history at 70% of the active model's discovered context

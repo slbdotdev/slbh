@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -89,6 +90,59 @@ func TestNormalizeDeepSeekModel(t *testing.T) {
 	}
 }
 
+func TestForModelRoutesLocalOllamaWithoutKey(t *testing.T) {
+	t.Setenv("SLBH_LOCAL_ENDPOINT", "http://127.0.0.1:11434/v1/chat/completions")
+	p, err := ForModel(LocalModelID, "https://example.invalid/v1/chat/completions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Flavor != LocalProviderName || p.Endpoint != "http://127.0.0.1:11434/v1/chat/completions" || p.APIKey != "" {
+		t.Fatalf("local provider = %#v", p)
+	}
+	if got := p.modelID(LocalModelID); got != localWireModelID {
+		t.Fatalf("wire model = %q, want %q", got, localWireModelID)
+	}
+	if got, err := p.ContextWindow(context.Background(), LocalModelID); err != nil || got != LocalContextWindow {
+		t.Fatalf("local context window = %d, err = %v", got, err)
+	}
+}
+
+func TestLocalProviderStreamsWithoutAuthorization(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("local provider sent authorization header %q", got)
+		}
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Model != localWireModelID {
+			t.Fatalf("wire model = %q, want %q", body.Model, localWireModelID)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	p := NewHTTP(server.URL+"/v1/chat/completions", "")
+	p.Flavor = LocalProviderName
+	var got string
+	err := p.Stream(context.Background(), Request{Model: LocalModelID}, func(event Event) error {
+		if event.Kind == EventText {
+			got += event.Text
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "ok" {
+		t.Fatalf("streamed text = %q, want ok", got)
+	}
+}
+
 func TestContextWindowReadsAndCachesLiveMetadata(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +192,23 @@ func TestOpenRouterCatalogFiltersModelsOlderThanOneYear(t *testing.T) {
 	}
 }
 
+func TestDiscoverCatalogIncludesLocalWorkhorseWithoutKey(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	t.Setenv("ZAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("SLBH_LOCAL_ENDPOINT", "http://127.0.0.1:11434/v1/chat/completions")
+	catalogs, err := DiscoverCatalog(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalogs) != 1 || catalogs[0].Name != LocalProviderName || catalogs[0].Endpoint != "http://127.0.0.1:11434/v1/chat/completions" {
+		t.Fatalf("catalogs = %#v", catalogs)
+	}
+	if len(catalogs[0].Models) != 1 || catalogs[0].Models[0].ID != LocalModelID || catalogs[0].Models[0].ContextWindow != LocalContextWindow {
+		t.Fatalf("local catalog = %#v", catalogs[0])
+	}
+}
+
 func TestProviderCatalogPrefersNativeRoute(t *testing.T) {
 	catalogs := []Catalog{
 		{Name: "openrouter", Models: []ModelInfo{{ID: "deepseek/deepseek-chat"}}},
@@ -156,6 +227,16 @@ func TestToolCallMessageIncludesEmptyContent(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"content":""`) {
 		t.Fatalf("tool-call message omitted content: %s", data)
+	}
+}
+
+func TestToolCallMessageRetainsReasoningContent(t *testing.T) {
+	data, err := json.Marshal(Message{Role: "assistant", ReasoningContent: "plan", ToolCalls: []ToolCall{{ID: "call-1", Type: "function"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"reasoning_content":"plan"`) {
+		t.Fatalf("tool-call message omitted reasoning content: %s", data)
 	}
 }
 

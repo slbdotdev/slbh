@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/slbdotdev/slbh/internal/provider"
 )
 
 func TestSaveAndLoadModelPolicy(t *testing.T) {
@@ -70,5 +72,17 @@ func TestLoadMigratesLegacyRootModelConfig(t *testing.T) {
 	}
 	if got.ApprovedModels != nil || !got.ModelApproved(got.SeatModel) {
 		t.Fatalf("legacy approval policy = %#v, want permissive nil policy", got.ApprovedModels)
+	}
+}
+
+func TestDefaultLeafModelIsLocalWorkhorse(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SLBH_HOME", home)
+	for _, name := range []string{"SLBH_MODEL", "SLBH_EFFORT", "SLBH_SUBAGENT_MODEL", "SLBH_LEAF_MODEL", "SLBH_SUBAGENT_EFFORT"} {
+		t.Setenv(name, "")
+	}
+	got := Load()
+	if got.LeafModel != provider.LocalModelID {
+		t.Fatalf("leaf model = %q, want %q", got.LeafModel, provider.LocalModelID)
 	}
 }

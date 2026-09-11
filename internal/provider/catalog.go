@@ -45,13 +45,21 @@ func DiscoverCatalog(ctx context.Context, endpointOverride string) ([]Catalog, e
 	if openRouterEndpoint == "" {
 		openRouterEndpoint = "https://openrouter.ai/api/v1/chat/completions"
 	}
+	catalogs := []Catalog{{
+		Name:     LocalProviderName,
+		Endpoint: localEndpoint(),
+		Models: []ModelInfo{{
+			ID:            LocalModelID,
+			ContextWindow: LocalContextWindow,
+			Preferred:     true,
+		}},
+	}}
 	specs := []catalogSpec{
 		{name: "deepseek", endpoint: "https://api.deepseek.com/chat/completions", key: os.Getenv("DEEPSEEK_API_KEY")},
 		{name: "zai", endpoint: "https://api.z.ai/api/coding/paas/v4/chat/completions", key: os.Getenv("ZAI_API_KEY")},
 		{name: "openrouter", endpoint: openRouterEndpoint, key: os.Getenv("OPENROUTER_API_KEY")},
 	}
 
-	catalogs := make([]Catalog, 0, len(specs))
 	var firstErr error
 	for _, spec := range specs {
 		if strings.TrimSpace(spec.key) == "" {
