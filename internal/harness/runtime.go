@@ -63,14 +63,14 @@ type agentSession struct {
 type Runtime struct {
 	mu           sync.RWMutex
 	id           string
-	rootPath     string
+	runtimeDir   string
 	workDir      string
 	config       config.Config
 	ctx          context.Context
 	cancel       context.CancelFunc
 	jobs         *job.Manager
 	agents       map[string]*Agent
-	rootID       string
+	seatID       string
 	current      map[string]*agentSession
 	sessions     []*agentSession
 	events       chan Event
@@ -98,7 +98,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	r := &Runtime{id: runtimeID, rootPath: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), events: options.Events, provider: options.Provider, codexCommand: options.CodexCommand}
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), events: options.Events, provider: options.Provider, codexCommand: options.CodexCommand}
 	if r.events == nil {
 		r.events = make(chan Event, 1024)
 	}
@@ -115,27 +115,27 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 		cancel()
 		return nil, err
 	}
-	rootModel := cfg.RootModel
-	if !cfg.ModelApproved(rootModel) {
-		rootModel = ""
+	seatModel := cfg.SeatModel
+	if !cfg.ModelApproved(seatModel) {
+		seatModel = ""
 	}
-	root, err := r.newAgent("root", "", 0, rootModel, cfg.RootEffort)
+	seat, err := r.newAgent("seat", "", 0, seatModel, cfg.SeatEffort)
 	if err != nil {
 		cancel()
-		_ = os.Remove(filepath.Join(r.rootPath, "runtime.json"))
+		_ = os.Remove(filepath.Join(r.runtimeDir, "runtime.json"))
 		r.closeSessions()
 		return nil, err
 	}
 	r.mu.Lock()
-	r.rootID = root.ID
+	r.seatID = seat.ID
 	r.mu.Unlock()
-	root.start()
-	r.emit(Event{AgentID: root.ID, AgentTitle: root.Title, Kind: "runtime", Text: "runtime started"})
+	seat.start()
+	r.emit(Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "runtime", Text: "runtime started"})
 	return r, nil
 }
 
 func (r *Runtime) ID() string           { return r.id }
-func (r *Runtime) Dir() string          { return r.rootPath }
+func (r *Runtime) Dir() string          { return r.runtimeDir }
 func (r *Runtime) Home() string         { return r.config.Home }
 func (r *Runtime) Events() <-chan Event { return r.events }
 func (r *Runtime) Jobs() *job.Manager   { return r.jobs }
@@ -164,32 +164,32 @@ func (r *Runtime) ModelCatalog() []provider.Catalog {
 
 // ConfigureModels preserves the older two-slot API while keeping the leaf
 // default aligned with the level-one subagent model.
-func (r *Runtime) ConfigureModels(rootModel, subagentModel string, approved []string) error {
+func (r *Runtime) ConfigureModels(seatModel, subagentModel string, approved []string) error {
 	cfg := r.Config()
-	return r.ConfigureModelSlots(rootModel, subagentModel, cfg.LeafModel, approved)
+	return r.ConfigureModelSlots(seatModel, subagentModel, cfg.LeafModel, approved)
 }
 
-// ConfigureModelSlots persists the user's model choices and updates the root
+// ConfigureModelSlots persists the user's model choices and updates the seat
 // agent immediately. An unapproved configured default is retained in the
 // dotfile but resolves to no model until it is approved again.
-func (r *Runtime) ConfigureModelSlots(rootModel, subagentModel, leafModel string, approved []string) error {
+func (r *Runtime) ConfigureModelSlots(seatModel, subagentModel, leafModel string, approved []string) error {
 	r.mu.Lock()
-	r.config.RootModel = rootModel
+	r.config.SeatModel = seatModel
 	r.config.SubagentModel = subagentModel
 	r.config.LeafModel = leafModel
 	r.config.ApprovedModels = append([]string(nil), approved...)
 	cfg := r.config
-	rootID := r.rootID
+	seatID := r.seatID
 	r.mu.Unlock()
 	if err := cfg.Save(); err != nil {
 		return err
 	}
-	if root, ok := r.Agent(rootID); ok {
-		model := rootModel
+	if seat, ok := r.Agent(seatID); ok {
+		model := seatModel
 		if !cfg.ModelApproved(model) {
 			model = ""
 		}
-		root.SetModel(model)
+		seat.SetModel(model)
 	}
 	return nil
 }
@@ -215,10 +215,10 @@ func (r *Runtime) ModelGuidance() string {
 	if len(branches) == 0 {
 		branches = append(branches, "no provider catalog loaded; use the configured default or honor an explicit user model request")
 	}
-	defaults := fmt.Sprintf("defaults are root=%q, subagent=%q, leaf=%q", cfg.RootModel, cfg.SubagentModel, cfg.LeafModel)
-	return "Model guidance: approved models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". Use the configured subagent default for level-one children and the leaf default for level-two children when no model is requested. A model explicitly requested by the user may override the approved list; do not invent model IDs. Codex leaves use the headless Codex app-server and ChatGPT model slugs, independent of the native approval list. To launch one from a native root or level-one agent, set harness to \"codex\" and pass the exact ChatGPT model slug in model; never substitute a native default for a Codex leaf."
+	defaults := fmt.Sprintf("defaults are seat=%q, subagent=%q, leaf=%q", cfg.SeatModel, cfg.SubagentModel, cfg.LeafModel)
+	return "Model guidance: approved models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". Use the configured subagent default for level-one children and the leaf default for level-two children when no model is requested. A model explicitly requested by the user may override the approved list; do not invent model IDs. Codex leaves use the headless Codex app-server and ChatGPT model slugs, independent of the native approval list. To launch one from a native seat or level-one agent, set harness to \"codex\" and pass the exact ChatGPT model slug in model; never substitute a native default for a Codex leaf."
 }
-func (r *Runtime) Root() *Agent {
+func (r *Runtime) Seat() *Agent {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, agent := range r.agents {
@@ -245,7 +245,7 @@ func (r *Runtime) newAgent(title, parentID string, depth int, model, effort stri
 
 func (r *Runtime) openAgentSession(agentID string) (*agentSession, error) {
 	sessionID := id.New("session")
-	path := filepath.Join(r.rootPath, "agents", agentID, "sessions", sessionID, "transcript.jsonl")
+	path := filepath.Join(r.runtimeDir, "agents", agentID, "sessions", sessionID, "transcript.jsonl")
 	log, err := logx.OpenSession(path, r.id, sessionID)
 	if err != nil {
 		return nil, err
@@ -256,7 +256,7 @@ func (r *Runtime) openAgentSession(agentID string) (*agentSession, error) {
 func (r *Runtime) sessionLogger(agentID string) *logx.JSONL {
 	r.mu.RLock()
 	if agentID == "" {
-		agentID = r.rootID
+		agentID = r.seatID
 	}
 	session := r.current[agentID]
 	r.mu.RUnlock()
@@ -442,7 +442,7 @@ func (r *Runtime) emit(event Event) {
 	r.mu.RLock()
 	agentID := event.AgentID
 	if agentID == "" {
-		agentID = r.rootID
+		agentID = r.seatID
 	}
 	session := r.current[agentID]
 	r.mu.RUnlock()
@@ -496,7 +496,7 @@ func (r *Runtime) Close() error {
 			a.stop()
 		}
 		r.jobs.Close()
-		if removeErr := os.Remove(filepath.Join(r.rootPath, "runtime.json")); removeErr != nil && !os.IsNotExist(removeErr) {
+		if removeErr := os.Remove(filepath.Join(r.runtimeDir, "runtime.json")); removeErr != nil && !os.IsNotExist(removeErr) {
 			err = removeErr
 		}
 		r.mu.RLock()
@@ -525,5 +525,5 @@ func (r *Runtime) writeMarker() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(r.rootPath, "runtime.json"), append(data, '\n'), 0o600)
+	return os.WriteFile(filepath.Join(r.runtimeDir, "runtime.json"), append(data, '\n'), 0o600)
 }

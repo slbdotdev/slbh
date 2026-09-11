@@ -40,8 +40,8 @@ func ToolDefinitions() []provider.Tool {
 		{Name: "read_job", Description: "Read current stdout and stderr for a job.", Parameters: stringArg("job_id")},
 		{Name: "kill_job", Description: "Kill a job owned by the calling agent.", Parameters: stringArg("job_id")},
 		{Name: "list_subagents", Description: "List this runtime's agent tree.", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
-		{Name: "launch_subagent", Description: "Launch a child agent up to depth two; returns immediately. Omit model for a native child to use its configured default. For a Codex leaf, set harness to codex and pass the exact ChatGPT model slug in model; Codex does not use the native approval list. Honor an explicit user model request. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.", Parameters: map[string]any{"type": "object", "properties": map[string]any{
-			"title":              map[string]any{"type": "string"},
+		{Name: "launch_subagent", Description: "Launch a child agent up to depth two; returns immediately. The parent chooses a relevant title made of three words joined by hyphens (for example inspect-api-cache); this is guidance only and is not enforced. Omit model for a native child to use its configured default. For a Codex leaf, set harness to codex and pass the exact ChatGPT model slug in model; Codex does not use the native approval list. Honor an explicit user model request. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.", Parameters: map[string]any{"type": "object", "properties": map[string]any{
+			"title":              map[string]any{"type": "string", "description": "A relevant three-word dashed title chosen by the parent, such as inspect-api-cache. Guidance only; not enforced."},
 			"harness":            map[string]any{"type": "string", "enum": []string{"native", "codex"}, "description": "Harness for the child. Omit for native; use codex for a headless Codex ChatGPT leaf."},
 			"model":              map[string]any{"type": "string", "description": "Model ID. For harness codex, pass the exact ChatGPT model slug (for example gpt-5.6-luna); it may be any model available to the Codex account."},
 			"effort":             map[string]any{"type": "string"},
@@ -144,7 +144,7 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 		if strings.TrimSpace(message) == "" {
 			return "", fmt.Errorf("message is empty")
 		}
-		if err := child.Steer(fmt.Sprintf("[from %s (%s)] %s", sender.Title, sender.ID, message)); err != nil {
+		if err := child.steerFrom(sender, message); err != nil {
 			return "", err
 		}
 		return "accepted for delivery at the next API/tool call boundary; idle recipients wake immediately", nil
@@ -237,12 +237,12 @@ func (r *Runtime) grep(base, pattern, path string) (string, error) {
 		return "", err
 	}
 	absolute := filepath.IsAbs(path)
-	root, err := r.resolvePath(base, path)
+	walkPath, err := r.resolvePath(base, path)
 	if err != nil {
 		return "", err
 	}
 	var out strings.Builder
-	err = filepath.Walk(root, func(file string, info os.FileInfo, walkErr error) error {
+	err = filepath.Walk(walkPath, func(file string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}

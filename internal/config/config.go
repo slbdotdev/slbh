@@ -10,8 +10,8 @@ import (
 
 type Config struct {
 	Home           string
-	RootModel      string
-	RootEffort     string
+	SeatModel      string
+	SeatEffort     string
 	SubagentModel  string
 	LeafModel      string
 	SubagentEffort string
@@ -34,8 +34,8 @@ func Load() Config {
 	}
 	cfg := Config{
 		Home:           home,
-		RootModel:      getenv("SLBH_MODEL", "deepseek-v4-flash"),
-		RootEffort:     getenv("SLBH_EFFORT", "xhigh"),
+		SeatModel:      getenv("SLBH_MODEL", "deepseek-v4-flash"),
+		SeatEffort:     getenv("SLBH_EFFORT", "xhigh"),
 		SubagentModel:  getenv("SLBH_SUBAGENT_MODEL", "zai/glm-5.3-flash"),
 		LeafModel:      getenv("SLBH_LEAF_MODEL", ""),
 		SubagentEffort: getenv("SLBH_SUBAGENT_EFFORT", "high"),
@@ -44,11 +44,11 @@ func Load() Config {
 		ApprovedModels: []string{},
 	}
 	if persisted, ok := loadFile(home); ok {
-		if os.Getenv("SLBH_MODEL") == "" && persisted.RootModel != "" {
-			cfg.RootModel = persisted.RootModel
+		if os.Getenv("SLBH_MODEL") == "" && persisted.SeatModel != "" {
+			cfg.SeatModel = persisted.SeatModel
 		}
-		if os.Getenv("SLBH_EFFORT") == "" && persisted.RootEffort != "" {
-			cfg.RootEffort = persisted.RootEffort
+		if os.Getenv("SLBH_EFFORT") == "" && persisted.SeatEffort != "" {
+			cfg.SeatEffort = persisted.SeatEffort
 		}
 		if os.Getenv("SLBH_SUBAGENT_MODEL") == "" && persisted.SubagentModel != "" {
 			cfg.SubagentModel = persisted.SubagentModel
@@ -70,8 +70,8 @@ func Load() Config {
 }
 
 type fileConfig struct {
-	RootModel      string   `json:"root_model,omitempty"`
-	RootEffort     string   `json:"root_effort,omitempty"`
+	SeatModel      string   `json:"seat_model,omitempty"`
+	SeatEffort     string   `json:"seat_effort,omitempty"`
 	SubagentModel  string   `json:"subagent_model,omitempty"`
 	LeafModel      string   `json:"leaf_model,omitempty"`
 	SubagentEffort string   `json:"subagent_effort,omitempty"`
@@ -86,7 +86,7 @@ func (c Config) Save() error {
 		return err
 	}
 	payload, err := json.MarshalIndent(fileConfig{
-		RootModel: c.RootModel, RootEffort: c.RootEffort,
+		SeatModel: c.SeatModel, SeatEffort: c.SeatEffort,
 		SubagentModel: c.SubagentModel, LeafModel: c.LeafModel, SubagentEffort: c.SubagentEffort,
 		ApprovedModels: unique(c.ApprovedModels),
 	}, "", "  ")

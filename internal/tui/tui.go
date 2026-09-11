@@ -24,6 +24,7 @@ var (
 	red             = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	assistantBubble = lipgloss.Color("24")
 	userBubble      = lipgloss.Color("22")
+	subagentBubble  = lipgloss.Color("132")
 	nonChatBubble   = lipgloss.Color("236")
 )
 
@@ -87,7 +88,7 @@ type Model struct {
 	modelSubmenu   bool
 	modelSubnode   modelTreeNode
 	modelSubcursor int
-	modelRoot      string
+	modelSeat      string
 	modelSubagent  string
 	modelLeaf      string
 	modelNoticeErr bool
@@ -96,7 +97,7 @@ type Model struct {
 
 func New(runtime *harness.Runtime) Model {
 	input := textarea.New()
-	input.Placeholder = "Message the root agent… (Enter sends; Ctrl-J adds a line)"
+	input.Placeholder = "Message the seat agent… (Enter sends; Ctrl-J adds a line)"
 	input.Prompt = ""
 	input.ShowLineNumbers = false
 	input.CharLimit = 0
@@ -104,10 +105,10 @@ func New(runtime *harness.Runtime) Model {
 	input.MinHeight = 1
 	input.Focus()
 	view := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
-	root := runtime.Root()
+	seat := runtime.Seat()
 	viewID := ""
-	if root != nil {
-		viewID = root.ID
+	if seat != nil {
+		viewID = seat.ID
 	}
 	historyPath := ""
 	var history []string
@@ -156,7 +157,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.events = append(m.events, harness.Event(msg))
 		m.agents = activeAgents(m.runtime.Agents())
 		if !containsAgent(m.agents, m.viewAgentID) {
-			m.viewAgentID = rootID(m.runtime)
+			m.viewAgentID = seatID(m.runtime)
 			m.userScrolled = false
 		}
 		if m.selected >= len(m.agents) {
@@ -242,8 +243,8 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.scrollDown()
 		return m, nil
 	case msg.Code == tea.KeyEsc:
-		if m.viewAgentID != rootID(m.runtime) {
-			m.viewAgentID = rootID(m.runtime)
+		if m.viewAgentID != seatID(m.runtime) {
+			m.viewAgentID = seatID(m.runtime)
 			m.refreshView()
 		}
 		return m, nil
@@ -309,13 +310,13 @@ func (m *Model) submit() tea.Cmd {
 	}
 	a, ok := m.runtime.Agent(m.viewAgentID)
 	if !ok {
-		a = m.runtime.Root()
+		a = m.runtime.Seat()
 	}
 	if a == nil {
 		return nil
 	}
 	var err error
-	if a.ID == rootID(m.runtime) {
+	if a.ID == seatID(m.runtime) {
 		err = a.Send(text)
 	} else {
 		err = a.Steer(text)
@@ -460,21 +461,21 @@ func (m *Model) handleCommand(command string) tea.Cmd {
 			if err := m.runtime.ConfigureModels(arg, cfg.SubagentModel, approved); err != nil {
 				m.addLocal("error", "save model configuration: "+err.Error())
 			} else {
-				m.addLocal("status", "root model set to "+arg)
+				m.addLocal("status", "seat model set to "+arg)
 			}
 		}
 	case "/effort":
 		if arg != "" {
-			if root := m.runtime.Root(); root != nil {
-				root.SetEffort(arg)
+			if seat := m.runtime.Seat(); seat != nil {
+				seat.SetEffort(arg)
 			}
 			cfg := m.runtime.Config()
-			cfg.RootEffort = arg
+			cfg.SeatEffort = arg
 			if err := cfg.Save(); err != nil {
 				m.addLocal("error", "save effort configuration: "+err.Error())
 				return nil
 			}
-			m.addLocal("status", "root effort set to "+arg)
+			m.addLocal("status", "seat effort set to "+arg)
 		}
 	case "/agents":
 		m.addLocal("status", formatAgents(m.agents))
@@ -502,9 +503,9 @@ func (m *Model) openModelMenu() tea.Cmd {
 		m.modelExpanded = make(map[string]bool)
 	}
 	cfg := m.runtime.Config()
-	m.modelRoot, m.modelSubagent, m.modelLeaf = "", "", ""
-	if cfg.ModelApproved(cfg.RootModel) {
-		m.modelRoot = cfg.RootModel
+	m.modelSeat, m.modelSubagent, m.modelLeaf = "", "", ""
+	if cfg.ModelApproved(cfg.SeatModel) {
+		m.modelSeat = cfg.SeatModel
 	}
 	if cfg.ModelApproved(cfg.SubagentModel) {
 		m.modelSubagent = cfg.SubagentModel
@@ -583,7 +584,7 @@ func (m *Model) updateModelMenu(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case 'r', 'R', 's', 'S', 'l', 'L':
 		if len(nodes) > 0 && !nodes[m.modelCursor].branch && !nodes[m.modelCursor].save {
-			slot := "root"
+			slot := "seat"
 			switch strings.ToLower(string(msg.Code)) {
 			case "s":
 				slot = "subagent"
@@ -597,7 +598,7 @@ func (m *Model) updateModelMenu(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateModelSubmenu(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	options := []string{"root", "subagent", "leaf"}
+	options := []string{"seat", "subagent", "leaf"}
 	switch msg.Code {
 	case tea.KeyUp:
 		if m.modelSubcursor > 0 {
@@ -611,7 +612,7 @@ func (m *Model) updateModelSubmenu(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.assignModel(m.modelSubnode, options[m.modelSubcursor])
 		m.modelSubmenu = false
 	case 'r', 'R':
-		m.assignModel(m.modelSubnode, "root")
+		m.assignModel(m.modelSubnode, "seat")
 		m.modelSubmenu = false
 	case 's', 'S':
 		m.assignModel(m.modelSubnode, "subagent")
@@ -641,8 +642,8 @@ func (m Model) modelNodes() []modelTreeNode {
 func (m *Model) assignModel(node modelTreeNode, slot string) {
 	model := m.modelCatalog[node.provider].Models[node.model].ID
 	switch slot {
-	case "root":
-		m.modelRoot = model
+	case "seat":
+		m.modelSeat = model
 	case "subagent":
 		m.modelSubagent = model
 	case "leaf":
@@ -650,7 +651,7 @@ func (m *Model) assignModel(node modelTreeNode, slot string) {
 	default:
 		return
 	}
-	if err := m.runtime.ConfigureModelSlots(m.modelRoot, m.modelSubagent, m.modelLeaf, approvedSlots(m.modelRoot, m.modelSubagent, m.modelLeaf)); err != nil {
+	if err := m.runtime.ConfigureModelSlots(m.modelSeat, m.modelSubagent, m.modelLeaf, approvedSlots(m.modelSeat, m.modelSubagent, m.modelLeaf)); err != nil {
 		m.modelNotice = "save failed: " + err.Error()
 		m.modelNoticeErr = true
 		m.modelNoticeOK = false
@@ -662,7 +663,7 @@ func (m *Model) assignModel(node modelTreeNode, slot string) {
 }
 
 func (m *Model) saveAndCloseModelMenu() {
-	if err := m.runtime.ConfigureModelSlots(m.modelRoot, m.modelSubagent, m.modelLeaf, approvedSlots(m.modelRoot, m.modelSubagent, m.modelLeaf)); err != nil {
+	if err := m.runtime.ConfigureModelSlots(m.modelSeat, m.modelSubagent, m.modelLeaf, approvedSlots(m.modelSeat, m.modelSubagent, m.modelLeaf)); err != nil {
 		m.modelNotice = "save failed: " + err.Error()
 		m.modelNoticeErr = true
 		m.modelNoticeOK = false
@@ -675,9 +676,9 @@ func (m *Model) saveAndCloseModelMenu() {
 	m.addLocal("status", "model configuration saved")
 }
 
-func approvedSlots(root, subagent, leaf string) []string {
+func approvedSlots(seat, subagent, leaf string) []string {
 	result := make([]string, 0, 3)
-	for _, model := range []string{root, subagent, leaf} {
+	for _, model := range []string{seat, subagent, leaf} {
 		if model != "" && !containsModel(result, model) {
 			result = append(result, model)
 		}
@@ -687,7 +688,7 @@ func approvedSlots(root, subagent, leaf string) []string {
 
 func (m Model) modelSlotMarker(model string) string {
 	markers := make([]string, 0, 3)
-	if strings.EqualFold(m.modelRoot, model) && model != "" {
+	if strings.EqualFold(m.modelSeat, model) && model != "" {
 		markers = append(markers, "r")
 	}
 	if strings.EqualFold(m.modelSubagent, model) && model != "" {
@@ -709,7 +710,7 @@ func modelSlotValue(model string) string {
 func (m Model) modelSubmenuView() string {
 	width := max(1, m.width)
 	model := m.modelCatalog[m.modelSubnode.provider].Models[m.modelSubnode.model]
-	options := []string{"root", "subagent", "leaf"}
+	options := []string{"seat", "subagent", "leaf"}
 	lines := []string{
 		accent.Render("ASSIGN MODEL"),
 		"Choose a slot for " + displayModelID(m.modelCatalog[m.modelSubnode.provider].Name, model.ID) + ":",
@@ -751,8 +752,8 @@ func (m Model) modelMenuView() string {
 	lines := []string{
 		accent.Render("MODELS"),
 		"Providers with configured keys; OpenRouter shows models created within the last year.",
-		fmt.Sprintf("Slots: root=%s · subagent=%s · leaf=%s", modelSlotValue(m.modelRoot), modelSlotValue(m.modelSubagent), modelSlotValue(m.modelLeaf)),
-		"r=root · s=subagent · l=leaf · Enter=assign · Esc=save and close",
+		fmt.Sprintf("Slots: seat=%s · subagent=%s · leaf=%s", modelSlotValue(m.modelSeat), modelSlotValue(m.modelSubagent), modelSlotValue(m.modelLeaf)),
+		"r=seat · s=subagent · l=leaf · Enter=assign · Esc=save and close",
 		"",
 	}
 	if m.modelsLoading {
@@ -935,12 +936,19 @@ func (m *Model) clearCurrentView() {
 func renderEvent(event harness.Event, width int) string {
 	switch event.Kind {
 	case "assistant":
-		return renderChatBlock("agent", event.Text, width, assistantBubble)
+		return renderChatBlock(agentTitle(event, "agent"), event.Text, width, assistantBubble)
 	case "user":
 		return renderChatBlock("user", event.Text, width, userBubble)
+	case "child_result":
+		return renderChatBlock(agentTitle(event, "subagent"), event.Text, width, subagentBubble)
+	case "steer":
+		if isForwardedAgentMessage(event) {
+			return renderChatBlock(agentTitle(event, "subagent"), event.Text, width, subagentBubble)
+		}
+		return rollingBlock(event.Text, width)
 	case "usage":
 		return rollingBlock(fmt.Sprint(event.Metadata), width)
-	case "thinking", "tool", "error", "steer", "status", "runtime", "tool_result":
+	case "thinking", "tool", "error", "status", "runtime", "tool_result":
 		// The event kind is already shown in the non-chat block header. Keep the
 		// body to the event's content so the label is not duplicated there.
 		return rollingBlock(event.Text, width)
@@ -960,7 +968,22 @@ func renderHeader(label string) string {
 }
 
 func isMessage(event harness.Event) bool {
-	return event.Kind == "user" || event.Kind == "assistant"
+	return event.Kind == "user" || event.Kind == "assistant" || event.Kind == "child_result" || isForwardedAgentMessage(event)
+}
+
+func isForwardedAgentMessage(event harness.Event) bool {
+	if event.Kind != "steer" || event.Metadata == nil {
+		return false
+	}
+	_, ok := event.Metadata["sender"]
+	return ok
+}
+
+func agentTitle(event harness.Event, fallback string) string {
+	if title := strings.TrimSpace(event.AgentTitle); title != "" {
+		return title
+	}
+	return fallback
 }
 
 func isViewportEvent(event harness.Event) bool {
@@ -1101,8 +1124,8 @@ func (m Model) statusLine() string {
 	current := harness.AgentSnapshot{Model: "-", Effort: "-"}
 	if agent, ok := m.runtime.Agent(m.viewAgentID); ok {
 		current = agent.Snapshot()
-	} else if root := m.runtime.Root(); root != nil {
-		current = root.Snapshot()
+	} else if seat := m.runtime.Seat(); seat != nil {
+		current = seat.Snapshot()
 	}
 	width := max(1, m.chatWidth())
 	model := current.Model
@@ -1178,9 +1201,9 @@ func (m Model) agentPanel() string {
 	return strings.Join(lines, "\n")
 }
 
-func rootID(runtime *harness.Runtime) string {
-	if root := runtime.Root(); root != nil {
-		return root.ID
+func seatID(runtime *harness.Runtime) string {
+	if seat := runtime.Seat(); seat != nil {
+		return seat.ID
 	}
 	return ""
 }

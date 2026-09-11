@@ -106,12 +106,12 @@ func TestLiveTranscriptReplayAndCache(t *testing.T) {
 
 	cfg := config.Load()
 	if model := os.Getenv("SLBH_LIVE_TEST_MODEL"); model != "" {
-		cfg.RootModel = model
+		cfg.SeatModel = model
 	}
 	if effort := os.Getenv("SLBH_LIVE_TEST_EFFORT"); effort != "" {
-		cfg.RootEffort = effort
+		cfg.SeatEffort = effort
 	}
-	inner, err := provider.ForModel(cfg.RootModel, cfg.Endpoint)
+	inner, err := provider.ForModel(cfg.SeatModel, cfg.Endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,20 +124,20 @@ func TestLiveTranscriptReplayAndCache(t *testing.T) {
 	}
 	defer runtime.Close()
 
-	root := runtime.Root()
-	transcriptPath, err := runtime.TranscriptPath(root.ID)
+	seat := runtime.Seat()
+	transcriptPath, err := runtime.TranscriptPath(seat.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("live runtime transcript: %s", transcriptPath)
-	root.Send(liveTranscriptPrompt)
+	seat.Send(liveTranscriptPrompt)
 	waitLiveTurn(t, runtime, 1)
 
 	entries, err := readLiveTranscript(transcriptPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestPayloads, err := liveRequestPayloads(entries, root.ID)
+	requestPayloads, err := liveRequestPayloads(entries, seat.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestLiveTranscriptReplayAndCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer := transcriptAssistantText(entries, root.ID)
+	answer := transcriptAssistantText(entries, seat.ID)
 	if answer == "" {
 		t.Fatal("first transcript has no assistant response to reload")
 	}
@@ -162,23 +162,23 @@ func TestLiveTranscriptReplayAndCache(t *testing.T) {
 
 	// Drop the live in-memory history, then rebuild it solely from the durable
 	// request frame and streamed assistant events in the agent session transcript.
-	root.mu.Lock()
-	root.history = nil
-	root.mu.Unlock()
-	root.mu.Lock()
-	root.history = loadedHistory
-	root.mu.Unlock()
-	if got := root.History(); len(got) != len(loadedHistory) {
+	seat.mu.Lock()
+	seat.history = nil
+	seat.mu.Unlock()
+	seat.mu.Lock()
+	seat.history = loadedHistory
+	seat.mu.Unlock()
+	if got := seat.History(); len(got) != len(loadedHistory) {
 		t.Fatalf("reloaded history length = %d, want %d", len(got), len(loadedHistory))
 	}
 
-	root.Send(liveTranscriptPrompt)
+	seat.Send(liveTranscriptPrompt)
 	waitLiveTurn(t, runtime, 1)
 	entries, err = readLiveTranscript(transcriptPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestPayloads, err = liveRequestPayloads(entries, root.ID)
+	requestPayloads, err = liveRequestPayloads(entries, seat.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,26 +212,26 @@ func TestLiveTranscriptReplayAndCache(t *testing.T) {
 	t.Logf("second inference reported cached input tokens: %d", mustCachedTokens(t, live.usages()[1]))
 }
 
-func TestLiveNativeRootCodexLeafContinuation(t *testing.T) {
+func TestLiveNativeSeatCodexLeafContinuation(t *testing.T) {
 	if os.Getenv("SLBH_RUN_NATIVE_CODEX_TESTS") != "1" {
-		t.Skip("set SLBH_RUN_NATIVE_CODEX_TESTS=1 to run the billed native-root/Codex-leaf acceptance test")
+		t.Skip("set SLBH_RUN_NATIVE_CODEX_TESTS=1 to run the billed native-seat/Codex-leaf acceptance test")
 	}
 	cfg := config.Load()
 	if model := os.Getenv("SLBH_LIVE_TEST_MODEL"); model != "" {
-		cfg.RootModel = model
+		cfg.SeatModel = model
 	}
-	if cfg.RootModel == "" {
-		cfg.RootModel = "deepseek-v4-flash"
+	if cfg.SeatModel == "" {
+		cfg.SeatModel = "deepseek-v4-flash"
 	}
 	if effort := os.Getenv("SLBH_LIVE_TEST_EFFORT"); effort != "" {
-		cfg.RootEffort = effort
+		cfg.SeatEffort = effort
 	}
-	if cfg.RootEffort == "" {
-		cfg.RootEffort = "xhigh"
+	if cfg.SeatEffort == "" {
+		cfg.SeatEffort = "xhigh"
 	}
-	// This test deliberately selects the root model for a temporary runtime;
+	// This test deliberately selects the seat model for a temporary runtime;
 	// it must not depend on the user's persisted approval list.
-	cfg.ApprovedModels = []string{cfg.RootModel}
+	cfg.ApprovedModels = []string{cfg.SeatModel}
 	codexModel := os.Getenv("SLBH_CODEX_TEST_MODEL")
 	if codexModel == "" {
 		codexModel = "gpt-5.6-luna"
@@ -241,9 +241,9 @@ func TestLiveNativeRootCodexLeafContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	root := runtime.Root()
+	seat := runtime.Seat()
 	prompt := fmt.Sprintf("Launch one Codex leaf using harness codex and model %s. Give it this brief: reply with exactly NATIVE_CODEX_LEAF_OK and nothing else. After the leaf reports back, reply with exactly NATIVE_CODEX_LEAF_OK and nothing else.", codexModel)
-	if err := root.Send(prompt); err != nil {
+	if err := seat.Send(prompt); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.NewTimer(8 * time.Minute)
@@ -252,17 +252,17 @@ func TestLiveNativeRootCodexLeafContinuation(t *testing.T) {
 		select {
 		case event := <-runtime.Events():
 			if event.Kind == "error" {
-				t.Fatalf("native root/Codex leaf inference failed: %s", event.Text)
+				t.Fatalf("native seat/Codex leaf inference failed: %s", event.Text)
 			}
-			if event.AgentID == root.ID && event.Kind == "turn_done" {
-				for _, message := range root.History() {
+			if event.AgentID == seat.ID && event.Kind == "turn_done" {
+				for _, message := range seat.History() {
 					if strings.Contains(message.Content, "NATIVE_CODEX_LEAF_OK") {
 						return
 					}
 				}
 			}
 		case <-deadline.C:
-			t.Fatal("native root/Codex leaf continuation did not finish")
+			t.Fatal("native seat/Codex leaf continuation did not finish")
 		}
 	}
 }

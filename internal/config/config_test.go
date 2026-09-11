@@ -12,7 +12,7 @@ func TestSaveAndLoadModelPolicy(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	want := Config{
-		Home: home, RootModel: "deepseek/deepseek-chat", RootEffort: "high",
+		Home: home, SeatModel: "deepseek/deepseek-chat", SeatEffort: "high",
 		SubagentModel: "zai/glm-5.3-flash", LeafModel: "deepseek/deepseek-chat", SubagentEffort: "medium",
 		ApprovedModels: []string{"deepseek/deepseek-chat", "zai/glm-5.3-flash", "deepseek/deepseek-chat"},
 	}
@@ -20,7 +20,7 @@ func TestSaveAndLoadModelPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := Load()
-	if got.RootModel != want.RootModel || got.SubagentModel != want.SubagentModel || got.LeafModel != want.LeafModel || len(got.ApprovedModels) != 2 {
+	if got.SeatModel != want.SeatModel || got.SubagentModel != want.SubagentModel || got.LeafModel != want.LeafModel || len(got.ApprovedModels) != 2 {
 		t.Fatalf("loaded config = %#v", got)
 	}
 	if got.ModelApproved("zai/glm-5.3-flash") == false || got.ModelApproved("unknown") {

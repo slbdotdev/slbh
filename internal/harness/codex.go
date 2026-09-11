@@ -682,7 +682,7 @@ func (c *codexLeaf) handleToolCall(message codexWire) {
 		_ = c.rpc.respond(message.ID, map[string]any{"success": false, "contentItems": []any{map[string]any{"type": "inputText", "text": "parent is unavailable"}}})
 		return
 	}
-	err := parent.Steer(fmt.Sprintf("[from %s (%s)] %s", c.agent.Title, c.agent.ID, args.Message))
+	err := parent.steerFrom(c.agent, args.Message)
 	if err != nil {
 		_ = c.rpc.respond(message.ID, map[string]any{"success": false, "contentItems": []any{map[string]any{"type": "inputText", "text": err.Error()}}})
 		return

@@ -121,13 +121,13 @@ func waitForCodexReady(t *testing.T, r *Runtime, agentID string) {
 	}
 }
 
-func TestCodexLaunchPreservesExplicitChatGPTModelAtRootAndLevelOne(t *testing.T) {
+func TestCodexLaunchPreservesExplicitChatGPTModelAtSeatAndLevelOne(t *testing.T) {
 	modelFile := filepath.Join(t.TempDir(), "model.json")
 	t.Setenv("SLBH_CODEX_HELPER", "1")
 	t.Setenv("SLBH_CODEX_MODEL_FILE", modelFile)
 	r, err := New(config.Config{
-		Home: t.TempDir(), RootModel: "native-root", SubagentModel: "native-child", LeafModel: "native-leaf",
-		ApprovedModels: []string{"native-root", "native-child", "native-leaf"},
+		Home: t.TempDir(), SeatModel: "native-seat", SubagentModel: "native-child", LeafModel: "native-leaf",
+		ApprovedModels: []string{"native-seat", "native-child", "native-leaf"},
 	}, Options{
 		Provider:     func(string) (provider.Provider, error) { return fakeProvider{}, nil },
 		CodexCommand: os.Args[0],
@@ -142,9 +142,9 @@ func TestCodexLaunchPreservesExplicitChatGPTModelAtRootAndLevelOne(t *testing.T)
 		parent *Agent
 		model  string
 	}{
-		{name: "root", parent: r.Root(), model: "gpt-5.6-luna"},
+		{name: "seat", parent: r.Seat(), model: "gpt-5.6-luna"},
 	}
-	levelOne, err := r.LaunchSubagentSpec(r.Root().ID, LaunchSpec{Title: "native parent", Model: "native-child"})
+	levelOne, err := r.LaunchSubagentSpec(r.Seat().ID, LaunchSpec{Title: "native parent", Model: "native-child"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestCodexLeafSteersActiveTurnAndReturnsResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	child, server := fakeCodexLeaf(t, r, r.Root())
+	child, server := fakeCodexLeaf(t, r, r.Seat())
 	reader, writer := bufio.NewReader(server), bufio.NewWriter(server)
 
 	if err := child.Send("initial brief"); err != nil {
@@ -269,7 +269,7 @@ func TestCodexLeafSteersActiveTurnAndReturnsResult(t *testing.T) {
 			if event.AgentID == child.ID && event.Kind == "turn_done" {
 				sawDone = true
 			}
-			if event.AgentID == r.Root().ID && event.Kind == "child_result" && strings.Contains(event.Text, "answer") {
+			if event.AgentID == r.Seat().ID && event.Kind == "child_result" && strings.Contains(event.Text, "answer") {
 				sawParent = true
 			}
 		case <-deadline:
@@ -323,7 +323,7 @@ func TestCodexLeafParentToolAndNoDelegation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	child, server := fakeCodexLeaf(t, r, r.Root())
+	child, server := fakeCodexLeaf(t, r, r.Seat())
 	reader, writer := bufio.NewReader(server), bufio.NewWriter(server)
 
 	if err := child.Send("brief"); err != nil {
@@ -385,7 +385,7 @@ func TestCodexLeafSteerRaceIsRequeuedAfterTurnCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	child, server := fakeCodexLeaf(t, r, r.Root())
+	child, server := fakeCodexLeaf(t, r, r.Seat())
 	reader, writer := bufio.NewReader(server), bufio.NewWriter(server)
 	if err := child.Send("first"); err != nil {
 		t.Fatal(err)
@@ -445,7 +445,7 @@ func TestCodexLeafClearStartsFreshThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	child, server := fakeCodexLeaf(t, r, r.Root())
+	child, server := fakeCodexLeaf(t, r, r.Seat())
 	reader, writer := bufio.NewReader(server), bufio.NewWriter(server)
 	if err := child.Send("initial"); err != nil {
 		t.Fatal(err)

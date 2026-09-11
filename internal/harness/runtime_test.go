@@ -105,7 +105,7 @@ func (childResultProvider) Stream(_ context.Context, request provider.Request, s
 
 func testRuntime(t *testing.T) *Runtime {
 	t.Helper()
-	r, err := New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high", SubagentModel: "test-child", SubagentEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high", SubagentModel: "test-child", SubagentEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func testRuntime(t *testing.T) *Runtime {
 
 func TestRuntimeStreamsAndLogs(t *testing.T) {
 	r := testRuntime(t)
-	r.Root().Send("hello")
+	r.Seat().Send("hello")
 	deadline := time.After(5 * time.Second)
 	var sawDone bool
 	for !sawDone {
@@ -128,7 +128,7 @@ func TestRuntimeStreamsAndLogs(t *testing.T) {
 			t.Fatal("agent turn did not finish")
 		}
 	}
-	transcriptPath, err := r.TranscriptPath(r.Root().ID)
+	transcriptPath, err := r.TranscriptPath(r.Seat().ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,12 +164,12 @@ func TestRuntimeStreamsAndLogs(t *testing.T) {
 
 func TestAgentSessionsHaveSeparateTranscriptsAndClearRotatesSelectedAgent(t *testing.T) {
 	r := testRuntime(t)
-	root := r.Root()
-	firstPath, err := r.TranscriptPath(root.ID)
+	seat := r.Seat()
+	firstPath, err := r.TranscriptPath(seat.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := r.LaunchSubagent(root.ID, "child", "")
+	child, err := r.LaunchSubagent(seat.ID, "child", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,11 +178,11 @@ func TestAgentSessionsHaveSeparateTranscriptsAndClearRotatesSelectedAgent(t *tes
 		t.Fatal(err)
 	}
 	if firstPath == childPath {
-		t.Fatalf("root and child share transcript path %q", firstPath)
+		t.Fatalf("seat and child share transcript path %q", firstPath)
 	}
 
-	root.Send("first session")
-	waitAgentTurn(t, r, root.ID)
+	seat.Send("first session")
+	waitAgentTurn(t, r, seat.ID)
 	firstEntries, err := logx.Read(firstPath)
 	if err != nil {
 		t.Fatal(err)
@@ -191,25 +191,25 @@ func TestAgentSessionsHaveSeparateTranscriptsAndClearRotatesSelectedAgent(t *tes
 		t.Fatalf("first session transcript lacks prompt: %#v", firstEntries)
 	}
 
-	if err := r.Clear(root.ID); err != nil {
+	if err := r.Clear(seat.ID); err != nil {
 		t.Fatal(err)
 	}
-	secondPath, err := r.TranscriptPath(root.ID)
+	secondPath, err := r.TranscriptPath(seat.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if firstPath == secondPath {
 		t.Fatalf("clear reused transcript path %q", secondPath)
 	}
-	if got := r.Root().ID; got != root.ID {
-		t.Fatalf("clear changed root ID from %q to %q", root.ID, got)
+	if got := r.Seat().ID; got != seat.ID {
+		t.Fatalf("clear changed seat ID from %q to %q", seat.ID, got)
 	}
 	if got, err := r.TranscriptPath(child.ID); err != nil || got != childPath {
 		t.Fatalf("clear changed child transcript path to %q (err=%v)", got, err)
 	}
 
-	root.Send("second session")
-	waitAgentTurn(t, r, root.ID)
+	seat.Send("second session")
+	waitAgentTurn(t, r, seat.ID)
 	firstEntries, err = logx.Read(firstPath)
 	if err != nil {
 		t.Fatal(err)
@@ -256,18 +256,18 @@ func transcriptContains(entries []logx.Entry, text string) bool {
 }
 
 func TestAgentTracksContextAndCacheStats(t *testing.T) {
-	r, err := New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return usageProvider{}, nil }})
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return usageProvider{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	r.Root().Send("hello")
+	r.Seat().Send("hello")
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
 		case event := <-r.Events():
 			if event.Kind == "turn_done" {
-				snapshot := r.Root().Snapshot()
+				snapshot := r.Seat().Snapshot()
 				if snapshot.ContextWindow != provider.FallbackContextWindow {
 					t.Fatalf("context window = %d, want %d", snapshot.ContextWindow, provider.FallbackContextWindow)
 				}
@@ -287,8 +287,8 @@ func TestAgentTracksContextAndCacheStats(t *testing.T) {
 
 func TestDepthAndSteerIsolation(t *testing.T) {
 	r := testRuntime(t)
-	root := r.Root()
-	child, err := r.LaunchSubagent(root.ID, "child", "brief")
+	seat := r.Seat()
+	child, err := r.LaunchSubagent(seat.ID, "child", "brief")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,17 +318,17 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	workDir := t.TempDir()
 	outsideDir := t.TempDir()
 	r.workDir = workDir
-	r.Root().WorkDir = workDir
+	r.Seat().WorkDir = workDir
 	path := filepath.Join(outsideDir, "nested", "file.txt")
 	writeArgs, err := json.Marshal(map[string]string{"path": path, "content": "one\ntwo\n"})
-	if _, err := r.ExecuteTool(r.Root().ID, "write_file", string(writeArgs)); err != nil {
+	if _, err := r.ExecuteTool(r.Seat().ID, "write_file", string(writeArgs)); err != nil {
 		t.Fatal(err)
 	}
 	globArgs, err := json.Marshal(map[string]string{"pattern": filepath.Join(outsideDir, "nested", "*.txt")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	matches, err := r.ExecuteTool(r.Root().ID, "glob", string(globArgs))
+	matches, err := r.ExecuteTool(r.Seat().ID, "glob", string(globArgs))
 	if err != nil || !strings.Contains(matches, filepath.Clean(path)) {
 		t.Fatalf("glob=%q err=%v", matches, err)
 	}
@@ -336,7 +336,7 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	grep, err := r.ExecuteTool(r.Root().ID, "grep", string(grepArgs))
+	grep, err := r.ExecuteTool(r.Seat().ID, "grep", string(grepArgs))
 	if err != nil || !strings.Contains(grep, filepath.Clean(path)+":2:two") {
 		t.Fatalf("grep=%q err=%v", grep, err)
 	}
@@ -344,7 +344,7 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines, err := r.ExecuteTool(r.Root().ID, "read_lines", string(readLinesArgs))
+	lines, err := r.ExecuteTool(r.Seat().ID, "read_lines", string(readLinesArgs))
 	if err != nil || !strings.Contains(lines, "2:two") {
 		t.Fatalf("lines=%q err=%v", lines, err)
 	}
@@ -352,14 +352,14 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.ExecuteTool(r.Root().ID, "edit_file", string(editArgs)); err != nil {
+	if _, err := r.ExecuteTool(r.Seat().ID, "edit_file", string(editArgs)); err != nil {
 		t.Fatal(err)
 	}
 	readArgs, err := json.Marshal(map[string]string{"path": path})
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := r.ExecuteTool(r.Root().ID, "read_file", string(readArgs))
+	content, err := r.ExecuteTool(r.Seat().ID, "read_file", string(readArgs))
 	if err != nil || content != "ONE\ntwo\n" {
 		t.Fatalf("content=%q err=%v", content, err)
 	}
@@ -371,14 +371,14 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if relativeContent, err := r.ExecuteTool(r.Root().ID, "read_file", string(relativeReadArgs)); err != nil || relativeContent != content {
+	if relativeContent, err := r.ExecuteTool(r.Seat().ID, "read_file", string(relativeReadArgs)); err != nil || relativeContent != content {
 		t.Fatalf("relative content=%q err=%v", relativeContent, err)
 	}
 	bytesArgs, err := json.Marshal(map[string]any{"path": path, "start": 0, "end": 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bytes, err := r.ExecuteTool(r.Root().ID, "read_bytes", string(bytesArgs))
+	bytes, err := r.ExecuteTool(r.Seat().ID, "read_bytes", string(bytesArgs))
 	if err != nil || bytes != "ONE" {
 		t.Fatalf("bytes=%q err=%v", bytes, err)
 	}
@@ -387,7 +387,7 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.ExecuteTool(r.Root().ID, "apply_patch", string(patchArgs)); err != nil {
+	if _, err := r.ExecuteTool(r.Seat().ID, "apply_patch", string(patchArgs)); err != nil {
 		t.Fatal(err)
 	}
 	if content, err := os.ReadFile(path); err != nil || string(content) != "ONE\nTWO\n" {
@@ -401,7 +401,7 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cwdOutput, err := r.ExecuteTool(r.Root().ID, "quick_bash", string(cwdArgs))
+	cwdOutput, err := r.ExecuteTool(r.Seat().ID, "quick_bash", string(cwdArgs))
 	if err != nil || !strings.Contains(strings.ReplaceAll(cwdOutput, "\\", "/"), strings.ReplaceAll(filepath.Clean(outsideDir), "\\", "/")) {
 		t.Fatalf("quick_bash cwd=%q err=%v", cwdOutput, err)
 	}
@@ -409,7 +409,7 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobID, err := r.ExecuteTool(r.Root().ID, "long_job", string(jobArgs))
+	jobID, err := r.ExecuteTool(r.Seat().ID, "long_job", string(jobArgs))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,12 +432,12 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 }
 
 func TestProviderToolCallsExecuteAndContinue(t *testing.T) {
-	r, err := New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return toolProvider{}, nil }})
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return toolProvider{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	r.Root().Send("use a tool")
+	r.Seat().Send("use a tool")
 	deadline := time.After(5 * time.Second)
 	var sawResult, sawDone bool
 	for !sawDone {
@@ -460,15 +460,15 @@ func TestProviderToolCallsExecuteAndContinue(t *testing.T) {
 
 func TestReasoningContentIsReplayedForToolContinuation(t *testing.T) {
 	p := &reasoningToolProvider{}
-	r, err := New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return p, nil }})
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return p, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if err := r.Root().Send("use a tool"); err != nil {
+	if err := r.Seat().Send("use a tool"); err != nil {
 		t.Fatal(err)
 	}
-	waitAgentTurn(t, r, r.Root().ID)
+	waitAgentTurn(t, r, r.Seat().ID)
 
 	requests := p.snapshot()
 	if len(requests) != 2 {
@@ -492,7 +492,7 @@ func TestReasoningContentIsReplayedForToolContinuation(t *testing.T) {
 func TestEmptyApprovalPolicyDoesNotCallProviderButExplicitLaunchModelWorks(t *testing.T) {
 	providerCalls := 0
 	r, err := New(config.Config{
-		Home: t.TempDir(), RootModel: "root-model", RootEffort: "high",
+		Home: t.TempDir(), SeatModel: "seat-model", SeatEffort: "high",
 		SubagentModel: "default-child", SubagentEffort: "high", ApprovedModels: []string{},
 	}, Options{Provider: func(string) (provider.Provider, error) {
 		providerCalls++
@@ -502,10 +502,10 @@ func TestEmptyApprovalPolicyDoesNotCallProviderButExplicitLaunchModelWorks(t *te
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if got := r.Root().Snapshot().Model; got != "" {
-		t.Fatalf("root model = %q, want fail-closed empty model", got)
+	if got := r.Seat().Snapshot().Model; got != "" {
+		t.Fatalf("seat model = %q, want fail-closed empty model", got)
 	}
-	child, err := r.LaunchSubagentSpec(r.Root().ID, LaunchSpec{Title: "explicit", Model: "user-requested"})
+	child, err := r.LaunchSubagentSpec(r.Seat().ID, LaunchSpec{Title: "explicit", Model: "user-requested"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -519,14 +519,14 @@ func TestEmptyApprovalPolicyDoesNotCallProviderButExplicitLaunchModelWorks(t *te
 
 func TestLeafSubagentUsesLeafDefault(t *testing.T) {
 	r, err := New(config.Config{
-		Home: t.TempDir(), RootModel: "root", RootEffort: "high",
+		Home: t.TempDir(), SeatModel: "seat", SeatEffort: "high",
 		SubagentModel: "level-one", LeafModel: "level-two", SubagentEffort: "high",
 	}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	levelOne, err := r.LaunchSubagentSpec(r.Root().ID, LaunchSpec{Title: "level one"})
+	levelOne, err := r.LaunchSubagentSpec(r.Seat().ID, LaunchSpec{Title: "level one"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,7 +543,7 @@ func TestLeafSubagentUsesLeafDefault(t *testing.T) {
 }
 
 func TestCodexLeafStartFailureDoesNotLeaveOrphanAgent(t *testing.T) {
-	r, err := New(config.Config{Home: t.TempDir(), RootModel: "root"}, Options{
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "seat"}, Options{
 		Provider:     func(string) (provider.Provider, error) { return fakeProvider{}, nil },
 		CodexCommand: filepath.Join(t.TempDir(), "missing-codex"),
 	})
@@ -551,7 +551,7 @@ func TestCodexLeafStartFailureDoesNotLeaveOrphanAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if _, err := r.LaunchSubagentSpec(r.Root().ID, LaunchSpec{Title: "broken codex", Harness: "codex", Model: "gpt-test"}); err == nil {
+	if _, err := r.LaunchSubagentSpec(r.Seat().ID, LaunchSpec{Title: "broken codex", Harness: "codex", Model: "gpt-test"}); err == nil {
 		t.Fatal("missing Codex executable unexpectedly launched")
 	}
 	agents := r.Agents()
@@ -562,8 +562,8 @@ func TestCodexLeafStartFailureDoesNotLeaveOrphanAgent(t *testing.T) {
 
 func TestCodexLeafRequiresExplicitChatGPTModel(t *testing.T) {
 	r, err := New(config.Config{
-		Home: t.TempDir(), RootModel: "native-root", SubagentModel: "native-child", LeafModel: "native-leaf",
-		ApprovedModels: []string{"native-root", "native-child", "native-leaf"},
+		Home: t.TempDir(), SeatModel: "native-seat", SubagentModel: "native-child", LeafModel: "native-leaf",
+		ApprovedModels: []string{"native-seat", "native-child", "native-leaf"},
 	}, Options{
 		Provider:     func(string) (provider.Provider, error) { return fakeProvider{}, nil },
 		CodexCommand: filepath.Join(t.TempDir(), "missing-codex"),
@@ -572,10 +572,10 @@ func TestCodexLeafRequiresExplicitChatGPTModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if _, err := r.LaunchSubagentSpec(r.Root().ID, LaunchSpec{Title: "missing model", Harness: "codex"}); err == nil || !strings.Contains(err.Error(), "explicit ChatGPT model") {
+	if _, err := r.LaunchSubagentSpec(r.Seat().ID, LaunchSpec{Title: "missing model", Harness: "codex"}); err == nil || !strings.Contains(err.Error(), "explicit ChatGPT model") {
 		t.Fatalf("Codex launch error = %v, want explicit-model validation", err)
 	}
-	levelOne, err := r.LaunchSubagentSpec(r.Root().ID, LaunchSpec{Title: "native parent", Model: "native-child"})
+	levelOne, err := r.LaunchSubagentSpec(r.Seat().ID, LaunchSpec{Title: "native parent", Model: "native-child"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -628,37 +628,44 @@ func TestLaunchSubagentToolAdvertisesCodexModelFields(t *testing.T) {
 }
 
 func TestChildResultReachesParent(t *testing.T) {
-	r, err := New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high", SubagentModel: "test-child", SubagentEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return childResultProvider{}, nil }})
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high", SubagentModel: "test-child", SubagentEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return childResultProvider{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
 
-	r.Root().Send("ask a child")
+	r.Seat().Send("ask a child")
 	deadline := time.After(5 * time.Second)
 	var sawParentResult bool
+	var childResultTitle string
 	for !sawParentResult {
 		select {
 		case event := <-r.Events():
-			if event.AgentID == r.Root().ID && event.Kind == "assistant" && event.Text == "parent saw child" {
+			if event.AgentID == r.Seat().ID && event.Kind == "child_result" {
+				childResultTitle = event.AgentTitle
+			}
+			if event.AgentID == r.Seat().ID && event.Kind == "assistant" && event.Text == "parent saw child" {
 				sawParentResult = true
 			}
 		case <-deadline:
 			t.Fatal("parent never received the child result")
 		}
 	}
+	if childResultTitle != "child" {
+		t.Fatalf("child result event title = %q, want child", childResultTitle)
+	}
 
-	waitAgentTurn(t, r, r.Root().ID)
+	waitAgentTurn(t, r, r.Seat().ID)
 	var resultCount int
-	for _, message := range r.Root().History() {
+	for _, message := range r.Seat().History() {
 		if strings.HasPrefix(message.Content, "[result from child] child answer") {
 			resultCount++
 		}
 	}
 	if resultCount != 1 {
-		t.Fatalf("parent history has %d child results, want one: %#v", resultCount, r.Root().History())
+		t.Fatalf("parent history has %d child results, want one: %#v", resultCount, r.Seat().History())
 	}
-	transcriptPath, err := r.TranscriptPath(r.Root().ID)
+	transcriptPath, err := r.TranscriptPath(r.Seat().ID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,6 +21,10 @@ type agentMessage struct {
 	kind     string
 	text     string
 	metadata map[string]any
+	// senderTitle identifies the agent that authored a forwarded message.
+	// AgentID on the resulting event remains the recipient so the UI can show
+	// the message in the recipient's viewport.
+	senderTitle string
 }
 
 type Agent struct {
@@ -86,6 +90,28 @@ func (a *Agent) Steer(message string) error {
 	return a.deliver(agentMessage{prompt: "[steer] " + message, kind: "steer", text: message})
 }
 
+// steerFrom delivers an explicit agent-to-agent message while retaining its
+// sender for the event stream. The recipient still owns the inbox and event
+// routing, but the sender is the author shown by the UI.
+func (a *Agent) steerFrom(sender *Agent, message string) error {
+	if sender == nil {
+		return fmt.Errorf("sender agent is required")
+	}
+	if strings.TrimSpace(message) == "" {
+		return fmt.Errorf("message is empty")
+	}
+	if codex := a.codexBackend(); codex != nil {
+		return codex.send(fmt.Sprintf("[steer] [from %s (%s)] %s", sender.Title, sender.ID, message), "steer")
+	}
+	return a.deliver(agentMessage{
+		prompt:      fmt.Sprintf("[steer] [from %s (%s)] %s", sender.Title, sender.ID, message),
+		kind:        "steer",
+		text:        message,
+		metadata:    map[string]any{"sender": sender.ID},
+		senderTitle: sender.Title,
+	})
+}
+
 func (a *Agent) deliver(message agentMessage) error {
 	if strings.TrimSpace(message.prompt) == "" {
 		return fmt.Errorf("message is empty")
@@ -116,7 +142,11 @@ func (a *Agent) takeMessages() []agentMessage {
 func (a *Agent) appendMessages(history []provider.Message, messages []agentMessage) []provider.Message {
 	for _, message := range messages {
 		history = append(history, provider.Message{Role: "user", Content: message.prompt})
-		a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: message.kind, Text: message.text, Metadata: message.metadata})
+		title := a.Title
+		if message.senderTitle != "" {
+			title = message.senderTitle
+		}
+		a.runtime.emit(Event{AgentID: a.ID, AgentTitle: title, Kind: message.kind, Text: message.text, Metadata: message.metadata})
 	}
 	return history
 }
@@ -475,7 +505,7 @@ func usageNestedInt(usage map[string]any, parent, key string) (int, bool) {
 }
 
 func (a *Agent) receiveChildResult(child *Agent, text string) error {
-	return a.deliver(agentMessage{prompt: fmt.Sprintf("[result from %s] %s", child.Title, text), kind: "child_result", text: text, metadata: map[string]any{"child": child.ID}})
+	return a.deliver(agentMessage{prompt: fmt.Sprintf("[result from %s] %s", child.Title, text), kind: "child_result", text: text, metadata: map[string]any{"child": child.ID}, senderTitle: child.Title})
 }
 
 // Compact keeps the most recent work and leaves a durable marker in the
@@ -596,5 +626,5 @@ func compactMessages(history []provider.Message, keep int) ([]provider.Message, 
 }
 
 func systemPrompt(a *Agent) string {
-	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message, is a mandatory mid-turn steer: read and act on it during your current work. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
+	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message, is a mandatory mid-turn steer: read and act on it during your current work. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
 }

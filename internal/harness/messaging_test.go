@@ -81,7 +81,7 @@ func toolEvent(index int, id, name, args string) provider.Event {
 func messagingRuntime(t *testing.T) (*Runtime, *boundaryProvider) {
 	t.Helper()
 	p := &boundaryProvider{calls: make(chan pendingInference, 16)}
-	r, err := New(config.Config{Home: t.TempDir(), RootModel: "passive", SubagentModel: "passive", LeafModel: "passive"}, Options{Provider: func(model string) (provider.Provider, error) {
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "passive", SubagentModel: "passive", LeafModel: "passive"}, Options{Provider: func(model string) (provider.Provider, error) {
 		if model == "active" {
 			return p, nil
 		}
@@ -144,8 +144,8 @@ func TestMessagesReachEveryAgentAtInferenceBoundary(t *testing.T) {
 	for _, direction := range []string{"parent-to-child", "child-to-parent", "parent-to-leaf", "leaf-to-parent", "sibling-to-sibling"} {
 		t.Run(direction, func(t *testing.T) {
 			r, p := messagingRuntime(t)
-			root := r.Root()
-			child, err := r.LaunchSubagent(root.ID, "child", "")
+			seat := r.Seat()
+			child, err := r.LaunchSubagent(seat.ID, "child", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -153,14 +153,14 @@ func TestMessagesReachEveryAgentAtInferenceBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			sibling, err := r.LaunchSubagent(root.ID, "sibling", "")
+			sibling, err := r.LaunchSubagent(seat.ID, "sibling", "")
 			if err != nil {
 				t.Fatal(err)
 			}
-			sender, recipient := root, child
+			sender, recipient := seat, child
 			switch direction {
 			case "child-to-parent":
-				sender, recipient = child, root
+				sender, recipient = child, seat
 			case "parent-to-leaf":
 				sender, recipient = child, leaf
 			case "leaf-to-parent":
@@ -195,7 +195,7 @@ func TestMessagesReachEveryAgentAtInferenceBoundary(t *testing.T) {
 
 func TestIdleSteerWakesWithoutAnotherMessage(t *testing.T) {
 	r, p := messagingRuntime(t)
-	a := r.Root()
+	a := r.Seat()
 	a.SetModel("active")
 	if err := a.Steer("wake now"); err != nil {
 		t.Fatal(err)
@@ -208,7 +208,7 @@ func TestIdleSteerWakesWithoutAnotherMessage(t *testing.T) {
 
 func TestOneInboxPreservesFIFOBurstAndDoesNotBlockOnBusyAgentOrUI(t *testing.T) {
 	r, p := messagingRuntime(t)
-	a := r.Root()
+	a := r.Seat()
 	a.SetModel("active")
 	child, err := r.LaunchSubagent(a.ID, "child", "")
 	if err != nil {
@@ -273,13 +273,13 @@ func TestOneInboxPreservesFIFOBurstAndDoesNotBlockOnBusyAgentOrUI(t *testing.T) 
 
 func TestAutomaticChildResultEntersBusyParentTurn(t *testing.T) {
 	r, p := messagingRuntime(t)
-	root := r.Root()
-	root.SetModel("active")
-	if err := root.Send("working while child runs"); err != nil {
+	seat := r.Seat()
+	seat.SetModel("active")
+	if err := seat.Send("working while child runs"); err != nil {
 		t.Fatal(err)
 	}
 	first := p.next(t)
-	child, err := r.LaunchSubagent(root.ID, "child", "do the work")
+	child, err := r.LaunchSubagent(seat.ID, "child", "do the work")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,14 +288,14 @@ func TestAutomaticChildResultEntersBusyParentTurn(t *testing.T) {
 	next := p.next(t)
 	requireMessage(t, next.request, "assistant", "parent work")
 	requireMessage(t, next.request, "user", "[result from child] done")
-	requireActiveTurn(t, r, root)
+	requireActiveTurn(t, r, seat)
 	next.finish(t, textEvent("used child result"))
-	waitAgentTurn(t, r, root.ID)
+	waitAgentTurn(t, r, seat.ID)
 }
 
 func TestInferenceToolBatchIsPreservedWhenMessagesArrive(t *testing.T) {
 	r, p := messagingRuntime(t)
-	a := r.Root()
+	a := r.Seat()
 	a.SetModel("active")
 	a.WorkDir = t.TempDir()
 	if err := a.Send("write two files"); err != nil {
@@ -342,7 +342,7 @@ func TestToolInFlightFinishesAndDeliversBeforeNextTool(t *testing.T) {
 		t.Skip("Linux/WSL bash boundary test")
 	}
 	r, p := messagingRuntime(t)
-	a := r.Root()
+	a := r.Seat()
 	a.SetModel("active")
 	a.WorkDir = t.TempDir()
 	release := filepath.Join(a.WorkDir, "release")
@@ -391,21 +391,21 @@ func TestToolInFlightFinishesAndDeliversBeforeNextTool(t *testing.T) {
 
 func TestStoppedRecipientsAndEmptyMessagesFailExplicitly(t *testing.T) {
 	r, _ := messagingRuntime(t)
-	child, err := r.LaunchSubagent(r.Root().ID, "child", "")
+	child, err := r.LaunchSubagent(r.Seat().ID, "child", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := child.Steer("  "); err == nil {
 		t.Fatal("empty message accepted")
 	}
-	if err := r.EndSubagent(r.Root().ID, child.ID); err != nil {
+	if err := r.EndSubagent(r.Seat().ID, child.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := child.Send("late"); err == nil {
 		t.Fatal("stopped recipient accepted input")
 	}
 	args, _ := json.Marshal(map[string]string{"agent_id": child.ID, "message": "late"})
-	if _, err := r.ExecuteTool(r.Root().ID, "msg_subagent", string(args)); err == nil || !strings.Contains(err.Error(), "stopped") {
+	if _, err := r.ExecuteTool(r.Seat().ID, "msg_subagent", string(args)); err == nil || !strings.Contains(err.Error(), "stopped") {
 		t.Fatalf("stopped recipient reported success: %v", err)
 	}
 }
@@ -451,13 +451,13 @@ func TestHTTPMessageWaitsForResponseCompletionWithinSameTurn(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	p := provider.NewHTTP(server.URL+"/chat/completions", "local-test-key")
-	r, err := New(config.Config{Home: t.TempDir(), RootModel: "test"}, Options{Provider: func(string) (provider.Provider, error) { return p, nil }})
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test"}, Options{Provider: func(string) (provider.Provider, error) { return p, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
 	t.Cleanup(func() { close(release) })
-	if err := r.Root().Send("initial"); err != nil {
+	if err := r.Seat().Send("initial"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -466,7 +466,7 @@ func TestHTTPMessageWaitsForResponseCompletionWithinSameTurn(t *testing.T) {
 		t.Fatal("HTTP stream never started")
 	}
 	<-requests
-	if err := r.Root().Steer("during HTTP stream"); err != nil {
+	if err := r.Seat().Steer("during HTTP stream"); err != nil {
 		t.Fatal(err)
 	}
 	// Send a token instead of closing: cleanup still releases the handler on
@@ -487,8 +487,8 @@ func TestHTTPMessageWaitsForResponseCompletionWithinSameTurn(t *testing.T) {
 	}
 	requireMessage(t, next, "assistant", "paid output")
 	requireMessage(t, next, "user", "[steer] during HTTP stream")
-	waitAgentTurn(t, r, r.Root().ID)
-	path, _ := r.TranscriptPath(r.Root().ID)
+	waitAgentTurn(t, r, r.Seat().ID)
+	path, _ := r.TranscriptPath(r.Seat().ID)
 	entries, err := logx.Read(path)
 	if err != nil {
 		t.Fatal(err)

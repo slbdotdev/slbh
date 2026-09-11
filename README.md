@@ -1,7 +1,7 @@
 # slbh
 
 `slbh` is a small, Linux-first agent harness for coding work. It provides a
-Bubble Tea terminal UI, independent root and child agents, streaming
+Bubble Tea terminal UI, an independent seat agent and child agents, streaming
 OpenAI-compatible provider responses, durable JSONL transcripts, and managed
 shell jobs.
 
@@ -17,7 +17,7 @@ shell jobs.
 
 ## Quick start
 
-From the repository root:
+From the repository checkout:
 
 ```sh
 go run ./cmd/slbh
@@ -30,15 +30,15 @@ go build -o slbh ./cmd/slbh
 ./slbh
 ```
 
-The defaults are a `deepseek-v4-flash` root agent at `xhigh` effort and
+The defaults are a `deepseek-v4-flash` seat agent at `xhigh` effort and
 `zai/glm-5.3-flash` child agents at `high` effort. A new configuration has no
-approved models, so the default native root model stays disabled until models
+approved models, so the default native seat model stays disabled until models
 are selected.
 
 After starting a fresh configuration, run `/models`, wait for the catalogs,
-and assign the root, subagent, and leaf defaults with `r`, `s`, and `l`.
+and assign the seat, subagent, and leaf defaults with `r`, `s`, and `l`.
 Press `Esc` to save and close the model menu. `/model NAME` is a shortcut that
-approves and selects `NAME` for the root agent only; child defaults still need
+approves and selects `NAME` for the seat agent only; child defaults still need
 to be approved or supplied explicitly when a child is launched.
 
 ## Providers and configuration
@@ -60,9 +60,9 @@ These environment variables are read at startup:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SLBH_HOME` | `$HOME/.slbh` | Root directory for configuration, history, and runtime records. |
-| `SLBH_MODEL` | `deepseek-v4-flash` | Root agent model. |
-| `SLBH_EFFORT` | `xhigh` | Root reasoning effort. |
+| `SLBH_HOME` | `$HOME/.slbh` | Base directory for configuration, history, and runtime records. |
+| `SLBH_MODEL` | `deepseek-v4-flash` | Seat agent model. |
+| `SLBH_EFFORT` | `xhigh` | Seat reasoning effort. |
 | `SLBH_SUBAGENT_MODEL` | `zai/glm-5.3-flash` | Default child-agent model. |
 | `SLBH_LEAF_MODEL` | Same as `SLBH_SUBAGENT_MODEL` | Default depth-two child model. |
 | `SLBH_SUBAGENT_EFFORT` | `high` | Default child-agent effort. |
@@ -95,7 +95,7 @@ non-chat activity renders in compact blocks.
 | `Ctrl-J` | Insert a newline into the input. |
 | `Up` / `Down` | Recall input history; Down can move toward the agent list. |
 | `Tab` | Complete an unambiguous slash command. |
-| `Esc` | Return from the agent list or a child view toward the root. |
+| `Esc` | Return from the agent list or a child view toward the seat. |
 | `Enter` in agent list | View that agent without interrupting it. |
 | `PgUp` / `PgDn` | Scroll the viewport by five lines. |
 | `Ctrl-U` / `Ctrl-D` | Scroll the viewport up or down. |
@@ -111,14 +111,14 @@ Input history is stored as JSON lines in `$SLBH_HOME/history`, normally
 | `/exit`, `/quit`, `/q` | Stop agents and jobs, close transcripts, and exit. |
 | `/clear` | Clear the selected agent and start a new session. |
 | `/models` | Refresh provider catalogs and open the model menu. |
-| `/model NAME` | Approve and select a model for the root agent. |
-| `/effort LEVEL` | Change the root agent's effort. |
+| `/model NAME` | Approve and select a model for the seat agent. |
+| `/effort LEVEL` | Change the seat agent's effort. |
 | `/agents` | Record the current agent tree as a status event. |
 | `/jobs` | Record current jobs as a status event. |
 | `/compact` | Compact the selected agent's history. |
 
 When a child agent is selected, submitted text is sent to that child as a
-steering message. It does not create a new root turn.
+steering message. It does not create a new seat turn.
 
 ## Agents and tools
 
@@ -127,6 +127,10 @@ history, model, effort, working-directory setting, and message inbox. A turn
 may use up to 100 provider/tool rounds. Child launch requests return
 immediately; results use the same mandatory steering path as every other
 message.
+
+The parent names each subagent. Choose a title of three relevant words joined
+by hyphens, such as `inspect-api-cache`. This is naming guidance only; slbh does
+not enforce the format.
 
 **Mid-turn delivery is mandatory for every agent and every message.** Messages
 enter the recipient's context in FIFO order at the next API/tool call boundary,
@@ -163,7 +167,7 @@ headless and does not depend on the Bubble Tea UI. Set
 executable; the default is `codex` from `PATH`.
 
 Codex leaves must receive an explicit ChatGPT model slug because the native
-subagent and leaf defaults are provider-specific. A native root or level-one
+subagent and leaf defaults are provider-specific. A native seat or level-one
 agent launches one with `harness: "codex"` and a model such as
 `gpt-5.6-luna`; the name is passed unchanged to Codex and is not limited by
 slbh's native approved-model list. For example:
@@ -213,7 +217,7 @@ closes session transcripts. The same cleanup path handles slash-command exit,
 
 ## Development
 
-Run these checks from the repository root:
+Run these checks from the repository checkout:
 
 ```sh
 gofmt -w cmd/slbh/main.go internal/config/*.go internal/harness/*.go internal/id/*.go internal/job/*.go internal/logx/*.go internal/provider/*.go internal/tui/*.go
@@ -251,9 +255,9 @@ SLBH_RUN_CODEX_TESTS=1 go test -tags live_integration ./internal/harness \
   -run '^TestLiveCodexLeaf' -count=1 -timeout 10m
 ```
 
-The native-root continuation test also requires a native provider key:
+The native-seat continuation test also requires a native provider key:
 
 ```sh
 SLBH_RUN_NATIVE_CODEX_TESTS=1 go test -tags live_integration ./internal/harness \
-  -run '^TestLiveNativeRootCodexLeafContinuation$' -count=1 -timeout 10m
+  -run '^TestLiveNativeSeatCodexLeafContinuation$' -count=1 -timeout 10m
 ```
