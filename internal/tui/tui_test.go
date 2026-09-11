@@ -497,8 +497,41 @@ func TestNonChatBlocksRollAtTenLines(t *testing.T) {
 		t.Fatalf("consecutive non-chat content used %d lines, want %d", got, nonChatBlockHeight+4)
 	}
 	content := ansi.Strip(m.viewport.View())
-	if !strings.Contains(content, "tool quick_bash") || strings.Contains(content, "line 01") || !strings.Contains(content, "line 12") {
+	if !strings.Contains(content, "quick_bash(1)") || strings.Contains(content, "line 01") || !strings.Contains(content, "line 12") {
 		t.Fatalf("shared non-chat block did not keep the newest lines: %q", content)
+	}
+}
+
+func TestNonChatHeaderTalliesThinkingTimeAndToolCalls(t *testing.T) {
+	start := time.Unix(100, 0)
+	events := []harness.Event{
+		{Kind: "thinking", Time: start, Text: "first"},
+		{Kind: "thinking", Time: start.Add(2 * time.Second), Text: "second"},
+		{Kind: "tool", Time: start.Add(2 * time.Second), Text: `{`, Metadata: map[string]any{"name": "edit_file", "call_id": "edit-1", "index": 0}},
+		{Kind: "tool", Time: start.Add(2 * time.Second), Text: `}`, Metadata: map[string]any{"name": "edit_file", "call_id": "edit-1", "index": 0}},
+		{Kind: "tool_result", Time: start.Add(3 * time.Second), Text: "edited", Metadata: map[string]any{"name": "edit_file", "call_id": "edit-1"}},
+		{Kind: "tool", Time: start.Add(3 * time.Second), Text: `{}`, Metadata: map[string]any{"name": "edit_file", "call_id": "edit-2", "index": 1}},
+		{Kind: "tool_result", Time: start.Add(4 * time.Second), Text: "edited", Metadata: map[string]any{"name": "edit_file", "call_id": "edit-2"}},
+		{Kind: "thinking", Time: start.Add(10 * time.Second), Text: "next"},
+		{Kind: "thinking", Time: start.Add(13 * time.Second), Text: "thought"},
+		{Kind: "tool", Time: start.Add(20 * time.Second), Text: `{}`, Metadata: map[string]any{"name": "read_file", "call_id": "read-1", "index": 2}},
+		{Kind: "thinking", Time: start.Add(20 * time.Second), Text: "single chunk"},
+		{Kind: "tool", Time: start.Add(24 * time.Second), Text: `{}`, Metadata: map[string]any{"name": "read_file", "call_id": "read-2", "index": 3}},
+	}
+
+	header := ansi.Strip(nonChatHeader(events))
+	for _, want := range []string{"• thinking(16s)", "edit_file(2)", "read_file(2)"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("header=%q, missing %q", header, want)
+		}
+	}
+	unnamedResults := []harness.Event{
+		{Kind: "tool_result", Metadata: map[string]any{"call_id": "unnamed-1"}},
+		{Kind: "tool_result", Metadata: map[string]any{"call_id": "unnamed-2"}},
+		{Kind: "tool_result", Metadata: map[string]any{"call_id": "unnamed-3"}},
+	}
+	if got := ansi.Strip(nonChatHeader(unnamedResults)); !strings.Contains(got, "• tool(3)") {
+		t.Fatalf("unnamed tool header=%q, want tool(3)", got)
 	}
 }
 

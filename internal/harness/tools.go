@@ -635,7 +635,6 @@ func (r *Runtime) quickBash(agentID, base, script, cwd string) (string, error) {
 	if err != nil {
 		return stdout.String() + stderr.String(), err
 	}
-	r.emit(Event{AgentID: agentID, Kind: "tool_result", Text: stdout.String()})
 	return stdout.String(), nil
 }
 
@@ -665,14 +664,13 @@ func (r *Runtime) quickPy(agentID, base, script, cwd string) (string, error) {
 	if err != nil {
 		return stdout.String() + stderr.String(), err
 	}
-	r.emit(Event{AgentID: agentID, Kind: "tool_result", Text: stdout.String()})
 	return stdout.String(), nil
 }
 
 func jobSpec(agentID, script string, warn time.Duration, dir string) job.Spec {
-	return job.Spec{Author: agentID, Script: script, WarnAfter: warn, Dir: dir}
+	return job.Spec{Author: agentID, Script: script, ToolName: "long_job", WarnAfter: warn, Dir: dir}
 }
 
 func pythonJobSpec(agentID, script string, warn time.Duration, dir string) job.Spec {
-	return job.Spec{Author: agentID, Script: script, Command: pythonCommand(script), WarnAfter: warn, Dir: dir}
+	return job.Spec{Author: agentID, Script: script, Command: pythonCommand(script), ToolName: "long_py", WarnAfter: warn, Dir: dir}
 }

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/provider"
 )
 
@@ -508,6 +509,24 @@ func (a *Agent) receiveChildResult(child *Agent, text string) error {
 	return a.deliver(agentMessage{prompt: fmt.Sprintf("[result from %s] %s", child.Title, text), kind: "child_result", text: text, metadata: map[string]any{"child": child.ID}, senderTitle: child.Title})
 }
 
+func (a *Agent) receiveJobResult(snapshot job.Snapshot, stdout, stderr string) error {
+	text := formatJobResult(snapshot, stdout, stderr)
+	toolName := snapshot.ToolName
+	if toolName == "" {
+		toolName = "long_job"
+	}
+	return a.deliver(agentMessage{
+		prompt:   fmt.Sprintf("[result from %s %s]\n%s", toolName, snapshot.ID, text),
+		kind:     "job_result",
+		text:     text,
+		metadata: map[string]any{"job": snapshot.ID, "tool": toolName, "status": string(snapshot.Status), "exit_code": snapshot.ExitCode},
+	})
+}
+
+func formatJobResult(snapshot job.Snapshot, stdout, stderr string) string {
+	return fmt.Sprintf("status: %s\nexit_code: %d\nstdout:\n%s\nstderr:\n%s", snapshot.Status, snapshot.ExitCode, stdout, stderr)
+}
+
 // Compact keeps the most recent work and leaves a durable marker in the
 // transcript. It is intentionally deterministic and local: a provider outage
 // must never make compaction block the agent.
@@ -626,5 +645,11 @@ func compactMessages(history []provider.Message, keep int) ([]provider.Message, 
 }
 
 func systemPrompt(a *Agent) string {
-	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message, is a mandatory mid-turn steer: read and act on it during your current work. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
+	prompt := systemPromptLegacy(a)
+	prompt = strings.Replace(prompt, "Do not use quick_bash, long_job, sleep,", "Do not use quick_bash, long_job, quick_py, long_py, sleep,", 1)
+	return strings.Replace(prompt, "completed long_job output", "completed long_job/long_py output", 1)
+}
+
+func systemPromptLegacy(a *Agent) string {
+	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message and completed long_job output, is a mandatory mid-turn steer: read and act on it during your current work. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
 }

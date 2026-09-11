@@ -25,6 +25,7 @@ type Spec struct {
 	Author      string
 	Script      string
 	Command     []string
+	ToolName    string
 	Dir         string
 	WarnAfter   time.Duration
 	Environment []string
@@ -34,6 +35,7 @@ type Snapshot struct {
 	ID          string
 	Author      string
 	Script      string
+	ToolName    string
 	Status      Status
 	Started     time.Time
 	Finished    time.Time
@@ -48,6 +50,7 @@ type Job struct {
 	id        string
 	author    string
 	script    string
+	toolName  string
 	status    Status
 	started   time.Time
 	finished  time.Time
@@ -64,7 +67,7 @@ type Job struct {
 func (j *Job) Snapshot() Snapshot {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
-	return Snapshot{ID: j.id, Author: j.author, Script: j.script, Status: j.status, Started: j.started, Finished: j.finished, ExitCode: j.exitCode, StdoutBytes: j.stdout.Len(), StderrBytes: j.stderr.Len(), WarnAfter: j.warnAfter}
+	return Snapshot{ID: j.id, Author: j.author, Script: j.script, ToolName: j.toolName, Status: j.status, Started: j.started, Finished: j.finished, ExitCode: j.exitCode, StdoutBytes: j.stdout.Len(), StderrBytes: j.stderr.Len(), WarnAfter: j.warnAfter}
 }
 
 func (j *Job) Output() (string, string) {
@@ -95,10 +98,11 @@ func (j *Job) Kill() error {
 }
 
 type Manager struct {
-	mu        sync.RWMutex
-	jobs      map[string]*Job
-	logger    func(string) *logx.JSONL
-	onWarning func(Snapshot)
+	mu         sync.RWMutex
+	jobs       map[string]*Job
+	logger     func(string) *logx.JSONL
+	onWarning  func(Snapshot)
+	onComplete func(Snapshot, string, string)
 }
 
 func NewManager(log *logx.JSONL) *Manager {
@@ -115,6 +119,16 @@ func NewManagerWithLogger(logger func(string) *logx.JSONL) *Manager {
 func (m *Manager) SetWarningHandler(handler func(Snapshot)) {
 	m.mu.Lock()
 	m.onWarning = handler
+	m.mu.Unlock()
+}
+
+// SetCompletionHandler registers the callback used to hand a finished job's
+// captured output back to its owning runtime. The callback runs after the job
+// is marked finished and its Done channel is closed, so Output and Snapshot
+// are stable when it is invoked.
+func (m *Manager) SetCompletionHandler(handler func(Snapshot, string, string)) {
+	m.mu.Lock()
+	m.onComplete = handler
 	m.mu.Unlock()
 }
 
@@ -145,7 +159,7 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 	if m.logger != nil {
 		log = m.logger(spec.Author)
 	}
-	job := &Job{id: id.New("job"), author: spec.Author, script: spec.Script, status: Running, started: time.Now().UTC(), warnAfter: spec.WarnAfter, cancel: cancel, done: make(chan struct{}), cmd: cmd, log: log}
+	job := &Job{id: id.New("job"), author: spec.Author, script: spec.Script, toolName: spec.ToolName, status: Running, started: time.Now().UTC(), warnAfter: spec.WarnAfter, cancel: cancel, done: make(chan struct{}), cmd: cmd, log: log}
 	stdout, stderr := &limitedBuffer{}, &limitedBuffer{}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	m.mu.Lock()
@@ -201,6 +215,13 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 		cancel()
 		if job.log != nil {
 			_ = job.log.Append(logx.Entry{Agent: spec.Author, Kind: "job_end", Metadata: map[string]any{"job": job.id, "status": job.Snapshot().Status, "exit_code": job.Snapshot().ExitCode}})
+		}
+		m.mu.RLock()
+		handler := m.onComplete
+		m.mu.RUnlock()
+		if handler != nil {
+			stdoutText, stderrText := job.Output()
+			handler(job.Snapshot(), stdoutText, stderrText)
 		}
 	}()
 	return job, nil

@@ -74,6 +74,9 @@ type Runtime struct {
 	current      map[string]*agentSession
 	sessions     []*agentSession
 	events       chan Event
+	eventMu      sync.Mutex
+	eventQueue   []Event
+	eventWake    chan struct{}
 	provider     func(model string) (provider.Provider, error)
 	codexCommand string
 	catalog      []provider.Catalog
@@ -98,10 +101,11 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), events: options.Events, provider: options.Provider, codexCommand: options.CodexCommand}
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), events: options.Events, eventWake: make(chan struct{}, 1), provider: options.Provider, codexCommand: options.CodexCommand}
 	if r.events == nil {
 		r.events = make(chan Event, 1024)
 	}
+	go r.dispatchEvents()
 	if r.provider == nil {
 		r.provider = func(model string) (provider.Provider, error) {
 			return provider.ForModel(model, cfg.Endpoint)
@@ -110,6 +114,9 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	r.jobs = job.NewManagerWithLogger(r.sessionLogger)
 	r.jobs.SetWarningHandler(func(snapshot job.Snapshot) {
 		r.emit(Event{AgentID: snapshot.Author, Kind: "job_warning", Text: "job is still running", Metadata: map[string]any{"job": snapshot.ID, "warn_after": snapshot.WarnAfter.String()}})
+	})
+	r.jobs.SetCompletionHandler(func(snapshot job.Snapshot, stdout, stderr string) {
+		r.deliverJobResult(snapshot, stdout, stderr)
 	})
 	if err := r.writeMarker(); err != nil {
 		cancel()
@@ -449,10 +456,44 @@ func (r *Runtime) emit(event Event) {
 	if session != nil {
 		_ = session.log.Append(logx.Entry{Time: event.Time, Agent: event.AgentID, Session: session.id, Kind: event.Kind, Text: event.Text, Metadata: event.Metadata})
 	}
+	r.eventMu.Lock()
+	r.eventQueue = append(r.eventQueue, event)
+	r.eventMu.Unlock()
 	select {
-	case r.events <- event:
+	case r.eventWake <- struct{}{}:
 	default:
-		// The transcript is lossless; a slow UI must not stall token streaming.
+		// The wake channel is only a notification. Events stay in the FIFO
+		// queue until the dispatcher hands them to the UI.
+	}
+}
+
+func (r *Runtime) dispatchEvents() {
+	for {
+		select {
+		case <-r.eventWake:
+			r.flushEvents()
+		case <-r.ctx.Done():
+			return
+		}
+	}
+}
+
+func (r *Runtime) flushEvents() {
+	for {
+		r.eventMu.Lock()
+		if len(r.eventQueue) == 0 {
+			r.eventMu.Unlock()
+			return
+		}
+		event := r.eventQueue[0]
+		r.eventQueue[0] = Event{}
+		r.eventQueue = r.eventQueue[1:]
+		r.eventMu.Unlock()
+		select {
+		case r.events <- event:
+		case <-r.ctx.Done():
+			return
+		}
 	}
 }
 
@@ -479,6 +520,16 @@ func (r *Runtime) recordInferenceRequest(agent *Agent, round int, req provider.R
 // fabricating a provider turn.
 func (r *Runtime) EmitStatus(kind, text string) {
 	r.emit(Event{Kind: kind, Text: text})
+}
+
+func (r *Runtime) deliverJobResult(snapshot job.Snapshot, stdout, stderr string) {
+	agent, ok := r.Agent(snapshot.Author)
+	if !ok {
+		return
+	}
+	if err := agent.receiveJobResult(snapshot, stdout, stderr); err != nil {
+		r.emit(Event{AgentID: snapshot.Author, AgentTitle: agent.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"job": snapshot.ID}})
+	}
 }
 
 func (r *Runtime) Close() error {

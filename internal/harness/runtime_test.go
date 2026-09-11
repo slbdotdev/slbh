@@ -168,6 +168,26 @@ func TestRuntimeStreamsAndLogs(t *testing.T) {
 	}
 }
 
+func TestRuntimeDoesNotDropStreamEventsWhenUIFallsBehind(t *testing.T) {
+	r := testRuntime(t)
+	const count = 4096
+	for i := 0; i < count; i++ {
+		r.emit(Event{AgentID: r.Seat().ID, AgentTitle: "seat", Kind: "assistant", Text: "stream-event"})
+	}
+	received := 0
+	deadline := time.After(5 * time.Second)
+	for received < count {
+		select {
+		case event := <-r.Events():
+			if event.Text == "stream-event" {
+				received++
+			}
+		case <-deadline:
+			t.Fatalf("received %d/%d stream events", received, count)
+		}
+	}
+}
+
 func TestAgentSessionsHaveSeparateTranscriptsAndClearRotatesSelectedAgent(t *testing.T) {
 	r := testRuntime(t)
 	seat := r.Seat()

@@ -31,6 +31,40 @@ func TestManagerRunsAndCapturesOutput(t *testing.T) {
 	_ = runtime.GOOS // document that the manager uses a platform shell.
 }
 
+func TestManagerCompletionHandlerReceivesFinishedOutput(t *testing.T) {
+	m := NewManager(nil)
+	completed := make(chan struct{})
+	var got Snapshot
+	var stdout, stderr string
+	m.SetCompletionHandler(func(snapshot Snapshot, out, errOut string) {
+		got = snapshot
+		stdout, stderr = out, errOut
+		close(completed)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	job, err := m.Start(ctx, Spec{Author: "agent-test", Script: "echo completion-stdout & echo completion-stderr 1>&2", ToolName: "long_py"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-completed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("completion handler was not called")
+	}
+	select {
+	case <-job.Done():
+	default:
+		t.Fatal("completion handler ran before Done was closed")
+	}
+	if got.ID != job.Snapshot().ID || got.Status != Complete || got.ToolName != "long_py" {
+		t.Fatalf("snapshot=%#v job=%#v", got, job.Snapshot())
+	}
+	if !strings.Contains(stdout, "completion-stdout") || !strings.Contains(stderr, "completion-stderr") {
+		t.Fatalf("stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
 func TestManagerKill(t *testing.T) {
 	m := NewManager(nil)
 	ctx, cancel := context.WithCancel(context.Background())

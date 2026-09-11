@@ -34,6 +34,8 @@ const scrollStep = 5
 
 const headerBullet = "• "
 
+const thinkingStartMetadataKey = "_tui_thinking_start"
+
 var slashCommands = []string{
 	"/exit",
 	"/quit",
@@ -888,6 +890,27 @@ func (m *Model) refreshView() {
 		}
 		if len(visible) > 0 && visible[len(visible)-1].AgentID == event.AgentID && visible[len(visible)-1].Kind == event.Kind && (event.Kind == "assistant" || event.Kind == "thinking" || (event.Kind == "tool" && toolIndex(visible[len(visible)-1]) == toolIndex(event))) {
 			visible[len(visible)-1].Text += event.Text
+			if event.Kind == "thinking" {
+				// Keep the start of a streamed reasoning span while moving the
+				// merged event's timestamp forward to its latest chunk. The
+				// metadata is local to this rendered copy of the event.
+				previous := &visible[len(visible)-1]
+				start := previous.Time
+				if previous.Metadata != nil {
+					if saved, ok := previous.Metadata[thinkingStartMetadataKey].(time.Time); ok {
+						start = saved
+					}
+				}
+				metadata := make(map[string]any, len(previous.Metadata)+1)
+				for key, value := range previous.Metadata {
+					metadata[key] = value
+				}
+				metadata[thinkingStartMetadataKey] = start
+				previous.Metadata = metadata
+				if !event.Time.IsZero() {
+					previous.Time = event.Time
+				}
+			}
 			continue
 		}
 		visible = append(visible, event)
@@ -941,6 +964,12 @@ func renderEvent(event harness.Event, width int) string {
 		return renderChatBlock("user", event.Text, width, userBubble)
 	case "child_result":
 		return renderChatBlock(agentTitle(event, "subagent"), event.Text, width, subagentBubble)
+	case "job_result":
+		label := "job"
+		if name := metadataString(event, "tool"); name != "" {
+			label = name
+		}
+		return renderChatBlock(label, event.Text, width, subagentBubble)
 	case "steer":
 		if isForwardedAgentMessage(event) {
 			return renderChatBlock(agentTitle(event, "subagent"), event.Text, width, subagentBubble)
@@ -968,7 +997,7 @@ func renderHeader(label string) string {
 }
 
 func isMessage(event harness.Event) bool {
-	return event.Kind == "user" || event.Kind == "assistant" || event.Kind == "child_result" || isForwardedAgentMessage(event)
+	return event.Kind == "user" || event.Kind == "assistant" || event.Kind == "child_result" || event.Kind == "job_result" || isForwardedAgentMessage(event)
 }
 
 func isForwardedAgentMessage(event harness.Event) bool {
@@ -1092,13 +1121,174 @@ func renderNonChatBlock(events []harness.Event, parts []string, width int) strin
 }
 
 func nonChatHeader(events []harness.Event) string {
-	label := events[len(events)-1].Kind
-	for i := len(events) - 1; i >= 0; i-- {
-		if label := responseType(events[i]); label != "" {
-			return renderHeader(label)
+	labels := make([]string, 0, len(events))
+	if hasThinking(events) {
+		labels = append(labels, fmt.Sprintf("thinking(%ds)", totalThinkingSeconds(events)))
+	}
+	for _, tally := range toolCallTallies(events) {
+		labels = append(labels, fmt.Sprintf("%s(%d)", tally.name, tally.count))
+	}
+	seen := make(map[string]bool)
+	for _, event := range events {
+		if event.Kind == "thinking" || event.Kind == "tool" || event.Kind == "tool_result" {
+			continue
+		}
+		label := responseType(event)
+		if label != "" && !seen[label] {
+			labels = append(labels, label)
+			seen[label] = true
 		}
 	}
-	return renderHeader(label)
+	if len(labels) > 0 {
+		return renderHeader(strings.Join(labels, " · "))
+	}
+	return renderHeader(events[len(events)-1].Kind)
+}
+
+func hasThinking(events []harness.Event) bool {
+	for _, event := range events {
+		if event.Kind == "thinking" {
+			return true
+		}
+	}
+	return false
+}
+
+func totalThinkingSeconds(events []harness.Event) int {
+	var total time.Duration
+	var segmentStart, segmentEnd time.Time
+	addSegment := func() {
+		if !segmentStart.IsZero() && segmentEnd.After(segmentStart) {
+			total += segmentEnd.Sub(segmentStart)
+		}
+		segmentStart = time.Time{}
+		segmentEnd = time.Time{}
+	}
+	finishSegment := func(boundary time.Time) {
+		if !boundary.IsZero() && boundary.After(segmentEnd) {
+			segmentEnd = boundary
+		}
+		addSegment()
+	}
+	for _, event := range events {
+		if event.Kind != "thinking" {
+			// A provider may emit a single reasoning chunk. In that case the
+			// following event is the only available end marker for the thought.
+			finishSegment(event.Time)
+			continue
+		}
+		start, end := thinkingSpan(event)
+		if start.IsZero() || end.IsZero() {
+			continue
+		}
+		if segmentStart.IsZero() {
+			segmentStart, segmentEnd = start, end
+			continue
+		}
+		if start.Before(segmentStart) {
+			segmentStart = start
+		}
+		if end.After(segmentEnd) {
+			segmentEnd = end
+		}
+	}
+	finishSegment(time.Time{})
+	return int(total / time.Second)
+}
+
+func thinkingSpan(event harness.Event) (time.Time, time.Time) {
+	start, end := event.Time, event.Time
+	if event.Metadata != nil {
+		if saved, ok := event.Metadata[thinkingStartMetadataKey].(time.Time); ok {
+			start = saved
+		}
+	}
+	return start, end
+}
+
+type toolTally struct {
+	name  string
+	count int
+}
+
+type toolCallRecord struct {
+	name       string
+	tallyIndex int
+}
+
+func toolCallTallies(events []harness.Event) []toolTally {
+	tallies := make([]toolTally, 0)
+	records := make([]toolCallRecord, 0)
+	byID := make(map[string]int)
+	byIndex := make(map[string]int)
+	findTally := func(name string) int {
+		for index := range tallies {
+			if tallies[index].name == name {
+				return index
+			}
+		}
+		tallies = append(tallies, toolTally{name: name})
+		return len(tallies) - 1
+	}
+	for _, event := range events {
+		if event.Kind != "tool" && event.Kind != "tool_result" {
+			continue
+		}
+		name := toolName(event)
+		callID := metadataString(event, "call_id")
+		index := metadataString(event, "index")
+		recordIndex := -1
+		if callID != "" {
+			if existing, ok := byID[callID]; ok {
+				recordIndex = existing
+			}
+		} else if index != "" {
+			if existing, ok := byIndex[index]; ok {
+				recordIndex = existing
+			}
+		}
+		if recordIndex < 0 {
+			tallyIndex := findTally(name)
+			tallies[tallyIndex].count++
+			records = append(records, toolCallRecord{name: name, tallyIndex: tallyIndex})
+			recordIndex = len(records) - 1
+		} else if name != "tool" && records[recordIndex].name == "tool" {
+			// Some providers send the call name only on the first or a later
+			// streamed fragment. Move the already-counted call if its name
+			// becomes available later.
+			oldTally := records[recordIndex].tallyIndex
+			tallies[oldTally].count--
+			newTally := findTally(name)
+			tallies[newTally].count++
+			records[recordIndex].name = name
+			records[recordIndex].tallyIndex = newTally
+		}
+		if callID != "" {
+			byID[callID] = recordIndex
+		}
+		if index != "" {
+			byIndex[index] = recordIndex
+		}
+	}
+	return tallies
+}
+
+func toolName(event harness.Event) string {
+	if name := metadataString(event, "name"); name != "" {
+		return name
+	}
+	return "tool"
+}
+
+func metadataString(event harness.Event, key string) string {
+	if event.Metadata == nil {
+		return ""
+	}
+	value, ok := event.Metadata[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func responseType(event harness.Event) string {

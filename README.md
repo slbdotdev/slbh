@@ -94,7 +94,9 @@ The message viewport, multiline input bar, agent panel, and footer resize with
 the terminal. Streaming stays anchored to the bottom unless the viewport has
 been scrolled. Status, usage, and request telemetry remains in the event
 stream and transcript and is omitted from the normal message viewport; other
-non-chat activity renders in compact blocks.
+non-chat activity renders in compact blocks. Thinking blocks show elapsed
+seconds, and tool blocks show per-tool call tallies. Completed background jobs
+arrive automatically at the next API boundary with their captured output.
 
 | Key | Action |
 | --- | --- |

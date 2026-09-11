@@ -337,6 +337,78 @@ func TestInferenceToolBatchIsPreservedWhenMessagesArrive(t *testing.T) {
 	waitAgentTurn(t, r, a.ID)
 }
 
+func TestLongJobCompletionIsDeliveredAtNextBoundary(t *testing.T) {
+	r, p := messagingRuntime(t)
+	a := r.Seat()
+	a.SetModel("active")
+	a.WorkDir = t.TempDir()
+	release := filepath.Join(a.WorkDir, "release")
+	if runtime.GOOS == "windows" {
+		// Keep the job alive long enough for the continuation request to start.
+		// cmd.exe's ping is the portable sleep available in the Windows shell.
+		// The output is emitted only after the delay.
+	} else {
+		t.Cleanup(func() { _ = os.WriteFile(release, nil, 0600) })
+	}
+	if err := a.Send("start background work"); err != nil {
+		t.Fatal(err)
+	}
+	first := p.next(t)
+	script := "sleep 1; printf 'job-stdout\\n'; printf 'job-stderr\\n' >&2"
+	if runtime.GOOS == "windows" {
+		script = "ping 127.0.0.1 -n 3 > nul & echo job-stdout & echo job-stderr 1>&2"
+	}
+	args, err := json.Marshal(map[string]any{"script": script, "warn_after_seconds": 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.finish(t, toolEvent(0, "job-call", "long_job", string(args)))
+	second := p.next(t)
+	var jobID string
+	for _, message := range second.request.Messages {
+		if message.Role == "tool" && message.Name == "long_job" {
+			jobID = message.Content
+			break
+		}
+	}
+	if jobID == "" {
+		t.Fatalf("continuation did not retain long_job result: %#v", second.request.Messages)
+	}
+	job, ok := r.Jobs().Get(jobID)
+	if !ok {
+		t.Fatalf("long_job %q was not registered", jobID)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.WriteFile(release, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case <-job.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("long_job did not finish")
+	}
+	second.finish(t, textEvent("continued while job ran"))
+	third := p.next(t)
+	continuedAt := requireMessage(t, third.request, "assistant", "continued while job ran")
+	jobResultAt := -1
+	for i, message := range third.request.Messages {
+		if message.Role == "user" && strings.Contains(message.Content, "[result from long_job "+jobID+"]") {
+			jobResultAt = i
+			if !strings.Contains(message.Content, "job-stdout") || !strings.Contains(message.Content, "job-stderr") {
+				t.Fatalf("long_job result lost output: %q", message.Content)
+			}
+			break
+		}
+	}
+	if jobResultAt != continuedAt+1 {
+		t.Fatalf("long_job result index=%d, want immediately after assistant index=%d; messages=%#v", jobResultAt, continuedAt, third.request.Messages)
+	}
+	requireActiveTurn(t, r, a)
+	third.finish(t, textEvent("done"))
+	waitAgentTurn(t, r, a.ID)
+}
+
 func TestToolInFlightFinishesAndDeliversBeforeNextTool(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux/WSL bash boundary test")
