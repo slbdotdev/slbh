@@ -24,6 +24,7 @@ const (
 type Spec struct {
 	Author      string
 	Script      string
+	Command     []string
 	Dir         string
 	WarnAfter   time.Duration
 	Environment []string
@@ -122,7 +123,18 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 		return nil, fmt.Errorf("job script is empty")
 	}
 	ctx, cancel := context.WithCancel(parent)
-	cmd, err := shellCommand(ctx, spec.Script, spec.Dir)
+	var cmd *exec.Cmd
+	var err error
+	if len(spec.Command) > 0 {
+		if spec.Command[0] == "" {
+			cancel()
+			return nil, fmt.Errorf("job command is empty")
+		}
+		cmd = exec.CommandContext(ctx, spec.Command[0], spec.Command[1:]...)
+		cmd.Dir = spec.Dir
+	} else {
+		cmd, err = shellCommand(ctx, spec.Script, spec.Dir)
+	}
 	if err != nil {
 		cancel()
 		return nil, err

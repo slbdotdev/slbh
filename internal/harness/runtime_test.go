@@ -432,6 +432,36 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if !strings.Contains(strings.ReplaceAll(jobOutput, "\\", "/"), strings.ReplaceAll(filepath.Clean(outsideDir), "\\", "/")) {
 		t.Fatalf("long_job cwd=%q", jobOutput)
 	}
+	pythonScript := `import os; print(os.getcwd())`
+	pythonArgs, err := json.Marshal(map[string]string{"script": pythonScript, "cwd": outsideDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pythonOutput, err := r.ExecuteTool(r.Seat().ID, "quick_py", string(pythonArgs))
+	if err != nil || !strings.Contains(strings.ReplaceAll(pythonOutput, "\\", "/"), strings.ReplaceAll(filepath.Clean(outsideDir), "\\", "/")) {
+		t.Fatalf("quick_py cwd=%q err=%v", pythonOutput, err)
+	}
+	pythonJobArgs, err := json.Marshal(map[string]any{"script": `print("python job")`, "cwd": outsideDir, "warn_after_seconds": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pythonJobID, err := r.ExecuteTool(r.Seat().ID, "long_py", string(pythonJobArgs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pythonJob, ok := r.Jobs().Get(pythonJobID)
+	if !ok {
+		t.Fatalf("long_py %q was not registered", pythonJobID)
+	}
+	select {
+	case <-pythonJob.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("long_py did not finish")
+	}
+	pythonJobOutput, _ := pythonJob.Output()
+	if !strings.Contains(pythonJobOutput, "python job") {
+		t.Fatalf("long_py output=%q", pythonJobOutput)
+	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal(err)
 	}

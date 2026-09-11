@@ -36,6 +36,8 @@ func ToolDefinitions() []provider.Tool {
 		{Name: "write_file", Description: "Create a new file; refuse to overwrite an existing file.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []string{"path", "content"}}},
 		{Name: "quick_bash", Description: "Run a foreground shell command with a five second timeout.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"script": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}}, "required": []string{"script"}}},
 		{Name: "long_job", Description: "Start a non-blocking background shell job.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"script": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "warn_after_seconds": map[string]any{"type": "integer"}}, "required": []string{"script"}}},
+		{Name: "quick_py", Description: "Run Python code with the managed scientific environment and a five second timeout.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"script": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}}, "required": []string{"script"}}},
+		{Name: "long_py", Description: "Start a non-blocking background Python job in the managed scientific environment.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"script": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "warn_after_seconds": map[string]any{"type": "integer"}}, "required": []string{"script"}}},
 		{Name: "list_jobs", Description: "List all jobs in this runtime.", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
 		{Name: "read_job", Description: "Read current stdout and stderr for a job.", Parameters: stringArg("job_id")},
 		{Name: "kill_job", Description: "Kill a job owned by the calling agent.", Parameters: stringArg("job_id")},
@@ -105,6 +107,22 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 			return "", err
 		}
 		j, err := r.jobs.Start(r.ctx, jobSpec(agentID, value(a.Values, "script"), time.Duration(seconds)*time.Second, workingDir))
+		if err != nil {
+			return "", err
+		}
+		return j.Snapshot().ID, nil
+	case "quick_py":
+		return r.quickPy(agentID, base, value(a.Values, "script"), valueDefault(a.Values, "cwd", base))
+	case "long_py":
+		seconds := intValue(a.Values, "warn_after_seconds")
+		if seconds == 0 {
+			seconds = 5
+		}
+		workingDir, err := r.resolvePath(base, valueDefault(a.Values, "cwd", base))
+		if err != nil {
+			return "", err
+		}
+		j, err := r.jobs.Start(r.ctx, pythonJobSpec(agentID, value(a.Values, "script"), time.Duration(seconds)*time.Second, workingDir))
 		if err != nil {
 			return "", err
 		}
@@ -621,6 +639,40 @@ func (r *Runtime) quickBash(agentID, base, script, cwd string) (string, error) {
 	return stdout.String(), nil
 }
 
+func (r *Runtime) quickPy(agentID, base, script, cwd string) (string, error) {
+	if script == "" {
+		return "", fmt.Errorf("script is required")
+	}
+	if cwd == "" {
+		cwd = base
+	} else if cwd != base {
+		var err error
+		cwd, err = r.resolvePath(base, cwd)
+		if err != nil {
+			return "", err
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, pythonExecutable(), "-c", script)
+	cmd.Dir = cwd
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("quick_py timed out")
+	}
+	if err != nil {
+		return stdout.String() + stderr.String(), err
+	}
+	r.emit(Event{AgentID: agentID, Kind: "tool_result", Text: stdout.String()})
+	return stdout.String(), nil
+}
+
 func jobSpec(agentID, script string, warn time.Duration, dir string) job.Spec {
 	return job.Spec{Author: agentID, Script: script, WarnAfter: warn, Dir: dir}
+}
+
+func pythonJobSpec(agentID, script string, warn time.Duration, dir string) job.Spec {
+	return job.Spec{Author: agentID, Script: script, Command: pythonCommand(script), WarnAfter: warn, Dir: dir}
 }

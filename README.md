@@ -70,6 +70,7 @@ These environment variables are read at startup:
 | `SLBH_SUBAGENT_MODEL` | `zai/glm-5.3-flash` | Default child-agent model. |
 | `SLBH_LEAF_MODEL` | `local/q27-IQ2_M-96k` | Default depth-two child model. |
 | `SLBH_SUBAGENT_EFFORT` | `high` | Default child-agent effort. |
+| `SLBH_PYTHON` | managed `~/.local/share/slbh/python` interpreter | Python interpreter used by `quick_py` and `long_py`. |
 | `SLBH_ENDPOINT` | OpenRouter chat-completions endpoint | Compatible provider endpoint. |
 | `SLBH_LOCAL_ENDPOINT` | `http://fractal.wyvern-temperature.ts.net:11434/v1/chat/completions` | Desktop Ollama chat-completions endpoint. |
 
@@ -159,6 +160,7 @@ Available tools are:
 - Files: `glob`, `grep`, `read_file`, `read_bytes`, `read_lines`, `edit_file`,
   `apply_patch`, and `write_file`.
 - Jobs: `quick_bash`, `long_job`, `list_jobs`, `read_job`, and `kill_job`.
+- Python jobs: `quick_py`, `long_py`, `list_jobs`, `read_job`, and `kill_job`.
 - Agents: `list_subagents`, `launch_subagent`, `msg_subagent`, and
   `end_subagent`.
 
@@ -192,8 +194,11 @@ active agent's working directory. slbh does not add a filesystem permission
 boundary, so the operating system determines whether a requested path or
 working directory is usable. Reads and job output are bounded. `quick_bash` is
 for short foreground commands with a five-second direct-command timeout;
-`long_job` is the asynchronous option for work that may take longer. Jobs and
-agent activity are recorded in the active session transcript.
+`long_job` is the asynchronous option for work that may take longer. `quick_py`
+and `long_py` provide the same two shapes through the Ansible-managed
+scientific Python environment, with the system Python fallback retained for
+unmanaged development checkouts. Jobs and agent activity are recorded in the
+active session transcript.
 
 ## Runtime data
 

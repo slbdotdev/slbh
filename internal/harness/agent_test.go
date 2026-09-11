@@ -63,7 +63,7 @@ func TestSystemPromptDirectsAsyncChildHandling(t *testing.T) {
 	for _, phrase := range []string{
 		"launch_subagent returns immediately",
 		"do not block this turn waiting for a child",
-		"Do not use quick_bash, long_job, sleep, polling, or shell wait loops",
+		"Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops",
 		"end your turn",
 		"mandatory mid-turn steer",
 		"next API/tool call boundary",
