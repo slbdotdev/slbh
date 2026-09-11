@@ -26,7 +26,7 @@ func ToolDefinitions() []provider.Tool {
 		return map[string]any{"type": "object", "properties": map[string]any{name: map[string]any{"type": "string"}}, "required": []string{name}}
 	}
 	return []provider.Tool{
-		{Name: "glob", Description: "Find files by a glob pattern under the working directory.", Parameters: stringArg("pattern")},
+		{Name: "glob", Description: "Find files by a glob pattern.", Parameters: stringArg("pattern")},
 		{Name: "grep", Description: "Search text using a regular expression.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"pattern": map[string]any{"type": "string"}, "path": map[string]any{"type": "string"}}, "required": []string{"pattern"}}},
 		{Name: "read_file", Description: "Read a whole file up to 100k bytes.", Parameters: stringArg("path")},
 		{Name: "read_bytes", Description: "Read an inclusive byte range from a file.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "start": map[string]any{"type": "integer"}, "end": map[string]any{"type": "integer"}}, "required": []string{"path", "start", "end"}}},
@@ -40,7 +40,15 @@ func ToolDefinitions() []provider.Tool {
 		{Name: "read_job", Description: "Read current stdout and stderr for a job.", Parameters: stringArg("job_id")},
 		{Name: "kill_job", Description: "Kill a job owned by the calling agent.", Parameters: stringArg("job_id")},
 		{Name: "list_subagents", Description: "List this runtime's agent tree.", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
-		{Name: "launch_subagent", Description: "Launch a child agent up to depth two; returns immediately. Omit model to use the configured subagent default and choose from the approved model guidance. Honor an explicit user request for another model. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"title": map[string]any{"type": "string"}, "harness": map[string]any{"type": "string"}, "model": map[string]any{"type": "string", "description": "Optional model ID; use the approved model guidance unless the user explicitly requests another model."}, "effort": map[string]any{"type": "string"}, "brief": map[string]any{"type": "string"}, "warn_after_seconds": map[string]any{"type": "integer"}, "working_dir": map[string]any{"type": "string"}}, "required": []string{"title", "brief"}}},
+		{Name: "launch_subagent", Description: "Launch a child agent up to depth two; returns immediately. Omit model for a native child to use its configured default. For a Codex leaf, set harness to codex and pass the exact ChatGPT model slug in model; Codex does not use the native approval list. Honor an explicit user model request. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.", Parameters: map[string]any{"type": "object", "properties": map[string]any{
+			"title":              map[string]any{"type": "string"},
+			"harness":            map[string]any{"type": "string", "enum": []string{"native", "codex"}, "description": "Harness for the child. Omit for native; use codex for a headless Codex ChatGPT leaf."},
+			"model":              map[string]any{"type": "string", "description": "Model ID. For harness codex, pass the exact ChatGPT model slug (for example gpt-5.6-luna); it may be any model available to the Codex account."},
+			"effort":             map[string]any{"type": "string"},
+			"brief":              map[string]any{"type": "string"},
+			"warn_after_seconds": map[string]any{"type": "integer"},
+			"working_dir":        map[string]any{"type": "string"},
+		}, "required": []string{"title", "brief"}}},
 		{Name: "msg_subagent", Description: "Send a mandatory mid-turn steer to any agent in this runtime, including your parent or siblings. FIFO delivery at the next API/tool call boundary; wakes idle recipients. Never waits for turn completion or cancels in-flight work.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string"}, "message": map[string]any{"type": "string"}}, "required": []string{"agent_id", "message"}}},
 		{Name: "end_subagent", Description: "Stop a child agent.", Parameters: stringArg("agent_id")},
 	}
@@ -92,12 +100,9 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 		if seconds == 0 {
 			seconds = 5
 		}
-		workingDir := valueDefault(a.Values, "cwd", base)
-		if workingDir != base {
-			workingDir, err = r.resolveFrom(base, workingDir)
-			if err != nil {
-				return "", err
-			}
+		workingDir, err := r.resolvePath(base, valueDefault(a.Values, "cwd", base))
+		if err != nil {
+			return "", err
 		}
 		j, err := r.jobs.Start(r.ctx, jobSpec(agentID, value(a.Values, "script"), time.Duration(seconds)*time.Second, workingDir))
 		if err != nil {
@@ -190,11 +195,7 @@ func jsonString(value any) (string, error) {
 	return string(b), err
 }
 
-func (r *Runtime) resolve(path string) (string, error) {
-	return r.resolveFrom(r.workDir, path)
-}
-
-func (r *Runtime) resolveFrom(base, path string) (string, error) {
+func (r *Runtime) resolvePath(base, path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
@@ -205,14 +206,6 @@ func (r *Runtime) resolveFrom(base, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	root, err := filepath.Abs(base)
-	if err != nil {
-		return "", err
-	}
-	rel, err := filepath.Rel(root, clean)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path is outside working directory")
-	}
 	return clean, nil
 }
 
@@ -220,13 +213,19 @@ func (r *Runtime) glob(base, pattern string) (string, error) {
 	if pattern == "" {
 		return "", fmt.Errorf("pattern is required")
 	}
-	pattern = filepath.Join(base, pattern)
+	absolute := filepath.IsAbs(pattern)
+	pattern, err := r.resolvePath(base, pattern)
+	if err != nil {
+		return "", err
+	}
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return "", err
 	}
-	for i := range matches {
-		matches[i], _ = filepath.Rel(base, matches[i])
+	if !absolute {
+		for i := range matches {
+			matches[i], _ = filepath.Rel(base, matches[i])
+		}
 	}
 	sort.Strings(matches)
 	return strings.Join(matches, "\n"), nil
@@ -237,7 +236,8 @@ func (r *Runtime) grep(base, pattern, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	root, err := r.resolveFrom(base, path)
+	absolute := filepath.IsAbs(path)
+	root, err := r.resolvePath(base, path)
 	if err != nil {
 		return "", err
 	}
@@ -262,8 +262,11 @@ func (r *Runtime) grep(base, pattern, path string) (string, error) {
 		for scanner.Scan() {
 			line++
 			if re.MatchString(scanner.Text()) {
-				rel, _ := filepath.Rel(base, file)
-				fmt.Fprintf(&out, "%s:%d:%s\n", rel, line, scanner.Text())
+				display := file
+				if !absolute {
+					display, _ = filepath.Rel(base, file)
+				}
+				fmt.Fprintf(&out, "%s:%d:%s\n", display, line, scanner.Text())
 			}
 		}
 		return scanner.Err()
@@ -272,7 +275,7 @@ func (r *Runtime) grep(base, pattern, path string) (string, error) {
 }
 
 func (r *Runtime) readFile(base, path string) (string, error) {
-	file, err := r.resolveFrom(base, path)
+	file, err := r.resolvePath(base, path)
 	if err != nil {
 		return "", err
 	}
@@ -292,7 +295,7 @@ func (r *Runtime) readBytes(base, path string, start, end int) (string, error) {
 	if start < 0 || end < start || end-start+1 > 100*1024 {
 		return "", fmt.Errorf("byte range must be zero-based, inclusive, and at most 100k bytes")
 	}
-	file, err := r.resolveFrom(base, path)
+	file, err := r.resolvePath(base, path)
 	if err != nil {
 		return "", err
 	}
@@ -324,7 +327,7 @@ func (r *Runtime) readLines(base, path string, start, end int) (string, error) {
 	if start < 1 || end < start {
 		return "", fmt.Errorf("line range must be one-based and inclusive")
 	}
-	file, err := r.resolveFrom(base, path)
+	file, err := r.resolvePath(base, path)
 	if err != nil {
 		return "", err
 	}
@@ -349,7 +352,7 @@ func (r *Runtime) readLines(base, path string, start, end int) (string, error) {
 }
 
 func (r *Runtime) editFile(base, path, old, replacement string) (string, error) {
-	file, err := r.resolveFrom(base, path)
+	file, err := r.resolvePath(base, path)
 	if err != nil {
 		return "", err
 	}
@@ -367,7 +370,7 @@ func (r *Runtime) editFile(base, path, old, replacement string) (string, error) 
 }
 
 func (r *Runtime) writeFile(base, path, content string) (string, error) {
-	file, err := r.resolveFrom(base, path)
+	file, err := r.resolvePath(base, path)
 	if err != nil {
 		return "", err
 	}
@@ -438,7 +441,7 @@ func (r *Runtime) applyPatch(base, patch string) (string, error) {
 		}
 		return "applied", nil
 	}
-	cmd := exec.Command("git", "apply", "--whitespace=nowarn", "-")
+	cmd := exec.Command("git", "apply", "--unsafe-paths", "--whitespace=nowarn", "-")
 	cmd.Dir = base
 	cmd.Stdin = strings.NewReader(patch)
 	var stderr bytes.Buffer
@@ -471,7 +474,7 @@ func (r *Runtime) applyAnthropicPatch(base, patch string) error {
 				content = append(content, strings.TrimPrefix(lines[i], "+"))
 				i++
 			}
-			file, err := r.resolveFrom(base, path)
+			file, err := r.resolvePath(base, path)
 			if err != nil {
 				return err
 			}
@@ -488,7 +491,7 @@ func (r *Runtime) applyAnthropicPatch(base, patch string) error {
 		}
 		if strings.HasPrefix(header, "*** Delete File: ") {
 			path := strings.TrimSpace(strings.TrimPrefix(header, "*** Delete File: "))
-			file, err := r.resolveFrom(base, path)
+			file, err := r.resolvePath(base, path)
 			if err != nil {
 				return err
 			}
@@ -500,7 +503,7 @@ func (r *Runtime) applyAnthropicPatch(base, patch string) error {
 		}
 		if strings.HasPrefix(header, "*** Update File: ") {
 			path := strings.TrimSpace(strings.TrimPrefix(header, "*** Update File: "))
-			file, err := r.resolveFrom(base, path)
+			file, err := r.resolvePath(base, path)
 			if err != nil {
 				return err
 			}
@@ -596,7 +599,7 @@ func (r *Runtime) quickBash(agentID, base, script, cwd string) (string, error) {
 		cwd = base
 	} else if cwd != base {
 		var err error
-		cwd, err = r.resolveFrom(base, cwd)
+		cwd, err = r.resolvePath(base, cwd)
 		if err != nil {
 			return "", err
 		}

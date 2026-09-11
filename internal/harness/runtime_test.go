@@ -2,10 +2,12 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
-	"strconv"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,6 +37,38 @@ func (toolProvider) Stream(ctx context.Context, request provider.Request, sink p
 		}
 	}
 	return sink(provider.Event{Kind: provider.EventTool, ToolIndex: 0, ToolCallID: "call-1", ToolName: "list_subagents", Input: "{}"})
+}
+
+type reasoningToolProvider struct {
+	mu       sync.Mutex
+	requests []provider.Request
+}
+
+func (p *reasoningToolProvider) Stream(_ context.Context, request provider.Request, sink provider.StreamSink) error {
+	p.mu.Lock()
+	call := len(p.requests)
+	request.Messages = append([]provider.Message(nil), request.Messages...)
+	p.requests = append(p.requests, request)
+	p.mu.Unlock()
+	if call == 0 {
+		if err := sink(provider.Event{Kind: provider.EventReasoning, Text: "thought"}); err != nil {
+			return err
+		}
+		if err := sink(provider.Event{Kind: provider.EventText, Text: "before tool"}); err != nil {
+			return err
+		}
+		if err := sink(provider.Event{Kind: provider.EventTool, ToolIndex: 0, ToolCallID: "call-1", ToolName: "list_subagents", Input: "{}"}); err != nil {
+			return err
+		}
+		return sink(provider.Event{Kind: provider.EventTool, ToolIndex: 1, ToolCallID: "call-2", ToolName: "list_subagents", Input: "{}"})
+	}
+	return sink(provider.Event{Kind: provider.EventText, Text: "done"})
+}
+
+func (p *reasoningToolProvider) snapshot() []provider.Request {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]provider.Request(nil), p.requests...)
 }
 
 type usageProvider struct{}
@@ -279,30 +313,120 @@ func TestDepthAndSteerIsolation(t *testing.T) {
 	}
 }
 
-func TestToolsStayInWorkingDirectory(t *testing.T) {
+func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	r := testRuntime(t)
-	dir := t.TempDir()
-	r.workDir = dir
-	r.Root().WorkDir = dir
-	path := filepath.Join("nested", "file.txt")
-	if _, err := r.ExecuteTool(r.Root().ID, "write_file", `{"path":"nested/file.txt","content":"one\ntwo\n"}`); err != nil {
+	workDir := t.TempDir()
+	outsideDir := t.TempDir()
+	r.workDir = workDir
+	r.Root().WorkDir = workDir
+	path := filepath.Join(outsideDir, "nested", "file.txt")
+	writeArgs, err := json.Marshal(map[string]string{"path": path, "content": "one\ntwo\n"})
+	if _, err := r.ExecuteTool(r.Root().ID, "write_file", string(writeArgs)); err != nil {
 		t.Fatal(err)
 	}
-	lines, err := r.ExecuteTool(r.Root().ID, "read_lines", `{"path":"nested/file.txt","start":2,"end":2}`)
+	globArgs, err := json.Marshal(map[string]string{"pattern": filepath.Join(outsideDir, "nested", "*.txt")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := r.ExecuteTool(r.Root().ID, "glob", string(globArgs))
+	if err != nil || !strings.Contains(matches, filepath.Clean(path)) {
+		t.Fatalf("glob=%q err=%v", matches, err)
+	}
+	grepArgs, err := json.Marshal(map[string]string{"pattern": "two", "path": path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grep, err := r.ExecuteTool(r.Root().ID, "grep", string(grepArgs))
+	if err != nil || !strings.Contains(grep, filepath.Clean(path)+":2:two") {
+		t.Fatalf("grep=%q err=%v", grep, err)
+	}
+	readLinesArgs, err := json.Marshal(map[string]any{"path": path, "start": 2, "end": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines, err := r.ExecuteTool(r.Root().ID, "read_lines", string(readLinesArgs))
 	if err != nil || !strings.Contains(lines, "2:two") {
 		t.Fatalf("lines=%q err=%v", lines, err)
 	}
-	if _, err := r.ExecuteTool(r.Root().ID, "edit_file", `{"path":"nested/file.txt","old":"one","new":"ONE"}`); err != nil {
+	editArgs, err := json.Marshal(map[string]string{"path": path, "old": "one", "new": "ONE"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	patch := "*** Begin Patch\n*** Update File: nested/file.txt\n@@\n-two\n+TWO\n*** End Patch"
-	if _, err := r.ExecuteTool(r.Root().ID, "apply_patch", `{"patch":`+strconv.Quote(patch)+`}`); err != nil {
+	if _, err := r.ExecuteTool(r.Root().ID, "edit_file", string(editArgs)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.ExecuteTool(r.Root().ID, "read_file", `{"path":"../outside.txt"}`); err == nil {
-		t.Fatal("expected path traversal error")
+	readArgs, err := json.Marshal(map[string]string{"path": path})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
+	content, err := r.ExecuteTool(r.Root().ID, "read_file", string(readArgs))
+	if err != nil || content != "ONE\ntwo\n" {
+		t.Fatalf("content=%q err=%v", content, err)
+	}
+	relativePath, err := filepath.Rel(workDir, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relativeReadArgs, err := json.Marshal(map[string]string{"path": relativePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relativeContent, err := r.ExecuteTool(r.Root().ID, "read_file", string(relativeReadArgs)); err != nil || relativeContent != content {
+		t.Fatalf("relative content=%q err=%v", relativeContent, err)
+	}
+	bytesArgs, err := json.Marshal(map[string]any{"path": path, "start": 0, "end": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bytes, err := r.ExecuteTool(r.Root().ID, "read_bytes", string(bytesArgs))
+	if err != nil || bytes != "ONE" {
+		t.Fatalf("bytes=%q err=%v", bytes, err)
+	}
+	patch := "*** Begin Patch\n*** Update File: " + filepath.ToSlash(path) + "\n@@\n-two\n+TWO\n*** End Patch"
+	patchArgs, err := json.Marshal(map[string]string{"patch": patch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ExecuteTool(r.Root().ID, "apply_patch", string(patchArgs)); err != nil {
+		t.Fatal(err)
+	}
+	if content, err := os.ReadFile(path); err != nil || string(content) != "ONE\nTWO\n" {
+		t.Fatalf("outside file content=%q err=%v", content, err)
+	}
+	cwdScript := "pwd"
+	if runtime.GOOS == "windows" {
+		cwdScript = "cd"
+	}
+	cwdArgs, err := json.Marshal(map[string]string{"script": cwdScript, "cwd": outsideDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwdOutput, err := r.ExecuteTool(r.Root().ID, "quick_bash", string(cwdArgs))
+	if err != nil || !strings.Contains(strings.ReplaceAll(cwdOutput, "\\", "/"), strings.ReplaceAll(filepath.Clean(outsideDir), "\\", "/")) {
+		t.Fatalf("quick_bash cwd=%q err=%v", cwdOutput, err)
+	}
+	jobArgs, err := json.Marshal(map[string]any{"script": cwdScript, "cwd": outsideDir, "warn_after_seconds": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID, err := r.ExecuteTool(r.Root().ID, "long_job", string(jobArgs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, ok := r.Jobs().Get(jobID)
+	if !ok {
+		t.Fatalf("long_job %q was not registered", jobID)
+	}
+	select {
+	case <-job.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("long_job did not finish")
+	}
+	jobOutput, _ := job.Output()
+	if !strings.Contains(strings.ReplaceAll(jobOutput, "\\", "/"), strings.ReplaceAll(filepath.Clean(outsideDir), "\\", "/")) {
+		t.Fatalf("long_job cwd=%q", jobOutput)
+	}
+	if _, err := os.Stat(path); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -331,6 +455,37 @@ func TestProviderToolCallsExecuteAndContinue(t *testing.T) {
 	}
 	if !sawResult {
 		t.Fatal("tool result event was not emitted")
+	}
+}
+
+func TestReasoningContentIsReplayedForToolContinuation(t *testing.T) {
+	p := &reasoningToolProvider{}
+	r, err := New(config.Config{Home: t.TempDir(), RootModel: "test", RootEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return p, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := r.Root().Send("use a tool"); err != nil {
+		t.Fatal(err)
+	}
+	waitAgentTurn(t, r, r.Root().ID)
+
+	requests := p.snapshot()
+	if len(requests) != 2 {
+		t.Fatalf("provider requests = %d, want 2", len(requests))
+	}
+	var toolMessages []*provider.Message
+	for i := range requests[1].Messages {
+		message := &requests[1].Messages[i]
+		if len(message.ToolCalls) > 0 {
+			toolMessages = append(toolMessages, message)
+		}
+	}
+	if len(toolMessages) != 2 {
+		t.Fatalf("continuation omitted the assistant tool call: %#v", requests[1].Messages)
+	}
+	if toolMessages[0].Content != "before tool" || toolMessages[0].ReasoningContent != "thought" || toolMessages[1].ReasoningContent != "thought" {
+		t.Fatalf("continuation lost assistant response state: %#v", toolMessages)
 	}
 }
 
@@ -384,6 +539,91 @@ func TestLeafSubagentUsesLeafDefault(t *testing.T) {
 	}
 	if got := levelTwo.Snapshot().Model; got != "level-two" {
 		t.Fatalf("level-two model = %q, want level-two", got)
+	}
+}
+
+func TestCodexLeafStartFailureDoesNotLeaveOrphanAgent(t *testing.T) {
+	r, err := New(config.Config{Home: t.TempDir(), RootModel: "root"}, Options{
+		Provider:     func(string) (provider.Provider, error) { return fakeProvider{}, nil },
+		CodexCommand: filepath.Join(t.TempDir(), "missing-codex"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, err := r.LaunchSubagentSpec(r.Root().ID, LaunchSpec{Title: "broken codex", Harness: "codex", Model: "gpt-test"}); err == nil {
+		t.Fatal("missing Codex executable unexpectedly launched")
+	}
+	agents := r.Agents()
+	if len(agents) != 1 || agents[0].Depth != 0 {
+		t.Fatalf("failed Codex launch left agents behind: %#v", agents)
+	}
+}
+
+func TestCodexLeafRequiresExplicitChatGPTModel(t *testing.T) {
+	r, err := New(config.Config{
+		Home: t.TempDir(), RootModel: "native-root", SubagentModel: "native-child", LeafModel: "native-leaf",
+		ApprovedModels: []string{"native-root", "native-child", "native-leaf"},
+	}, Options{
+		Provider:     func(string) (provider.Provider, error) { return fakeProvider{}, nil },
+		CodexCommand: filepath.Join(t.TempDir(), "missing-codex"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, err := r.LaunchSubagentSpec(r.Root().ID, LaunchSpec{Title: "missing model", Harness: "codex"}); err == nil || !strings.Contains(err.Error(), "explicit ChatGPT model") {
+		t.Fatalf("Codex launch error = %v, want explicit-model validation", err)
+	}
+	levelOne, err := r.LaunchSubagentSpec(r.Root().ID, LaunchSpec{Title: "native parent", Model: "native-child"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.LaunchSubagentSpec(levelOne.ID, LaunchSpec{Title: "missing model", Harness: "codex"}); err == nil || !strings.Contains(err.Error(), "explicit ChatGPT model") {
+		t.Fatalf("level-one Codex launch error = %v, want explicit-model validation", err)
+	}
+	if got := len(r.Agents()); got != 2 {
+		t.Fatalf("failed Codex validation left an agent behind: %d agents", got)
+	}
+}
+
+func TestModelGuidanceDescribesCodexModelSelection(t *testing.T) {
+	r := testRuntime(t)
+	guidance := r.ModelGuidance()
+	for _, want := range []string{"headless Codex app-server", `harness to "codex"`, "exact ChatGPT model slug", "independent of the native approval list"} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("model guidance missing %q: %s", want, guidance)
+		}
+	}
+}
+
+func TestLaunchSubagentToolAdvertisesCodexModelFields(t *testing.T) {
+	var launch provider.Tool
+	for _, tool := range ToolDefinitions() {
+		if tool.Name == "launch_subagent" {
+			launch = tool
+			break
+		}
+	}
+	if launch.Name == "" {
+		t.Fatal("launch_subagent tool is missing")
+	}
+	properties, ok := launch.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("launch_subagent properties = %#v", launch.Parameters["properties"])
+	}
+	harness, ok := properties["harness"].(map[string]any)
+	if !ok {
+		t.Fatalf("harness schema = %#v", properties["harness"])
+	}
+	enum, ok := harness["enum"].([]string)
+	if !ok || len(enum) != 2 || enum[0] != "native" || enum[1] != "codex" {
+		t.Fatalf("harness enum = %#v", harness["enum"])
+	}
+	model, ok := properties["model"].(map[string]any)
+	description, _ := model["description"].(string)
+	if !ok || !strings.Contains(description, "exact ChatGPT model slug") {
+		t.Fatalf("model schema = %#v", properties["model"])
 	}
 }
 

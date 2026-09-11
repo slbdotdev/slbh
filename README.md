@@ -8,7 +8,10 @@ shell jobs.
 ## Requirements
 
 - Go 1.27 or newer.
-- An API key for the provider used by the selected model.
+- An API key for any native provider model you select. Codex leaves use an
+  authenticated local `codex` executable instead.
+- To launch Codex leaves, `codex` must be on `PATH` (or be supplied through
+  `Options.CodexCommand` when embedding the runtime).
 - Linux is the primary target. WSL2 is supported; non-Linux builds use a
   shell fallback and do not provide Linux process-group semantics.
 
@@ -29,7 +32,8 @@ go build -o slbh ./cmd/slbh
 
 The defaults are a `deepseek-v4-flash` root agent at `xhigh` effort and
 `zai/glm-5.3-flash` child agents at `high` effort. A new configuration has no
-approved models, so the harness fails closed until models are selected.
+approved models, so the default native root model stays disabled until models
+are selected.
 
 After starting a fresh configuration, run `/models`, wait for the catalogs,
 and assign the root, subagent, and leaf defaults with `r`, `s`, and `l`.
@@ -69,19 +73,21 @@ catalogs for providers whose keys are present. The OpenRouter catalog is
 limited to models created within the last year. Model and effort settings from
 the environment take precedence over their persisted counterparts.
 
-Before a request, the harness estimates context usage and compacts history at
-70% of the active model's discovered context window. If model metadata is
-unavailable, it uses a 128,000-token fallback. Automatic compaction keeps the
-most recent 24 messages and writes a durable marker; `/compact` does the same
-on demand. Requests stream responses and include tool definitions, reasoning
-options where supported, usage, and a stable `prompt_cache_key`.
+For native provider agents, the harness estimates context usage before a
+request and compacts history at 70% of the active model's discovered context
+window. If model metadata is unavailable, it uses a 128,000-token fallback.
+Automatic compaction keeps the most recent 24 messages and writes a durable
+marker; `/compact` does the same on demand. Requests stream responses and
+include tool definitions, reasoning options where supported, usage, and a
+stable `prompt_cache_key`.
 
 ## TUI controls
 
 The message viewport, multiline input bar, agent panel, and footer resize with
 the terminal. Streaming stays anchored to the bottom unless the viewport has
-been scrolled. Status, usage, and lifecycle telemetry remains in the event
-stream and transcript but is hidden from the normal message viewport.
+been scrolled. Status, usage, and request telemetry remains in the event
+stream and transcript and is omitted from the normal message viewport; other
+non-chat activity renders in compact blocks.
 
 | Key | Action |
 | --- | --- |
@@ -116,10 +122,11 @@ steering message. It does not create a new root turn.
 
 ## Agents and tools
 
-The root agent can create children through depth two. Agents have independent
-histories, models, efforts, working directories, and message inboxes. A turn
+Native agents can create children through depth two. Each agent has its own
+history, model, effort, working-directory setting, and message inbox. A turn
 may use up to 100 provider/tool rounds. Child launch requests return
-immediately; results use the same mandatory steering path as every other message.
+immediately; results use the same mandatory steering path as every other
+message.
 
 **Mid-turn delivery is mandatory for every agent and every message.** Messages
 enter the recipient's context in FIFO order at the next API/tool call boundary,
@@ -145,16 +152,38 @@ Available tools are:
 - Agents: `list_subagents`, `launch_subagent`, `msg_subagent`, and
   `end_subagent`.
 
+`launch_subagent` accepts `harness: "codex"` for a Codex leaf launched by a
+native parent (at either supported child depth). The leaf runs a persistent
+`codex app-server --stdio` session in the requested working directory. Parent
+messages use Codex `turn/steer` while a turn is active and start a new turn
+when it is idle; Codex can send progress back with the private
+`slbh_message_parent` tool. Codex leaves cannot launch agents. This path is
+headless and does not depend on the Bubble Tea UI. Set
+`Options.CodexCommand` when embedding the runtime to use a particular Codex
+executable; the default is `codex` from `PATH`.
+
+Codex leaves must receive an explicit ChatGPT model slug because the native
+subagent and leaf defaults are provider-specific. A native root or level-one
+agent launches one with `harness: "codex"` and a model such as
+`gpt-5.6-luna`; the name is passed unchanged to Codex and is not limited by
+slbh's native approved-model list. For example:
+
+```json
+{"title":"codex worker","harness":"codex","model":"gpt-5.6-luna","brief":"..."}
+```
+
 `msg_subagent` addresses any agent in the runtime by ID, including a parent or
 sibling. Empty messages and delivery to stopped agents return errors. Successful
 submission acknowledges acceptance; the transcript records context insertion
 as `steer` or `child_result` at the call boundary.
 
-File operations are scoped to the active agent's working directory. Reads and
-job output are bounded. `quick_bash` is for short foreground commands with a
-five-second direct-command timeout; `long_job` is the asynchronous option for
-work that may take longer. Jobs and agent activity are recorded in the active
-session transcript.
+File arguments may be absolute or relative; relative paths resolve against the
+active agent's working directory. slbh does not add a filesystem permission
+boundary, so the operating system determines whether a requested path or
+working directory is usable. Reads and job output are bounded. `quick_bash` is
+for short foreground commands with a five-second direct-command timeout;
+`long_job` is the asynchronous option for work that may take longer. Jobs and
+agent activity are recorded in the active session transcript.
 
 ## Runtime data
 
@@ -212,4 +241,19 @@ key:
 ```sh
 SLBH_RUN_LIVE_TESTS=1 go test -tags live_integration ./internal/harness \
   -run TestLiveTranscriptReplayAndCache -count=1 -timeout 10m
+```
+
+The Codex leaf acceptance tests use the host's Codex login and are separately
+gated because they consume plan quota. Run the direct Codex-leaf tests with:
+
+```sh
+SLBH_RUN_CODEX_TESTS=1 go test -tags live_integration ./internal/harness \
+  -run '^TestLiveCodexLeaf' -count=1 -timeout 10m
+```
+
+The native-root continuation test also requires a native provider key:
+
+```sh
+SLBH_RUN_NATIVE_CODEX_TESTS=1 go test -tags live_integration ./internal/harness \
+  -run '^TestLiveNativeRootCodexLeafContinuation$' -count=1 -timeout 10m
 ```

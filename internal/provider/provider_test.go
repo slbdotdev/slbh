@@ -37,10 +37,13 @@ func TestStablePrefixKeyIgnoresUserTurns(t *testing.T) {
 func TestRequestPayloadRoundTripsExactly(t *testing.T) {
 	temperature := 0.2
 	req := Request{
-		Model:       "vendor/model",
-		Effort:      "high",
-		System:      "stable system",
-		Messages:    []Message{{Role: "user", Content: "hello"}},
+		Model:  "vendor/model",
+		Effort: "high",
+		System: "stable system",
+		Messages: []Message{
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: "answer", ReasoningContent: "thought"},
+		},
 		Tools:       []Tool{{Name: "read_file", Description: "read", Parameters: map[string]any{"type": "object"}}},
 		CacheKey:    "slbh-test-cache",
 		Temperature: &temperature,

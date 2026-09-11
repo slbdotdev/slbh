@@ -212,6 +212,61 @@ func TestLiveTranscriptReplayAndCache(t *testing.T) {
 	t.Logf("second inference reported cached input tokens: %d", mustCachedTokens(t, live.usages()[1]))
 }
 
+func TestLiveNativeRootCodexLeafContinuation(t *testing.T) {
+	if os.Getenv("SLBH_RUN_NATIVE_CODEX_TESTS") != "1" {
+		t.Skip("set SLBH_RUN_NATIVE_CODEX_TESTS=1 to run the billed native-root/Codex-leaf acceptance test")
+	}
+	cfg := config.Load()
+	if model := os.Getenv("SLBH_LIVE_TEST_MODEL"); model != "" {
+		cfg.RootModel = model
+	}
+	if cfg.RootModel == "" {
+		cfg.RootModel = "deepseek-v4-flash"
+	}
+	if effort := os.Getenv("SLBH_LIVE_TEST_EFFORT"); effort != "" {
+		cfg.RootEffort = effort
+	}
+	if cfg.RootEffort == "" {
+		cfg.RootEffort = "xhigh"
+	}
+	// This test deliberately selects the root model for a temporary runtime;
+	// it must not depend on the user's persisted approval list.
+	cfg.ApprovedModels = []string{cfg.RootModel}
+	codexModel := os.Getenv("SLBH_CODEX_TEST_MODEL")
+	if codexModel == "" {
+		codexModel = "gpt-5.6-luna"
+	}
+	runtime, err := New(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	root := runtime.Root()
+	prompt := fmt.Sprintf("Launch one Codex leaf using harness codex and model %s. Give it this brief: reply with exactly NATIVE_CODEX_LEAF_OK and nothing else. After the leaf reports back, reply with exactly NATIVE_CODEX_LEAF_OK and nothing else.", codexModel)
+	if err := root.Send(prompt); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.NewTimer(8 * time.Minute)
+	defer deadline.Stop()
+	for {
+		select {
+		case event := <-runtime.Events():
+			if event.Kind == "error" {
+				t.Fatalf("native root/Codex leaf inference failed: %s", event.Text)
+			}
+			if event.AgentID == root.ID && event.Kind == "turn_done" {
+				for _, message := range root.History() {
+					if strings.Contains(message.Content, "NATIVE_CODEX_LEAF_OK") {
+						return
+					}
+				}
+			}
+		case <-deadline.C:
+			t.Fatal("native root/Codex leaf continuation did not finish")
+		}
+	}
+}
+
 func waitLiveTurn(t *testing.T, runtime *Runtime, count int) {
 	t.Helper()
 	deadline := time.NewTimer(8 * time.Minute)

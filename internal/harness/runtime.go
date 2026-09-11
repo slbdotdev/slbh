@@ -61,28 +61,30 @@ type agentSession struct {
 }
 
 type Runtime struct {
-	mu        sync.RWMutex
-	id        string
-	rootPath  string
-	workDir   string
-	config    config.Config
-	ctx       context.Context
-	cancel    context.CancelFunc
-	jobs      *job.Manager
-	agents    map[string]*Agent
-	rootID    string
-	current   map[string]*agentSession
-	sessions  []*agentSession
-	events    chan Event
-	provider  func(model string) (provider.Provider, error)
-	catalog   []provider.Catalog
-	closeOnce sync.Once
+	mu           sync.RWMutex
+	id           string
+	rootPath     string
+	workDir      string
+	config       config.Config
+	ctx          context.Context
+	cancel       context.CancelFunc
+	jobs         *job.Manager
+	agents       map[string]*Agent
+	rootID       string
+	current      map[string]*agentSession
+	sessions     []*agentSession
+	events       chan Event
+	provider     func(model string) (provider.Provider, error)
+	codexCommand string
+	catalog      []provider.Catalog
+	closeOnce    sync.Once
 }
 
 type Options struct {
-	Config   config.Config
-	Provider func(model string) (provider.Provider, error)
-	Events   chan Event
+	Config       config.Config
+	Provider     func(model string) (provider.Provider, error)
+	Events       chan Event
+	CodexCommand string
 }
 
 func New(cfg config.Config, options Options) (*Runtime, error) {
@@ -96,7 +98,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	r := &Runtime{id: runtimeID, rootPath: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), events: options.Events, provider: options.Provider}
+	r := &Runtime{id: runtimeID, rootPath: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), events: options.Events, provider: options.Provider, codexCommand: options.CodexCommand}
 	if r.events == nil {
 		r.events = make(chan Event, 1024)
 	}
@@ -127,6 +129,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	r.mu.Lock()
 	r.rootID = root.ID
 	r.mu.Unlock()
+	root.start()
 	r.emit(Event{AgentID: root.ID, AgentTitle: root.Title, Kind: "runtime", Text: "runtime started"})
 	return r, nil
 }
@@ -213,7 +216,7 @@ func (r *Runtime) ModelGuidance() string {
 		branches = append(branches, "no provider catalog loaded; use the configured default or honor an explicit user model request")
 	}
 	defaults := fmt.Sprintf("defaults are root=%q, subagent=%q, leaf=%q", cfg.RootModel, cfg.SubagentModel, cfg.LeafModel)
-	return "Model guidance: approved models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". Use the configured subagent default for level-one children and the leaf default for level-two children when no model is requested. A model explicitly requested by the user may override the approved list; do not invent model IDs."
+	return "Model guidance: approved models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". Use the configured subagent default for level-one children and the leaf default for level-two children when no model is requested. A model explicitly requested by the user may override the approved list; do not invent model IDs. Codex leaves use the headless Codex app-server and ChatGPT model slugs, independent of the native approval list. To launch one from a native root or level-one agent, set harness to \"codex\" and pass the exact ChatGPT model slug in model; never substitute a native default for a Codex leaf."
 }
 func (r *Runtime) Root() *Agent {
 	r.mu.RLock()
@@ -237,7 +240,6 @@ func (r *Runtime) newAgent(title, parentID string, depth int, model, effort stri
 	r.current[agent.ID] = session
 	r.sessions = append(r.sessions, session)
 	r.mu.Unlock()
-	agent.start()
 	return agent, nil
 }
 
@@ -296,14 +298,23 @@ func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	if parent.Depth >= 2 {
 		return nil, fmt.Errorf("agent depth limit is 2")
 	}
+	if parent.Harness != "native" {
+		return nil, fmt.Errorf("only native slbh agents may launch subagents")
+	}
 	if spec.Title == "" {
 		return nil, fmt.Errorf("subagent title is required")
 	}
-	model, effort := spec.Model, spec.Effort
+	if spec.Harness != "" && spec.Harness != "native" && spec.Harness != "codex" {
+		return nil, fmt.Errorf("unsupported harness %q", spec.Harness)
+	}
+	model, effort := strings.TrimSpace(spec.Model), strings.TrimSpace(spec.Effort)
 	r.mu.RLock()
 	cfg := r.config
 	r.mu.RUnlock()
 	if model == "" {
+		if spec.Harness == "codex" {
+			return nil, fmt.Errorf("Codex leaves require an explicit ChatGPT model in launch_subagent.model")
+		}
 		model = cfg.SubagentModel
 		if parent.Depth >= 1 && cfg.LeafModel != "" {
 			model = cfg.LeafModel
@@ -339,13 +350,40 @@ func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 		agent.Harness = "native"
 	}
 	agent.WorkDir = workingDir
+	if agent.Harness == "codex" {
+		if err := agent.startCodex(r.codexCommand); err != nil {
+			r.discardAgent(agent.ID)
+			return nil, err
+		}
+	} else {
+		agent.start()
+	}
 	r.emit(Event{AgentID: agent.ID, AgentTitle: spec.Title, Kind: "status", Text: "subagent launched", Metadata: map[string]any{"parent": parentID, "harness": agent.Harness, "working_dir": agent.WorkDir}})
 	if spec.Brief != "" {
 		if err := agent.Send(spec.Brief); err != nil {
+			agent.stop()
+			r.discardAgent(agent.ID)
 			return nil, err
 		}
 	}
 	return agent, nil
+}
+
+func (r *Runtime) discardAgent(agentID string) {
+	r.mu.Lock()
+	delete(r.agents, agentID)
+	session := r.current[agentID]
+	delete(r.current, agentID)
+	for i, candidate := range r.sessions {
+		if candidate == session {
+			r.sessions = append(r.sessions[:i], r.sessions[i+1:]...)
+			break
+		}
+	}
+	r.mu.Unlock()
+	if session != nil {
+		_ = session.log.Close()
+	}
 }
 
 func (r *Runtime) Agents() []AgentSnapshot {
@@ -391,8 +429,8 @@ func (r *Runtime) Clear(agentID string) error {
 	r.mu.Lock()
 	r.current[agentID] = session
 	r.sessions = append(r.sessions, session)
-	agent.ClearHistory()
 	r.mu.Unlock()
+	agent.ClearHistory()
 	return nil
 }
 

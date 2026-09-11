@@ -21,10 +21,13 @@ type Message struct {
 	Role string `json:"role"`
 	// Content must remain present even for assistant messages that contain
 	// only tool_calls. DeepSeek rejects those messages when content is omitted.
-	Content    string     `json:"content"`
-	Name       string     `json:"name,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	Content string `json:"content"`
+	// ReasoningContent is returned by thinking models and must be replayed on
+	// assistant continuations, especially when the response contains tools.
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	Name             string     `json:"name,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 }
 
 type ToolCall struct {

@@ -49,6 +49,8 @@ type Agent struct {
 	cacheHits     int
 	cacheMisses   int
 	historyEpoch  uint64
+	codexMu       sync.RWMutex
+	codex         *codexLeaf
 }
 
 func newAgent(runtime *Runtime, agentID, title, parentID string, depth int, model, effort string) *Agent {
@@ -56,12 +58,19 @@ func newAgent(runtime *Runtime, agentID, title, parentID string, depth int, mode
 }
 
 func (a *Agent) start() {
+	a.startNative()
+}
+
+func (a *Agent) startNative() {
 	ctx, cancel := context.WithCancel(a.runtime.ctx)
 	a.cancel = cancel
 	go a.loop(ctx)
 }
 
 func (a *Agent) Send(prompt string) error {
+	if codex := a.codexBackend(); codex != nil {
+		return codex.send(prompt, "user")
+	}
 	return a.deliver(agentMessage{prompt: prompt, kind: "user", text: prompt})
 }
 
@@ -70,6 +79,9 @@ func (a *Agent) Send(prompt string) error {
 func (a *Agent) Steer(message string) error {
 	if strings.TrimSpace(message) == "" {
 		return fmt.Errorf("message is empty")
+	}
+	if codex := a.codexBackend(); codex != nil {
+		return codex.send(message, "steer")
 	}
 	return a.deliver(agentMessage{prompt: "[steer] " + message, kind: "steer", text: message})
 }
@@ -153,6 +165,15 @@ func (a *Agent) History() []provider.Message {
 // provider request keeps its local snapshot, but its result cannot restore the
 // history that was cleared while it was in flight.
 func (a *Agent) ClearHistory() {
+	if codex := a.codexBackend(); codex != nil {
+		a.mu.Lock()
+		a.history = nil
+		a.contextUsed = 0
+		a.historyEpoch++
+		a.mu.Unlock()
+		codex.clear()
+		return
+	}
 	a.mu.Lock()
 	a.history = nil
 	a.contextUsed = 0
@@ -162,6 +183,10 @@ func (a *Agent) ClearHistory() {
 
 func (a *Agent) stop() {
 	a.stopOnce.Do(func() {
+		if codex := a.codexBackend(); codex != nil {
+			codex.stop()
+			return
+		}
 		a.mu.Lock()
 		a.stopped = true
 		a.mu.Unlock()
@@ -173,6 +198,12 @@ func (a *Agent) stop() {
 		case <-time.After(2 * time.Second):
 		}
 	})
+}
+
+func (a *Agent) codexBackend() *codexLeaf {
+	a.codexMu.RLock()
+	defer a.codexMu.RUnlock()
+	return a.codex
 }
 
 func (a *Agent) loop(ctx context.Context) {
@@ -232,15 +263,22 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			return
 		}
 		var answer strings.Builder
+		var reasoning strings.Builder
 		calls := make(map[int]*provider.ToolCall)
 		err = provider.Retry(ctx, 3, func() error {
 			// A failed API attempt is also a call boundary. Retain partial prose
 			// and accept new input before retrying; incomplete tool fragments stay
 			// in the transcript and cannot be executed as successful calls.
-			if answer.Len() > 0 {
-				history = append(history, provider.Message{Role: "assistant", Content: answer.String() + "\n[API attempt failed before completion]"})
+			if answer.Len() > 0 || reasoning.Len() > 0 {
+				content := answer.String()
+				if content != "" {
+					content += "\n"
+				}
+				content += "[API attempt failed before completion]"
+				history = append(history, provider.Message{Role: "assistant", Content: content, ReasoningContent: reasoning.String()})
 			}
 			answer.Reset()
+			reasoning.Reset()
 			calls = make(map[int]*provider.ToolCall)
 			history = a.appendMessages(history, a.takeMessages())
 			req := provider.Request{Model: model, Effort: effort, System: system, Messages: history, Tools: tools, CacheKey: provider.StablePrefixKey(provider.Request{Model: model, System: system, Tools: tools})}
@@ -252,6 +290,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 					answer.WriteString(event.Text)
 					a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "assistant", Text: event.Text})
 				case provider.EventReasoning:
+					reasoning.WriteString(event.Text)
 					a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "thinking", Text: event.Text})
 				case provider.EventTool:
 					call := calls[event.ToolIndex]
@@ -279,15 +318,20 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 		}
 		// Paid-for output is retained exactly once, even when new messages
 		// arrived during this request. Delivery never cancels or restarts it.
-		if answer.Len() > 0 {
-			history = append(history, provider.Message{Role: "assistant", Content: answer.String()})
-		}
+		responseContent := answer.String()
+		responseReasoning := reasoning.String()
 		if err != nil {
+			if responseContent != "" || responseReasoning != "" {
+				history = append(history, provider.Message{Role: "assistant", Content: responseContent, ReasoningContent: responseReasoning})
+			}
 			history = a.appendMessages(history, a.takeMessages())
 			a.fail(err)
 			return
 		}
 		if len(calls) == 0 {
+			if responseContent != "" || responseReasoning != "" {
+				history = append(history, provider.Message{Role: "assistant", Content: responseContent, ReasoningContent: responseReasoning})
+			}
 			// Finish and message acceptance share one lock. Input accepted before
 			// this point must be consumed in THIS turn, even after stream EOF.
 			a.mu.Lock()
@@ -311,7 +355,6 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "turn_done"})
 			return
 		}
-		history = a.appendMessages(history, a.takeMessages())
 		ordered := make([]int, 0, len(calls))
 		for index := range calls {
 			ordered = append(ordered, index)
@@ -323,17 +366,24 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 				}
 			}
 		}
-		for _, index := range ordered {
+		for callNumber, index := range ordered {
 			if ctx.Err() != nil {
 				return
 			}
-			history = a.appendMessages(history, a.takeMessages())
+			if callNumber > 0 {
+				history = a.appendMessages(history, a.takeMessages())
+			}
 			call := calls[index]
 			// Represent a returned batch as ordered call/result pairs. This
 			// permits messages at EVERY tool boundary without orphaning a tool
 			// result or inserting user input inside an unresolved tool batch.
 			// Every already-produced tool call still executes exactly once.
-			history = append(history, provider.Message{Role: "assistant", ToolCalls: []provider.ToolCall{*call}})
+			message := provider.Message{Role: "assistant", Content: "", ReasoningContent: responseReasoning, ToolCalls: []provider.ToolCall{*call}}
+			if callNumber == 0 {
+				message.Content = responseContent
+				message.ReasoningContent = responseReasoning
+			}
+			history = append(history, message)
 			result, toolErr := a.runtime.ExecuteTool(a.ID, call.Function.Name, call.Function.Arguments)
 			if toolErr != nil {
 				result = "tool error: " + toolErr.Error()
@@ -432,6 +482,10 @@ func (a *Agent) receiveChildResult(child *Agent, text string) error {
 // transcript. It is intentionally deterministic and local: a provider outage
 // must never make compaction block the agent.
 func (a *Agent) Compact(keep int) int {
+	if codex := a.codexBackend(); codex != nil {
+		codex.compact()
+		return 0
+	}
 	if keep < 4 {
 		keep = 4
 	}
