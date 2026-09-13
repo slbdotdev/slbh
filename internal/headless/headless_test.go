@@ -3,6 +3,7 @@ package headless
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,14 @@ type stalling struct{}
 func (stalling) Stream(ctx context.Context, _ provider.Request, _ provider.StreamSink) error {
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+// refusing fails every attempt outright, the shape of a provider that rejects the request
+// itself (a 4xx/5xx) rather than one that is slow.
+type refusing struct{}
+
+func (refusing) Stream(_ context.Context, _ provider.Request, _ provider.StreamSink) error {
+	return errors.New("provider returned 500 Internal Server Error")
 }
 
 func newRuntime(t *testing.T, p provider.Provider) *harness.Runtime {
@@ -81,6 +90,26 @@ func TestRunStopsAtTheWallCap(t *testing.T) {
 	}
 	if res.StopReason != "wall_cap" {
 		t.Fatalf("stop_reason = %q, want wall_cap", res.StopReason)
+	}
+}
+
+// A provider that refuses ends the seat's turn without a turn_done. Run must return then,
+// with the reason named, instead of sitting out the whole wall cap; a bench caller with a
+// fifteen-minute cap would otherwise pay it in full for every refused request.
+func TestRunStopsWhenTheSeatFails(t *testing.T) {
+	rt := newRuntime(t, refusing{})
+	res, err := Run(rt, Options{Prompt: "hello", Timeout: 30 * time.Second})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.StopReason != "error" {
+		t.Fatalf("stop_reason = %q, want error", res.StopReason)
+	}
+	if res.Errors < 1 {
+		t.Fatalf("errors = %d, want >= 1", res.Errors)
+	}
+	if res.WallS >= 10 {
+		t.Fatalf("wall_s = %v, want well under the 30s cap", res.WallS)
 	}
 }
 

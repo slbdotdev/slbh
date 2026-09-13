@@ -31,7 +31,7 @@ type Options struct {
 type Result struct {
 	AgentID      string  `json:"agent_id"`
 	Model        string  `json:"model"`
-	StopReason   string  `json:"stop_reason"` // "done" or "wall_cap"
+	StopReason   string  `json:"stop_reason"` // "done", "error" or "wall_cap"
 	Turns        int     `json:"turns"`
 	ToolCalls    int     `json:"tool_calls"`
 	ToolResults  int     `json:"tool_results"`
@@ -103,6 +103,14 @@ func Run(rt *harness.Runtime, opts Options) (Result, error) {
 				res.ToolResults++
 			case "error", "delivery_error":
 				res.Errors++
+				// A native agent emits "error" only from fail(), which ends its turn with no
+				// turn_done to follow. For the seat that is the end of the run: waiting on
+				// would only burn the wall cap against a provider that has already refused.
+				if ev.Kind == "error" && ev.AgentID == seat.ID {
+					res.StopReason = "error"
+					res.WallS = time.Since(start).Seconds()
+					return res, nil
+				}
 			case "usage":
 				if v, ok := metaInt(ev.Metadata, "prompt_tokens"); ok {
 					res.PromptTokens += v
