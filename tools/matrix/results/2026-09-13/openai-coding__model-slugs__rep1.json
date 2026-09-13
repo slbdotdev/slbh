@@ -1,0 +1,223 @@
+{
+  "probe": "model-slugs",
+  "endpoint": "openai-coding",
+  "wire": "openai",
+  "model": "glm-5.3-flash",
+  "repetition": 1,
+  "started_utc": "2026-09-13T22:00:36Z",
+  "calls": [
+    {
+      "label": "slug glm-5.3-flash",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "role": "system"
+          },
+          {
+            "content": "Reply with the single word: ok",
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "temperature": 0
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 1529,
+      "raw_sse_events": [
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"The\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" user\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" wants\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" me\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" to\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" reply\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" with\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" the\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" single\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" word\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\":\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" ok\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" That\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"'s\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" exactly\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" what\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" I\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" should do.\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}",
+        "data: {\"id\":\"20260914060036e615ca0ebd274fa4\",\"created\":1789336836,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":43,\"completion_tokens\":24,\"total_tokens\":67,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"reasoning_tokens\":19}}}",
+        "data: [DONE]"
+      ],
+      "observations": {
+        "event_types": {
+          "[DONE]": 1,
+          "data": 21
+        },
+        "text_chars": 2,
+        "text_sample": "ok",
+        "reasoning_chars": 85,
+        "reasoning_sample": "The user wants me to reply with the single word: ok. That's exactly what I should do.",
+        "usage": {
+          "completion_tokens": 24,
+          "completion_tokens_details": {
+            "reasoning_tokens": 19
+          },
+          "prompt_tokens": 43,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 67
+        },
+        "stop_reason": "stop",
+        "terminal": "[DONE]"
+      }
+    },
+    {
+      "label": "slug glm-5.3-flash[1m]",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "role": "system"
+          },
+          {
+            "content": "Reply with the single word: ok",
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash[1m]",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "temperature": 0
+      },
+      "http_status": 400,
+      "http_status_text": "400 Bad Request",
+      "duration_ms": 262,
+      "raw_body": "{\"error\":{\"code\":\"1211\",\"message\":\"Unknown Model, please check the model code.\"}}"
+    },
+    {
+      "label": "slug glm-5.3",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "role": "system"
+          },
+          {
+            "content": "Reply with the single word: ok",
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "temperature": 0
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 1516,
+      "raw_sse_events": [
+        "data: {\"id\":\"20260914060038455f33db308b42b0\",\"created\":1789336838,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}",
+        "data: {\"id\":\"20260914060038455f33db308b42b0\",\"created\":1789336838,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":43,\"completion_tokens\":3,\"total_tokens\":46,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"reasoning_tokens\":0}}}",
+        "data: [DONE]"
+      ],
+      "observations": {
+        "event_types": {
+          "[DONE]": 1,
+          "data": 2
+        },
+        "text_chars": 2,
+        "text_sample": "ok",
+        "reasoning_chars": 0,
+        "reasoning_sample": "",
+        "usage": {
+          "completion_tokens": 3,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "prompt_tokens": 43,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 46
+        },
+        "stop_reason": "stop",
+        "terminal": "[DONE]"
+      }
+    },
+    {
+      "label": "slug glm-5.3[1m]",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "role": "system"
+          },
+          {
+            "content": "Reply with the single word: ok",
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3[1m]",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "temperature": 0
+      },
+      "http_status": 400,
+      "http_status_text": "400 Bad Request",
+      "duration_ms": 268,
+      "raw_body": "{\"error\":{\"code\":\"1211\",\"message\":\"Unknown Model, please check the model code.\"}}"
+    }
+  ],
+  "verdict": "pass",
+  "notes": [
+    "slug \"glm-5.3-flash\" accepted (HTTP 200)",
+    "slug \"glm-5.3-flash[1m]\" rejected: HTTP 400 {\"error\":{\"code\":\"1211\",\"message\":\"Unknown Model, please check the model code.\"}}",
+    "slug \"glm-5.3\" accepted (HTTP 200)",
+    "slug \"glm-5.3[1m]\" rejected: HTTP 400 {\"error\":{\"code\":\"1211\",\"message\":\"Unknown Model, please check the model code.\"}}",
+    "accepted slugs: glm-5.3-flash, glm-5.3"
+  ]
+}

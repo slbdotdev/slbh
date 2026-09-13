@@ -1,0 +1,210 @@
+{
+  "probe": "error-events",
+  "endpoint": "openai-coding",
+  "wire": "openai",
+  "model": "glm-5.3-flash",
+  "repetition": 1,
+  "started_utc": "2026-09-13T22:01:20Z",
+  "calls": [
+    {
+      "label": "unknown model",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "role": "system"
+          },
+          {
+            "content": "hi",
+            "role": "user"
+          }
+        ],
+        "model": "glm-does-not-exist",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "temperature": 0
+      },
+      "http_status": 400,
+      "http_status_text": "400 Bad Request",
+      "duration_ms": 259,
+      "raw_body": "{\"error\":{\"code\":\"1211\",\"message\":\"Unknown Model, please check the model code.\"}}"
+    },
+    {
+      "label": "invalid parameter (temperature 9)",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "role": "system"
+          },
+          {
+            "content": "hi",
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "temperature": 9
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 2675,
+      "raw_sse_events": [
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"The\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" user\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" has\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" sent\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \\\"\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"hi\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"\\\"\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" -\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" a\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" simple\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" greeting\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" The\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" system\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" prompt\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" says\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" I\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"'m\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" a\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \\\"\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"ter\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"se\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" capability\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"-pro\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"be\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" target\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"\\\"\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" and\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" should\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \\\"\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Answer\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" exactly\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" what\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" is\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" asked\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" with\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" no\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" preamble\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" and\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" no\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" closing\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" remarks\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\\\"\\n\\n\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"The\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" user\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" just\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" said\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \\\"\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"hi\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"\\\"\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" -\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" so\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" the\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" exact\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" thing\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" asked\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" is\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" a\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" greeting\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" The\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" appropriate terse\"}}]}",
+        "data: {\"id\":\"2026091406012019dbc324b3aa4a39\",\"created\":1789336881,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"length\",\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":37,\"completion_tokens\":64,\"total_tokens\":101,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"reasoning_tokens\":63}}}",
+        "data: [DONE]"
+      ],
+      "observations": {
+        "event_types": {
+          "[DONE]": 1,
+          "data": 64
+        },
+        "text_chars": 0,
+        "text_sample": "",
+        "reasoning_chars": 277,
+        "reasoning_sample": "The user has sent \"hi\" - a simple greeting. The system prompt says I'm a \"terse capability-probe target\" and should \"Answer exactly what is asked, with no preamble and no closing remarks.\"\n\nThe user just said \"hi\" - so the exact thing asked is a greeting. The appropriate terse",
+        "usage": {
+          "completion_tokens": 64,
+          "completion_tokens_details": {
+            "reasoning_tokens": 63
+          },
+          "prompt_tokens": 37,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 101
+        },
+        "stop_reason": "length",
+        "terminal": "[DONE]"
+      }
+    },
+    {
+      "label": "malformed tool schema",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "role": "system"
+          },
+          {
+            "content": "hi",
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "temperature": 0,
+        "tools": [
+          {
+            "type": "function"
+          }
+        ]
+      },
+      "http_status": 400,
+      "http_status_text": "400 Bad Request",
+      "duration_ms": 256,
+      "raw_body": "{\"error\":{\"code\":\"1214\",\"message\":\"tools[0].function can not be null\"}}"
+    }
+  ],
+  "verdict": "partial",
+  "notes": [
+    "unknown model -\u003e HTTP 400, in-stream error events=0, terminal=\"\", body={\"error\":{\"code\":\"1211\",\"message\":\"Unknown Model, please check the model code.\"}}",
+    "invalid parameter (temperature 9) -\u003e HTTP 200, in-stream error events=0, terminal=\"[DONE]\", body=",
+    "malformed tool schema -\u003e HTTP 400, in-stream error events=0, terminal=\"\", body={\"error\":{\"code\":\"1214\",\"message\":\"tools[0].function can not be null\"}}",
+    "2 of 3 error cases were distinguishable from a normal stream end"
+  ]
+}

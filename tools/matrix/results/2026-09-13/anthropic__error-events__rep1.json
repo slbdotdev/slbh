@@ -1,0 +1,289 @@
+{
+  "probe": "error-events",
+  "endpoint": "anthropic",
+  "wire": "anthropic",
+  "model": "glm-5.3-flash",
+  "repetition": 1,
+  "started_utc": "2026-09-13T22:05:18Z",
+  "calls": [
+    {
+      "label": "unknown model",
+      "method": "POST",
+      "url": "https://api.z.ai/api/anthropic/v1/messages",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Anthropic-Version": "2023-06-01",
+        "Content-Type": "application/json",
+        "X-Api-Key": "REDACTED"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "hi",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "glm-does-not-exist",
+        "stream": true,
+        "system": [
+          {
+            "text": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "type": "text"
+          }
+        ],
+        "temperature": 0
+      },
+      "http_status": 400,
+      "http_status_text": "400 Bad Request",
+      "duration_ms": 261,
+      "raw_body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"1211\",\"message\":\"[1211][Unknown Model, please check the model code.][202609140605185add86a363a2440f]\"},\"request_id\":\"202609140605185add86a363a2440f\"}"
+    },
+    {
+      "label": "invalid parameter (temperature 9)",
+      "method": "POST",
+      "url": "https://api.z.ai/api/anthropic/v1/messages",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Anthropic-Version": "2023-06-01",
+        "Content-Type": "application/json",
+        "X-Api-Key": "REDACTED"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "hi",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash",
+        "stream": true,
+        "system": [
+          {
+            "text": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "type": "text"
+          }
+        ],
+        "temperature": 9
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 3499,
+      "raw_sse_events": [
+        "event: message_start",
+        "data: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_202609140605196919cc4afb47431a\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"glm-5.3-flash\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 0, \"output_tokens\": 0}}}",
+        "event: ping",
+        "data: {\"type\": \"ping\"}",
+        "event: content_block_start",
+        "data: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"thinking\", \"thinking\": \"\", \"signature\": \"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"The\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" user\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" just\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" said\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" \\\"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"hi\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"\\\".\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" According\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" to\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" my\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" instructions\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \",\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" I\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"'m\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" a\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" terse\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" capability\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"-pro\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"be\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" target\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \".\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" I\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" should\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" answer\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" exactly\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" what\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" is\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" asked\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" with\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" no\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" preamble\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" and\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" no\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" closing\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" remarks\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \".\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" The\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" user\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" greeted\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" me\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \",\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" so\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" I\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" should\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" respond\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" with\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" a\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" minimal\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" greeting\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" or\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" acknowledgment\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \".\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"signature_delta\", \"signature\": \"1ec32912e89346ba8a892da3\"}}",
+        "event: content_block_stop",
+        "data: {\"type\": \"content_block_stop\", \"index\": 0}",
+        "event: content_block_start",
+        "data: {\"type\": \"content_block_start\", \"index\": 1, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hi\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \".\"}}",
+        "event: content_block_stop",
+        "data: {\"type\": \"content_block_stop\", \"index\": 1}",
+        "event: message_delta",
+        "data: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"input_tokens\": 37, \"output_tokens\": 56, \"cache_read_input_tokens\": 0, \"server_tool_use\": {\"web_search_requests\": 0}, \"service_tier\": \"standard\"}}",
+        "event: message_stop",
+        "data: {\"type\": \"message_stop\"}"
+      ],
+      "observations": {
+        "event_types": {
+          "content_block_delta": 55,
+          "content_block_start": 2,
+          "content_block_stop": 2,
+          "message_delta": 1,
+          "message_start": 1,
+          "message_stop": 1,
+          "ping": 1
+        },
+        "text_chars": 3,
+        "text_sample": "Hi.",
+        "reasoning_chars": 254,
+        "reasoning_sample": "The user just said \"hi\". According to my instructions, I'm a terse capability-probe target. I should answer exactly what is asked with no preamble and no closing remarks. The user greeted me, so I should respond with a minimal greeting or acknowledgment.",
+        "usage": {
+          "cache_read_input_tokens": 0,
+          "input_tokens": 37,
+          "output_tokens": 56,
+          "server_tool_use": {
+            "web_search_requests": 0
+          },
+          "service_tier": "standard"
+        },
+        "stop_reason": "end_turn",
+        "terminal": "message_stop"
+      }
+    },
+    {
+      "label": "malformed tool schema",
+      "method": "POST",
+      "url": "https://api.z.ai/api/anthropic/v1/messages",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Anthropic-Version": "2023-06-01",
+        "Content-Type": "application/json",
+        "X-Api-Key": "REDACTED"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "hi",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash",
+        "stream": true,
+        "system": [
+          {
+            "text": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "type": "text"
+          }
+        ],
+        "temperature": 0,
+        "tools": [
+          {
+            "type": "function"
+          }
+        ]
+      },
+      "http_status": 422,
+      "http_status_text": "422 Unprocessable Entity",
+      "duration_ms": 256,
+      "raw_body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"tools\",0,\"name\"],\"msg\":\"Field required\",\"input\":{\"type\":\"function\"}}]}"
+    }
+  ],
+  "verdict": "partial",
+  "notes": [
+    "unknown model -\u003e HTTP 400, in-stream error events=0, terminal=\"\", body={\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"1211\",\"message\":\"[1211][Unknown Model, please check the model code.][202609140605185add86a363a2440f]\"},\"request_id\":\"202609140605185add86a363a2440f\"}",
+    "invalid parameter (temperature 9) -\u003e HTTP 200, in-stream error events=0, terminal=\"message_stop\", body=",
+    "malformed tool schema -\u003e HTTP 422, in-stream error events=0, terminal=\"\", body={\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"tools\",0,\"name\"],\"msg\":\"Field required\",\"input\":{\"type\":\"function\"}}]}",
+    "2 of 3 error cases were distinguishable from a normal stream end"
+  ]
+}

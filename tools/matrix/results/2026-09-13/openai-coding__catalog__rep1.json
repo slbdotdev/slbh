@@ -1,0 +1,28 @@
+{
+  "probe": "catalog",
+  "endpoint": "openai-coding",
+  "wire": "openai",
+  "model": "glm-5.3-flash",
+  "repetition": 1,
+  "started_utc": "2026-09-13T22:00:36Z",
+  "calls": [
+    {
+      "label": "GET models",
+      "method": "GET",
+      "url": "https://api.z.ai/api/coding/paas/v4/models",
+      "headers_redacted": {
+        "Accept": "application/json",
+        "Authorization": "REDACTED"
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 226,
+      "raw_body": "{\"object\":\"list\",\"data\":[{\"id\":\"glm-4.5\",\"object\":\"model\",\"created\":1753632000,\"owned_by\":\"z-ai\"},{\"id\":\"glm-4.5-air\",\"object\":\"model\",\"created\":1753632000,\"owned_by\":\"z-ai\"},{\"id\":\"glm-4.6\",\"object\":\"model\",\"created\":1759276800,\"owned_by\":\"z-ai\"},{\"id\":\"glm-4.7\",\"object\":\"model\",\"created\":1766332800,\"owned_by\":\"z-ai\"},{\"id\":\"glm-5\",\"object\":\"model\",\"created\":1770739200,\"owned_by\":\"z-ai\"},{\"id\":\"glm-5-turbo\",\"object\":\"model\",\"created\":1773504000,\"owned_by\":\"z-ai\"},{\"id\":\"glm-5.1\",\"object\":\"model\",\"created\":1774620000,\"owned_by\":\"z-ai\"},{\"id\":\"glm-5.2\",\"object\":\"model\",\"created\":1781625600,\"owned_by\":\"z-ai\"},{\"id\":\"glm-5.3\",\"object\":\"model\",\"created\":1786636800,\"owned_by\":\"z-ai\"},{\"id\":\"glm-5.3-flash\",\"object\":\"model\",\"created\":1786636800,\"owned_by\":\"z-ai\"}]}"
+    }
+  ],
+  "verdict": "pass",
+  "notes": [
+    "https://api.z.ai/api/coding/paas/v4/models -\u003e HTTP 200",
+    "catalog body: {\"object\":\"list\",\"data\":[{\"id\":\"glm-4.5\",\"object\":\"model\",\"created\":1753632000,\"owned_by\":\"z-ai\"},{\"id\":\"glm-4.5-air\",\"object\":\"model\",\"created\":1753632000,\"owned_by\":\"z-ai\"},{\"id\":\"glm-4.6\",\"object\":\"model\",\"created\":1759276800,\"owned_by\":\"z-ai\"},{\"id\":\"glm-4.7\",\"object\":\"model\",\"created\":1766332800,\"owned_by\":\"z-ai\"},{\"id\":\"glm-5\",\"object\":\"model\",\"created\":1770739200,\"owned_by\":\"z-ai\"},{\"id\":\"glm-5-turbo\",\"object\":\"model\",\"created\":1773504000,\"owned_by\":\"z-ai\"},{\"id\":\"glm-5.1\",\"object\":\"model\",\"created\":1774620000,\"owned_by\":\"z-ai\"},{\"id\":\"glm-5.2\",\"object\":\"model\",\"created\":1781625600,\"owned_by\":\"z-ai\"},{\"id\":\"glm-5.3\",\"object\":\"model\",\"created\":1786636800,\"owned_by\":\"z-ai\"},{\"id\":\"glm-5.3-flash\",\"object\":\"model\",\"created\":1786636800,\"owned_by\":\"z-ai\"}]}"
+  ]
+}
