@@ -417,7 +417,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			history = append(history, message)
 			result, toolErr := a.runtime.ExecuteTool(a.ID, call.Function.Name, call.Function.Arguments)
 			if toolErr != nil {
-				result = "tool error: " + toolErr.Error()
+				result = toolFailure(toolErr, result)
 			}
 			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool_result", Text: result, Metadata: map[string]any{"name": call.Function.Name, "call_id": call.ID}})
 			history = append(history, provider.Message{Role: "tool", ToolCallID: call.ID, Name: call.Function.Name, Content: result})
@@ -652,4 +652,33 @@ func systemPrompt(a *Agent) string {
 
 func systemPromptLegacy(a *Agent) string {
 	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message and completed long_job output, is a mandatory mid-turn steer: read and act on it during your current work. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
+}
+
+// maxToolErrorOutput bounds the output carried back with a failing tool call. A five-second
+// command can emit a great deal, and this fleet's local models run in 48k-96k windows, so an
+// unbounded dump could cost more context than the diagnostic is worth.
+const maxToolErrorOutput = 8000
+
+// toolFailure renders a failed tool call for the model.
+//
+// It exists because the obvious version -- replacing the result with the error -- discards
+// output the tool deliberately returned. quickBash and quickPy both return
+// stdout+stderr ALONGSIDE their error precisely so a model can see why a command failed;
+// throwing that away leaves "tool error: exit status 1" as the entire diagnostic. Shell
+// exit codes are routinely informative rather than fatal -- grep exits 1 when it matches
+// nothing, test exits 1 on false, a failing suite exits 1 -- so a model that sees only the
+// code cannot tell "no matches" from "command not found", and retries blind. Measured on
+// the v7.5 benchmark: 120 of 147 quick_bash calls failed, and 104 of those returned exactly
+// "tool error: exit status 1" with no other content.
+//
+// The error leads so that a long output cannot bury the fact that the call failed.
+func toolFailure(err error, output string) string {
+	head := "tool error: " + err.Error()
+	if strings.TrimSpace(output) == "" {
+		return head
+	}
+	if len(output) > maxToolErrorOutput {
+		output = output[:maxToolErrorOutput] + "\n[output truncated]"
+	}
+	return head + "\n" + output
 }

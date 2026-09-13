@@ -35,7 +35,8 @@ Headless flags:
   -q, --quiet            no event stream; only the final summary
       --summary          print the run summary as JSON on exit
 
-Exit status: 0 turn completed, 1 error, 2 usage, 124 wall cap reached.
+Exit status: 0 turn completed, 1 error (the seat failed or could not start), 2 usage,
+124 wall cap reached.
 `
 
 func main() {
@@ -157,8 +158,11 @@ func runHeadless(prompt, workdir, model, effort string, timeout time.Duration, a
 	if summary || quiet {
 		printSummary(res)
 	}
-	if res.StopReason == "wall_cap" {
+	switch res.StopReason {
+	case "wall_cap":
 		return 124
+	case "error":
+		return 1
 	}
 	return 0
 }
