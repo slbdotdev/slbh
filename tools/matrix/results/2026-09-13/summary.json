@@ -161,6 +161,13 @@
     "file": "anthropic__model-slugs__rep1.json"
   },
   {
+    "probe": "output-config-effort",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "anthropic__output-config-effort__rep1.json"
+  },
+  {
     "probe": "text",
     "endpoint": "anthropic",
     "repetition": 1,
@@ -376,6 +383,13 @@
     "repetition": 1,
     "verdict": "pass",
     "file": "openai-coding__model-slugs__rep1.json"
+  },
+  {
+    "probe": "output-config-effort",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "n/a",
+    "file": "openai-coding__output-config-effort__rep1.json"
   },
   {
     "probe": "text",

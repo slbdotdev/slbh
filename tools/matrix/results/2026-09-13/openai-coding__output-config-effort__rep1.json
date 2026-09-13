@@ -1,0 +1,13 @@
+{
+  "probe": "output-config-effort",
+  "endpoint": "openai-coding",
+  "wire": "openai",
+  "model": "glm-5.3-flash",
+  "repetition": 1,
+  "started_utc": "2026-09-13T23:16:01Z",
+  "calls": null,
+  "verdict": "n/a",
+  "notes": [
+    "output_config is an Anthropic Messages field; not applicable to the OpenAI wire"
+  ]
+}

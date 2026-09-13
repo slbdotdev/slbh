@@ -50,6 +50,11 @@ const (
 	anthropicVersion = "2023-06-01"
 
 	requestTimeout = 900 * time.Second
+
+	// effortQuestion is one hard, long-running question. It is deliberately
+	// verbose and iterative: a prompt that suppresses working produces the
+	// same small reasoning trace at every level and separates nothing.
+	effortQuestion = "Define a(1)=7 and a(n)=a(n-1)+gcd(n,a(n-1)) for n>1. Work out every term from a(2) to a(60) one step at a time, showing each gcd you use, then list every n in that range where a(n)-a(n-1) is greater than 1, and finally state a(60). Be exhaustive and check your arithmetic as you go."
 	systemPrompt   = "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks."
 )
 
@@ -630,6 +635,7 @@ func probes() []probe {
 		{Name: "cache", Reps: fixedReps, Run: probeCache},
 		{Name: "context-limit", Reps: onceRep, Run: probeContextLimit},
 		{Name: "context-ceiling", Reps: onceRep, Run: probeContextCeiling},
+		{Name: "output-config-effort", Reps: onceRep, Run: probeOutputConfigEffort},
 	}
 	for _, level := range effortLevels {
 		list = append(list, probe{Name: "effort-" + level, Reps: effortReps, Run: effortProbe(level)})
@@ -1051,9 +1057,70 @@ func probeContextCeiling(ctx context.Context, ep endpoint, rep int, out *probeRe
 	out.Verdict = "recorded"
 }
 
+// probeOutputConfigEffort tests Anthropic's newer `output_config.effort` field
+// on the Z.ai Anthropic-shaped wire, the one effort spelling the first pass
+// did not try. It is the form pi's own anthropic-messages adapter sends for a
+// model carrying compat.forceAdaptiveThinking: that adapter writes
+// `params.thinking={type:"adaptive",display}` together with
+// `params.output_config={effort}`, and falls back to
+// `{type:"enabled",budget_tokens}` otherwise. Both shapes are probed, the
+// second exactly as pi builds it.
+func probeOutputConfigEffort(ctx context.Context, ep endpoint, rep int, out *probeResult) {
+	if ep.Wire != "anthropic" {
+		out.Verdict = "n/a"
+		out.note("output_config is an Anthropic Messages field; not applicable to the OpenAI wire")
+		return
+	}
+	accepted := []string{}
+	for _, level := range []string{"low", "medium", "high", "max", "xhigh"} {
+		body := buildBody(ep, bodyOpts{
+			System:      systemPrompt,
+			User:        effortQuestion,
+			MaxTokens:   32768,
+			Temperature: zero(),
+			Extra:       map[string]any{"output_config": map[string]any{"effort": level}},
+		})
+		rec := doCall(ctx, callOpts{Label: "output_config.effort " + level, Method: http.MethodPost, URL: ep.URL, Wire: ep.Wire, Body: body, Stream: true})
+		out.Calls = append(out.Calls, rec)
+		if rec.Status != 200 || rec.Obs == nil {
+			out.note("output_config.effort=%q -> HTTP %d %s", level, rec.Status, sample(rec.RawBody, 300))
+			continue
+		}
+		accepted = append(accepted, level)
+		encoded, _ := json.Marshal(rec.Obs.Usage)
+		out.note("output_config.effort=%q -> HTTP 200 output_tokens=%v reasoning_chars=%d text_chars=%d usage=%s",
+			level, rec.Obs.Usage["output_tokens"], rec.Obs.ReasoningChars, rec.Obs.TextChars, string(encoded))
+	}
+
+	// pi's adaptive form, byte for byte: thinking {type: adaptive, display}
+	// alongside output_config.effort.
+	adaptive := buildBody(ep, bodyOpts{
+		System:      systemPrompt,
+		User:        effortQuestion,
+		MaxTokens:   32768,
+		Temperature: zero(),
+		Extra: map[string]any{
+			"thinking":      map[string]any{"type": "adaptive", "display": "summarized"},
+			"output_config": map[string]any{"effort": "high"},
+		},
+	})
+	rec := doCall(ctx, callOpts{Label: "thinking adaptive + output_config.effort high", Method: http.MethodPost, URL: ep.URL, Wire: ep.Wire, Body: adaptive, Stream: true})
+	out.Calls = append(out.Calls, rec)
+	if rec.Status == 200 && rec.Obs != nil {
+		encoded, _ := json.Marshal(rec.Obs.Usage)
+		out.note("thinking{type:adaptive} + output_config.effort=high -> HTTP 200 output_tokens=%v reasoning_chars=%d usage=%s",
+			rec.Obs.Usage["output_tokens"], rec.Obs.ReasoningChars, string(encoded))
+	} else {
+		out.note("thinking{type:adaptive} + output_config.effort=high -> HTTP %d %s", rec.Status, sample(rec.RawBody, 300))
+	}
+
+	out.note("accepted output_config.effort levels: %v", accepted)
+	out.Verdict = "recorded"
+}
+
 func effortProbe(level string) func(context.Context, endpoint, int, *probeResult) {
 	return func(ctx context.Context, ep endpoint, rep int, out *probeResult) {
-		question := "Define a(1)=7 and a(n)=a(n-1)+gcd(n,a(n-1)) for n>1. Work out every term from a(2) to a(60) one step at a time, showing each gcd you use, then list every n in that range where a(n)-a(n-1) is greater than 1, and finally state a(60). Be exhaustive and check your arithmetic as you go."
+		question := effortQuestion
 		opts := bodyOpts{
 			System:      systemPrompt,
 			User:        question,
