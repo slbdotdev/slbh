@@ -42,6 +42,23 @@ func (refusing) Stream(_ context.Context, _ provider.Request, _ provider.StreamS
 	return errors.New("provider returned 500 Internal Server Error")
 }
 
+// chunked streams one reply as several deltas and reports usage the way an OpenAI-compatible
+// provider does: one round, one usage object, completion_tokens for the output side.
+type chunked struct{}
+
+func (chunked) Stream(_ context.Context, _ provider.Request, sink provider.StreamSink) error {
+	for _, piece := range []string{"PO", "NG"} {
+		if err := sink(provider.Event{Kind: provider.EventText, Text: piece}); err != nil {
+			return err
+		}
+	}
+	usage := map[string]any{"prompt_tokens": 11, "completion_tokens": 5}
+	if err := sink(provider.Event{Kind: provider.EventUsage, Usage: usage}); err != nil {
+		return err
+	}
+	return sink(provider.Event{Kind: provider.EventDone})
+}
+
 func newRuntime(t *testing.T, p provider.Provider) *harness.Runtime {
 	t.Helper()
 	rt, err := harness.New(
@@ -79,6 +96,31 @@ func TestRunReturnsWhenTheSeatTurnCompletes(t *testing.T) {
 	}
 	if got := out.String(); !strings.Contains(got, "SLBH_HEADLESS_OK") {
 		t.Fatalf("event stream did not carry the reply: %q", got)
+	}
+	if res.Runtime == "" || res.Transcript == "" {
+		t.Fatalf("runtime = %q, transcript = %q: a caller must be able to find the record", res.Runtime, res.Transcript)
+	}
+	if !strings.HasSuffix(res.Transcript, "transcript.jsonl") || !strings.Contains(res.Transcript, res.AgentID) {
+		t.Fatalf("transcript = %q, want the seat's transcript.jsonl", res.Transcript)
+	}
+}
+
+// A streamed reply is one turn, not one per delta; Final is the whole reply; and output
+// tokens come from completion_tokens, the field the OpenAI wire shape actually carries.
+func TestCountsAreRoundsAndWholeRepliesNotStreamDeltas(t *testing.T) {
+	rt := newRuntime(t, chunked{})
+	res, err := Run(rt, Options{Prompt: "hello", Timeout: 30 * time.Second})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Turns != 1 {
+		t.Fatalf("turns = %d, want 1 for a single streamed reply", res.Turns)
+	}
+	if res.Final != "PONG" {
+		t.Fatalf("final = %q, want the whole reply PONG", res.Final)
+	}
+	if res.PromptTokens != 11 || res.OutputTokens != 5 {
+		t.Fatalf("tokens = (%d, %d), want (11, 5)", res.PromptTokens, res.OutputTokens)
 	}
 }
 

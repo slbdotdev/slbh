@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/slbdotdev/slbh/internal/harness"
@@ -31,7 +32,9 @@ type Options struct {
 type Result struct {
 	AgentID      string  `json:"agent_id"`
 	Model        string  `json:"model"`
-	StopReason   string  `json:"stop_reason"` // "done", "error" or "wall_cap"
+	Runtime      string  `json:"runtime"`              // runtime id; its directory under the home holds every transcript
+	Transcript   string  `json:"transcript,omitempty"` // the seat's transcript.jsonl, the full record of the turn
+	StopReason   string  `json:"stop_reason"`          // "done", "error" or "wall_cap"
 	Turns        int     `json:"turns"`
 	ToolCalls    int     `json:"tool_calls"`
 	ToolResults  int     `json:"tool_results"`
@@ -74,7 +77,10 @@ func Run(rt *harness.Runtime, opts Options) (Result, error) {
 	if seat == nil {
 		return Result{}, fmt.Errorf("headless: runtime has no seat agent")
 	}
-	res := Result{AgentID: seat.ID, Model: seat.Snapshot().Model, StopReason: "done"}
+	res := Result{AgentID: seat.ID, Model: seat.Snapshot().Model, StopReason: "done", Runtime: rt.ID()}
+	if path, err := rt.TranscriptPath(seat.ID); err == nil {
+		res.Transcript = path
+	}
 
 	start := time.Now()
 	if err := seat.Send(opts.Prompt); err != nil {
@@ -88,15 +94,34 @@ func Run(rt *harness.Runtime, opts Options) (Result, error) {
 		deadline = timer.C
 	}
 
+	// The seat's reply streams as deltas; Final is the whole of the last one.
+	var final strings.Builder
+	finish := func() (Result, error) {
+		res.WallS = time.Since(start).Seconds()
+		res.Final = final.String()
+		return res, nil
+	}
+
 	events := rt.Events()
 	for {
 		select {
 		case ev := <-events:
 			emit(out, opts.JSON, ev)
 			switch ev.Kind {
+			case "inference_request":
+				// One API round is one turn. A retry re-emits the same round number, so the
+				// count is the highest round seen, not the number of requests; the agent
+				// drops its partial answer when it retries, and so does Final.
+				if ev.AgentID == seat.ID {
+					if round, ok := metaInt(ev.Metadata, "round"); ok && round+1 > res.Turns {
+						res.Turns = round + 1
+					}
+					final.Reset()
+				}
 			case "assistant":
-				res.Turns++
-				res.Final = ev.Text
+				if ev.AgentID == seat.ID {
+					final.WriteString(ev.Text)
+				}
 			case "tool":
 				res.ToolCalls++
 			case "tool_result":
@@ -108,28 +133,29 @@ func Run(rt *harness.Runtime, opts Options) (Result, error) {
 				// would only burn the wall cap against a provider that has already refused.
 				if ev.Kind == "error" && ev.AgentID == seat.ID {
 					res.StopReason = "error"
-					res.WallS = time.Since(start).Seconds()
-					return res, nil
+					return finish()
 				}
 			case "usage":
+				// The metadata is the provider's own usage object on the OpenAI wire shape:
+				// prompt_tokens and completion_tokens. Summed over rounds.
 				if v, ok := metaInt(ev.Metadata, "prompt_tokens"); ok {
 					res.PromptTokens += v
 				}
-				if v, ok := metaInt(ev.Metadata, "output_tokens"); ok {
+				if v, ok := metaInt(ev.Metadata, "completion_tokens"); ok {
+					res.OutputTokens += v
+				} else if v, ok := metaInt(ev.Metadata, "output_tokens"); ok {
 					res.OutputTokens += v
 				}
 			case "turn_done":
 				// Only the seat's own turn ends this run. A subagent finishing is not the
 				// seat finishing, and treating it as such would cut the turn short.
 				if ev.AgentID == seat.ID {
-					res.WallS = time.Since(start).Seconds()
-					return res, nil
+					return finish()
 				}
 			}
 		case <-deadline:
 			res.StopReason = "wall_cap"
-			res.WallS = time.Since(start).Seconds()
-			return res, nil
+			return finish()
 		}
 	}
 }
