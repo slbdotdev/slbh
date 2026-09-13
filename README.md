@@ -191,6 +191,12 @@ sibling. Empty messages and delivery to stopped agents return errors. Successful
 submission acknowledges acceptance; the transcript records context insertion
 as `steer` or `child_result` at the call boundary.
 
+When a tool fails, the model receives the error **and** whatever output the tool produced,
+error first and bounded. This matters most for `quick_bash` and `quick_py`: a non-zero exit
+is routinely informative rather than fatal — `grep` exits 1 when it matches nothing, `test`
+exits 1 on false, a failing suite exits 1 — so an agent given only the exit code cannot tell
+"no matches" from "command not found" and retries blind.
+
 File arguments may be absolute or relative; relative paths resolve against the
 active agent's working directory. slbh does not add a filesystem permission
 boundary, so the operating system determines whether a requested path or
