@@ -26,7 +26,7 @@ func ToolDefinitions() []provider.Tool {
 		return map[string]any{"type": "object", "properties": map[string]any{name: map[string]any{"type": "string"}}, "required": []string{name}}
 	}
 	return []provider.Tool{
-		{Name: "glob", Description: "Find files by a glob pattern.", Parameters: stringArg("pattern")},
+		{Name: "glob", Description: "List files and directories matching a glob pattern. `**` matches any number of directory levels, so `**/*.py` finds every Python file in the tree and `**/*` lists the whole tree. Directories come back with a trailing separator. Says so explicitly when nothing matches.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"pattern": map[string]any{"type": "string", "description": "Glob pattern, relative to the working directory unless it is absolute. Supports *, ?, [...] within one path segment and ** across segments."}}, "required": []string{"pattern"}}},
 		{Name: "grep", Description: "Search text using a regular expression.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"pattern": map[string]any{"type": "string"}, "path": map[string]any{"type": "string"}}, "required": []string{"pattern"}}},
 		{Name: "read_file", Description: "Read a whole file up to 100k bytes.", Parameters: stringArg("path")},
 		{Name: "read_bytes", Description: "Read an inclusive byte range from a file.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "start": map[string]any{"type": "integer"}, "end": map[string]any{"type": "integer"}}, "required": []string{"path", "start", "end"}}},
@@ -227,26 +227,152 @@ func (r *Runtime) resolvePath(base, path string) (string, error) {
 	return clean, nil
 }
 
+// maxGlobMatches bounds a glob result. A `**` pattern over a large tree can name
+// thousands of files, and a listing that long costs more context than it is worth
+// in a 48k-96k window; the count in the truncation line tells the model to narrow.
+const maxGlobMatches = 400
+
+// globSkipDirs are never descended into for a `**` pattern. They hold no material a
+// task is about, and a single `.git` or `node_modules` would fill the match budget
+// with noise before a `**` pattern reached the tree the model asked about.
+var globSkipDirs = map[string]bool{
+	".git": true, "__pycache__": true, ".pytest_cache": true,
+	"node_modules": true, ".venv": true, ".mypy_cache": true, ".tox": true,
+}
+
+// glob answers a pattern with the paths that match it.
+//
+// Two things here are not filepath.Glob's behaviour, and both were measured rather than
+// assumed. filepath.Glob has NO recursive wildcard: `**` is an ordinary `*` to it, matching
+// within one path segment, so `**/*.py` silently means `*/*.py` and finds nothing three
+// levels down. Models trained on ripgrep and on every other agent harness write `**/` as a
+// matter of course, and on 2026-09-13 a one-turn probe on fox did exactly that -- glob
+// "**/*.py" over a tree holding sub/deep/b.py returned the empty string, and the model
+// answered "no .py files were found" and stopped. So `**` matches any number of segments,
+// including none.
+//
+// And an empty result is now a sentence rather than an empty string. A tool that returns ""
+// is indistinguishable from a tool that returned nothing to say: the model cannot tell "this
+// directory has no .py files" from "this call did not work", and the transcripts show it
+// guessing rather than re-querying. Directories carry a trailing separator for the same
+// reason -- a bare name cannot say whether the next call should be read_file or another glob.
 func (r *Runtime) glob(base, pattern string) (string, error) {
 	if pattern == "" {
 		return "", fmt.Errorf("pattern is required")
 	}
+	original := pattern
 	absolute := filepath.IsAbs(pattern)
 	pattern, err := r.resolvePath(base, pattern)
 	if err != nil {
 		return "", err
 	}
-	matches, err := filepath.Glob(pattern)
+	var matches []string
+	if strings.Contains(pattern, "**") {
+		matches, err = walkGlob(pattern)
+	} else {
+		matches, err = filepath.Glob(pattern)
+	}
 	if err != nil {
 		return "", err
 	}
-	if !absolute {
-		for i := range matches {
-			matches[i], _ = filepath.Rel(base, matches[i])
-		}
-	}
 	sort.Strings(matches)
-	return strings.Join(matches, "\n"), nil
+	truncated := 0
+	if len(matches) > maxGlobMatches {
+		truncated = len(matches) - maxGlobMatches
+		matches = matches[:maxGlobMatches]
+	}
+	lines := make([]string, 0, len(matches))
+	for _, match := range matches {
+		display := match
+		if !absolute {
+			if rel, relErr := filepath.Rel(base, match); relErr == nil {
+				display = rel
+			}
+		}
+		if info, statErr := os.Stat(match); statErr == nil && info.IsDir() {
+			display += string(filepath.Separator)
+		}
+		lines = append(lines, display)
+	}
+	if len(lines) == 0 {
+		return fmt.Sprintf("no files match %q (searched from %s). `**` matches any number of directories; try a broader pattern such as **/* to list the tree.", original, globSearchRoot(pattern)), nil
+	}
+	out := strings.Join(lines, "\n")
+	if truncated > 0 {
+		out += fmt.Sprintf("\n[%d more matches not shown; narrow the pattern]", truncated)
+	}
+	return out, nil
+}
+
+// globSearchRoot is the longest leading run of literal path segments in a pattern: the
+// directory a walk would start from, and the only part of the pattern worth naming back
+// to a model whose call found nothing.
+func globSearchRoot(pattern string) string {
+	segments := strings.Split(filepath.ToSlash(pattern), "/")
+	root := ""
+	for _, segment := range segments {
+		if strings.ContainsAny(segment, "*?[") {
+			break
+		}
+		root += segment + "/"
+	}
+	if root == "" {
+		return string(filepath.Separator)
+	}
+	return filepath.FromSlash(strings.TrimSuffix(root, "/"))
+}
+
+// walkGlob answers a pattern containing `**` by walking from its literal prefix.
+func walkGlob(pattern string) ([]string, error) {
+	root := globSearchRoot(pattern)
+	if root == "" {
+		root = string(filepath.Separator)
+	}
+	patternSegments := strings.Split(filepath.ToSlash(pattern), "/")
+	var matches []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			if path == root {
+				return walkErr
+			}
+			return nil
+		}
+		if info.IsDir() && path != root && globSkipDirs[info.Name()] {
+			return filepath.SkipDir
+		}
+		if matchSegments(patternSegments, strings.Split(filepath.ToSlash(path), "/")) {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	if err != nil && len(matches) == 0 {
+		return nil, err
+	}
+	return matches, nil
+}
+
+// matchSegments is filepath.Match extended over whole path segments, with `**` matching
+// any number of them including none. The recursion is bounded by the path's own depth.
+func matchSegments(pattern, name []string) bool {
+	for len(pattern) > 0 {
+		if pattern[0] == "**" {
+			for i := 0; i <= len(name); i++ {
+				if matchSegments(pattern[1:], name[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(name) == 0 {
+			return false
+		}
+		ok, err := filepath.Match(pattern[0], name[0])
+		if err != nil || !ok {
+			return false
+		}
+		pattern, name = pattern[1:], name[1:]
+	}
+	return len(name) == 0
 }
 
 func (r *Runtime) grep(base, pattern, path string) (string, error) {
