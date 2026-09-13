@@ -67,6 +67,14 @@ func (l *JSONL) Append(entry Entry) error {
 	if _, err = l.file.Write(append(b, '\n')); err != nil {
 		return err
 	}
+	// Stream deltas arrive per token; syncing each one costs a disk flush per
+	// token (53 ms on a spinning disk, measured on fox 2026-09-13) and was
+	// 79% of a bench slot's wall time. Every other kind still syncs, and an
+	// fsync flushes the whole file, so the deltas reach disk with the next
+	// tool, usage or turn event.
+	if entry.Kind == "thinking" || entry.Kind == "assistant" {
+		return nil
+	}
 	return l.file.Sync()
 }
 
