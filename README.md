@@ -202,6 +202,41 @@ scientific Python environment, with the system Python fallback retained for
 unmanaged development checkouts. Jobs and agent activity are recorded in the
 active session transcript.
 
+## Headless
+
+`slbh` with a prompt runs one turn without the TUI and exits. It is the same runtime, the
+same seat agent, the same tools and the same system prompt the TUI drives — only the front
+end differs. Codex leaves have always been headless; this is the native equivalent.
+
+```sh
+slbh -p "summarise the failing tests in ./logs"
+slbh --prompt-file brief.md --workdir /srv/project --timeout 15m
+echo "what changed today?" | slbh --prompt-file -
+```
+
+| flag | meaning |
+| --- | --- |
+| `-p`, `--prompt` | prompt text; supplying one is what selects headless |
+| `--prompt-file` | read the prompt from a file, or `-` for stdin |
+| `--workdir` | directory the agent works in (default: the current one) |
+| `--model` | model for this turn; naming one also approves it for the turn |
+| `--effort` | thinking effort for this turn |
+| `--timeout` | wall cap such as `15m`; zero means none |
+| `--json` | one JSON object per runtime event on stdout |
+| `-q`, `--quiet` | no event stream; print only the summary |
+| `--summary` | print the run summary as JSON on exit |
+
+Exit status is `0` when the turn completed, `1` on error, `2` on a usage problem, and `124`
+when the wall cap was reached — so a caller can tell a finished turn from a truncated one
+without parsing output.
+
+Running with no flags starts the TUI exactly as before; the prompt is the only thing that
+selects headless.
+
+Embedders can skip the CLI and call `headless.Run(runtime, headless.Options{...})`, which
+neither creates nor closes the runtime, so several turns can be driven in one process.
+
+
 ## Runtime data
 
 Each launch gets a unique runtime directory with per-agent, per-session
