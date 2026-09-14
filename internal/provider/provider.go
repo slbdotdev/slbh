@@ -361,6 +361,14 @@ func ResolveRoute(model, endpoint string, endpointExplicit bool, policy Policy) 
 			if endpointExplicit && strings.TrimSpace(endpoint) != "" {
 				route.Endpoint = strings.TrimSpace(endpoint)
 				route.ContextWindow = 0
+				// The catalog pointer goes with the pin. catalogEndpoint()
+				// prefers the policy's value over the route's endpoint, so
+				// leaving it set sends the first turn's metadata request to
+				// Z.ai's catalog while inference goes to the override — sizing
+				// the context window from a model on a host the operator has
+				// just redirected away from, and calling out to Z.ai from a
+				// route that may be offline or private.
+				route.Policy.CatalogEndpoint = ""
 			}
 			return route, nil
 		}
@@ -384,6 +392,9 @@ func ResolveRoute(model, endpoint string, endpointExplicit bool, policy Policy) 
 	if endpointExplicit && strings.TrimSpace(endpoint) != "" {
 		target = endpoint
 		route.ContextWindow = 0
+		// As on the native path above: the catalog pointer belongs to the
+		// endpoint the policy named, not to the one the operator substituted.
+		route.Policy.CatalogEndpoint = ""
 	}
 	if strings.TrimSpace(target) == "" {
 		return Route{}, fmt.Errorf("route %q has no endpoint in the routing policy", key)

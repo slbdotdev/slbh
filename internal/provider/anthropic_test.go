@@ -782,3 +782,30 @@ func TestRetryHonoursInStreamErrorFrames(t *testing.T) {
 		t.Fatal("a 429 must not be retried, in-stream or not")
 	}
 }
+
+func TestInStreamErrorFrameKeepsTheRequestID(t *testing.T) {
+	// request_id sits beside `error`, not inside it, and the in-stream frame
+	// struct parsed neither. The pre-stream classifier already preserved it and
+	// StatusError.Error() already prints it, so an overload that arrived
+	// mid-stream was the one path that dropped the only handle Z.ai gives for
+	// investigating the failure.
+	body := "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12}}}\n\n" +
+		"data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"code\":\"500\"," +
+		"\"message\":\"operation failed\"},\"request_id\":\"req_123\"}\n\n"
+	err := drainStream(body)
+	var status *StatusError
+	if !errors.As(err, &status) {
+		t.Fatalf("error %v is not a StatusError", err)
+	}
+	if status.RequestID != "req_123" {
+		t.Fatalf("RequestID = %q, want req_123", status.RequestID)
+	}
+	if !strings.Contains(status.Error(), "req_123") {
+		t.Fatalf("the operator's handle is missing from the error text: %q", status.Error())
+	}
+	// The frame's numeric code must not disturb the settled type-based
+	// classification that keeps rate_limit_error non-retryable.
+	if status.Code != "overloaded_error" || !status.Retryable() {
+		t.Fatalf("classification changed: code=%q retryable=%v", status.Code, status.Retryable())
+	}
+}

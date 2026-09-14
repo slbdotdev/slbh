@@ -61,18 +61,23 @@ type agentSession struct {
 }
 
 type Runtime struct {
-	mu           sync.RWMutex
-	id           string
-	runtimeDir   string
-	workDir      string
-	config       config.Config
-	ctx          context.Context
-	cancel       context.CancelFunc
-	jobs         *job.Manager
-	agents       map[string]*Agent
-	seatID       string
-	current      map[string]*agentSession
+	mu         sync.RWMutex
+	id         string
+	runtimeDir string
+	workDir    string
+	config     config.Config
+	ctx        context.Context
+	cancel     context.CancelFunc
+	jobs       *job.Manager
+	agents     map[string]*Agent
+	seatID     string
+	current    map[string]*agentSession
+	// pending holds a session opened by Clear while the agent was still
+	// mid-turn. It becomes current at that turn's end, so the turn that issued
+	// a request keeps its own transcript through its last event.
+	pending      map[string]*agentSession
 	sessions     []*agentSession
+	redactor     *secretRedactor
 	events       chan Event
 	eventMu      sync.Mutex
 	eventQueue   []Event
@@ -101,7 +106,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), events: options.Events, eventWake: make(chan struct{}, 1), provider: options.Provider, codexCommand: options.CodexCommand}
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), events: options.Events, eventWake: make(chan struct{}, 1), provider: options.Provider, codexCommand: options.CodexCommand}
 	if r.events == nil {
 		r.events = make(chan Event, 1024)
 	}
@@ -496,13 +501,48 @@ func (r *Runtime) Clear(agentID string) error {
 	if err != nil {
 		return err
 	}
+	// ClearHistory deliberately lets an in-flight provider request run to
+	// completion, and emit resolves the session per event, so swapping the log
+	// target here would write the tail of the old turn — its deltas, its usage,
+	// its turn_done — into a transcript that never issued the request. The new
+	// file would open mid-answer to a question it does not contain. The swap
+	// therefore waits for the turn boundary; an idle agent has no turn in
+	// flight, so for it the boundary is now.
+	// A Codex leaf's clear interrupts its turn — turn/interrupt, then
+	// thread/start — so nothing further can stream into the old transcript and
+	// the swap is safe at once. Only the native backend leaves a provider
+	// request in flight, which is the case this defers for.
+	idle := agent.codexBackend() != nil || agent.Snapshot().Status != "thinking"
 	r.mu.Lock()
-	r.current[agentID] = session
+	if superseded, ok := r.pending[agentID]; ok {
+		_ = superseded.log.Close()
+	}
+	r.pending[agentID] = session
 	r.sessions = append(r.sessions, session)
 	r.mu.Unlock()
 	agent.ClearHistory()
+	if idle {
+		r.promotePending(agentID)
+	}
 	return nil
 }
+
+// promotePending makes a session opened by Clear the log target. It runs at a
+// turn boundary, the first moment at which no earlier turn can still be
+// streaming into the transcript it was issued against.
+func (r *Runtime) promotePending(agentID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if session, ok := r.pending[agentID]; ok {
+		r.current[agentID] = session
+		delete(r.pending, agentID)
+	}
+}
+
+// Done closes when the runtime is shutting down. A headless run selects on it
+// so that a signal arriving during an in-flight turn ends the run, instead of
+// blocking forever on an events channel that Close never closes.
+func (r *Runtime) Done() <-chan struct{} { return r.ctx.Done() }
 
 func (r *Runtime) emit(event Event) {
 	if event.Time.IsZero() {
@@ -515,9 +555,24 @@ func (r *Runtime) emit(event Event) {
 		agentID = r.seatID
 	}
 	session := r.current[agentID]
+	redactor := r.redactor
 	r.mu.RUnlock()
+	// The tools hand a child the parent environment on purpose, so an agent
+	// that runs `env`, or a prompt-injected call that names one variable, would
+	// otherwise put a vaulted credential into durable JSONL and onto the
+	// screen. Redacting here covers every producer at once, and covers the
+	// stored copy and the rendered one identically.
+	event.Text = redactor.redact(event.Text)
+	event.Metadata = redactor.redactMetadata(event.Metadata)
 	if session != nil {
 		_ = session.log.Append(logx.Entry{Time: event.Time, Agent: event.AgentID, Session: session.id, Kind: event.Kind, Text: event.Text, Metadata: event.Metadata})
+	}
+	// A session Clear opened mid-turn becomes the log target only now, at the
+	// end of the turn that was in flight. "error" ends a turn too: fail() emits
+	// it with no turn_done to follow, so promoting on turn_done alone would
+	// strand the new session forever behind a turn that ended badly.
+	if event.Kind == "turn_done" || event.Kind == "error" {
+		r.promotePending(agentID)
 	}
 	r.eventMu.Lock()
 	r.eventQueue = append(r.eventQueue, event)

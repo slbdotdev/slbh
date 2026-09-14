@@ -211,7 +211,6 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 		}
 		job.finished = time.Now().UTC()
 		job.mu.Unlock()
-		close(job.done)
 		cancel()
 		if job.log != nil {
 			_ = job.log.Append(logx.Entry{Agent: spec.Author, Kind: "job_end", Metadata: map[string]any{"job": job.id, "status": job.Snapshot().Status, "exit_code": job.Snapshot().ExitCode}})
@@ -223,6 +222,13 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 			stdoutText, stderrText := job.Output()
 			handler(job.Snapshot(), stdoutText, stderrText)
 		}
+		// done closes last, so that it means the job is finished *and* recorded
+		// *and* delivered. Manager.Close waits on it before Runtime.Close shuts
+		// the session loggers; closing it before these two steps let Close
+		// return while this goroutine still had an Append to make, which then
+		// failed with "log is closed" and dropped both the job_end record and
+		// the job's result.
+		close(job.done)
 	}()
 	return job, nil
 }

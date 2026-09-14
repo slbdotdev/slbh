@@ -156,6 +156,15 @@ func Run(rt *harness.Runtime, opts Options) (Result, error) {
 		case <-deadline:
 			res.StopReason = "wall_cap"
 			return finish()
+		case <-rt.Done():
+			// Close cancels the context and stops the dispatcher but never
+			// closes the events channel, and a cancelled turn returns without
+			// emitting turn_done. Without this case a SIGTERM mid-turn parks
+			// the process on <-events until someone sends SIGKILL, so the CLI
+			// can never report its status and no service manager can observe a
+			// clean shutdown.
+			res.StopReason = "shutdown"
+			return finish()
 		}
 	}
 }

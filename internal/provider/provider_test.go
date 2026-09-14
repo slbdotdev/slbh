@@ -543,3 +543,30 @@ func TestResolveRouteKeepsTheLocalRouteKeylessAndUnpinned(t *testing.T) {
 		t.Fatalf("local route carries a pin: %d", route.ContextWindow)
 	}
 }
+
+func TestExplicitEndpointOverrideAlsoDropsTheCatalogPointer(t *testing.T) {
+	// The override cleared the context pin but left Policy.CatalogEndpoint
+	// pointing at Z.ai, and catalogEndpoint() prefers the policy's value over
+	// the route's endpoint. The first turn therefore sized its context window
+	// from Z.ai's catalog while inference went to the override — and a route
+	// deliberately pointed somewhere private still called out to Z.ai.
+	t.Setenv("ZAI_API_KEY", "zai-key-not-a-credential")
+	t.Setenv("OPENROUTER_API_KEY", "or-key-not-a-credential")
+
+	const override = "https://proxy.example.invalid/api/anthropic/v1/messages"
+	route, err := ResolveRoute("zai/glm-5.3-flash", override, true, testPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.Policy.CatalogEndpoint != "" {
+		t.Fatalf("the override kept the policy's catalog %q", route.Policy.CatalogEndpoint)
+	}
+	p := &HTTPProvider{Route: route, Endpoint: route.Endpoint}
+	catalog, err := p.catalogEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(catalog, "api.z.ai") {
+		t.Fatalf("catalog resolved to %q, which is not the endpoint the operator selected", catalog)
+	}
+}

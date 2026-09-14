@@ -214,3 +214,34 @@ func TestRunRejectsARuntimeWithNoSeat(t *testing.T) {
 		t.Fatal("want an error for a nil runtime")
 	}
 }
+
+func TestRunReturnsWhenTheRuntimeShutsDown(t *testing.T) {
+	// With no --timeout the deadline channel is nil, and Close cancels the
+	// context without closing the events channel, so a SIGTERM arriving during
+	// an in-flight turn parked the process on <-events until someone sent
+	// SIGKILL. The CLI could never report its status and no service manager
+	// could observe a clean shutdown.
+	rt := newRuntime(t, stalling{})
+	type outcome struct {
+		res Result
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := Run(rt, Options{Prompt: "hello"})
+		done <- outcome{res, err}
+	}()
+	time.Sleep(100 * time.Millisecond)
+	_ = rt.Close()
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("Run returned an error on shutdown: %v", got.err)
+		}
+		if got.res.StopReason != "shutdown" {
+			t.Fatalf("stop reason %q, want shutdown", got.res.StopReason)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after the runtime shut down")
+	}
+}

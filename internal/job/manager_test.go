@@ -2,10 +2,13 @@ package job
 
 import (
 	"context"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/slbdotdev/slbh/internal/logx"
 )
 
 func TestManagerRunsAndCapturesOutput(t *testing.T) {
@@ -52,10 +55,14 @@ func TestManagerCompletionHandlerReceivesFinishedOutput(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("completion handler was not called")
 	}
+	// done closes last, so it means finished *and* recorded *and* delivered.
+	// It used to close first, which let Manager.Close return — and Runtime.Close
+	// shut the session loggers — while this goroutine still had its job_end
+	// Append and this handler to run.
 	select {
 	case <-job.Done():
-	default:
-		t.Fatal("completion handler ran before Done was closed")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Done did not close after the completion handler ran")
 	}
 	if got.ID != job.Snapshot().ID || got.Status != Complete || got.ToolName != "long_py" {
 		t.Fatalf("snapshot=%#v job=%#v", got, job.Snapshot())
@@ -113,4 +120,42 @@ func TestManagerWarning(t *testing.T) {
 		t.Fatal("warning was not emitted")
 	}
 	_ = j.Kill()
+}
+
+func TestJobDoneMeansTheEndRecordIsAlreadyWritten(t *testing.T) {
+	// Manager.Close waits on done and nothing else, so if done can close before
+	// the job_end Append, Runtime.Close is free to shut the logger underneath
+	// it. The Append then fails with "log is closed", the job goroutine ignores
+	// the error, and the transcript silently loses the job's terminal record.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+	log, err := logx.OpenSession(path, "run-test", "session-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(log)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	job, err := m.Start(ctx, Spec{Author: "agent-test", Script: "echo done-ordering", ToolName: "long_py"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-job.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("job never finished")
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := logx.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Kind == "job_end" {
+			return
+		}
+	}
+	t.Fatalf("no job_end record was written before Done closed: %#v", entries)
 }

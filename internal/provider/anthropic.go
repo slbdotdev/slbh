@@ -505,6 +505,11 @@ func (s *anthropicStream) consume(data []byte, sink StreamSink) error {
 			Type    string `json:"type"`
 			Message string `json:"message"`
 		} `json:"error"`
+		// RequestID sits beside `error`, not inside it. It is the only handle
+		// Z.ai gives for a failed request, the pre-stream classifier already
+		// preserves it, and the plan requires it in the error text — the
+		// in-stream path was the one place it was dropped.
+		RequestID string `json:"request_id"`
 	}
 	if err := json.Unmarshal(data, &frame); err != nil {
 		return fmt.Errorf("decode provider event: %w", err)
@@ -527,6 +532,10 @@ func (s *anthropicStream) consume(data []byte, sink StreamSink) error {
 				Wire:    WireAnthropicMessages,
 				Code:    frame.Error.Type,
 				Message: frame.Error.Message,
+				// The frame's own numeric `code` is deliberately not consulted
+				// for Status: the type mapping is the settled classifier, and
+				// rate_limit_error is kept non-retryable there on purpose.
+				RequestID: frame.RequestID,
 			}
 		}
 		return fmt.Errorf("provider stream error")
