@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/slbdotdev/slbh/internal/config"
 )
 
 const codexParentTool = "slbh_message_parent"
@@ -439,6 +441,30 @@ func (c *codexLeaf) initialize(ctx context.Context) error {
 	return c.startThread(ctx)
 }
 
+// codexLeafMechanics is the harness half of a Codex leaf's instructions: what
+// this build gives it and what it structurally cannot do. It stays baked for
+// the same reason the native system prompt's mechanics do — it names slbh's
+// own tool and the runtime's delegation cap, and a managed file that
+// contradicted either would simply be wrong.
+const codexLeafMechanics = "You are a leaf worker managed by slbh. You may not launch, delegate to, or create other agents. You may send progress to your slbh parent with slbh_message_parent. Keep foreground commands bounded and use background work only when the Codex policy provides it."
+
+// developerInstructions assembles a Codex leaf's instructions from the same
+// two layers the native agents use.
+//
+// This literal was the one place per-layer instruction already existed, as a
+// hardcoded string: the concept was here and only the delivery mechanism was
+// missing. A Codex leaf now receives the managed leaf document too, so org
+// role policy reaches every leaf regardless of which harness runs it, and
+// changes without a rebuild.
+func (c *codexLeaf) developerInstructions() string {
+	instructions := codexLeafMechanics
+	layer := c.agent.runtime.LayerInstructions(c.agent.Depth)
+	if strings.TrimSpace(layer) == "" {
+		return instructions
+	}
+	return instructions + "\n\nOrg instructions for your layer (" + config.LayerForDepth(c.agent.Depth) + "). These are managed by the fleet and define what an agent at this layer may and may not do. Where they appear to contradict the runtime mechanics above, the mechanics are facts about this build and stand; the role policy governs everything else.\n\n" + layer
+}
+
 func (c *codexLeaf) startThread(ctx context.Context) error {
 	c.agent.mu.RLock()
 	model, workDir := c.agent.Model, c.agent.WorkDir
@@ -453,7 +479,7 @@ func (c *codexLeaf) startThread(ctx context.Context) error {
 		"sandbox":               "danger-full-access",
 		"serviceName":           "slbh",
 		"config":                map[string]any{"agents": map[string]any{"enabled": false}},
-		"developerInstructions": "You are a leaf worker managed by slbh. You may not launch, delegate to, or create other agents. You may send progress to your slbh parent with slbh_message_parent. Keep foreground commands bounded and use background work only when the Codex policy provides it.",
+		"developerInstructions": c.developerInstructions(),
 		"dynamicTools": []any{map[string]any{
 			"type": "function", "name": codexParentTool,
 			"description": "Send a concise progress or result message to the slbh parent agent.",

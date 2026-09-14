@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/provider"
 )
@@ -663,14 +664,39 @@ func compactMessages(history []provider.Message, keep int) ([]provider.Message, 
 	return append([]provider.Message{marker}, recent...), start
 }
 
+// systemPrompt assembles an agent's system prompt from its two layers.
+//
+// The split is by what owns the truth. Everything bakedSystemPrompt returns is
+// harness mechanics — how *this build* behaves — and only the binary knows it,
+// so a managed file that disagreed would simply be wrong. Everything the
+// managed layer document adds is org policy about what an agent at this layer
+// may do, and it has to be able to change without a rebuild.
+//
+// slbh can do this structurally because it owns the agent tree and knows each
+// agent's Depth at the moment it builds a prompt. The other harnesses can only
+// approximate per-layer delivery by convention.
 func systemPrompt(a *Agent) string {
-	prompt := systemPromptLegacy(a)
-	prompt = strings.Replace(prompt, "Do not use quick_bash, long_job, sleep,", "Do not use quick_bash, long_job, quick_py, long_py, sleep,", 1)
-	return strings.Replace(prompt, "completed long_job output", "completed long_job/long_py output", 1)
+	prompt := bakedSystemPrompt(a)
+	layer := a.runtime.LayerInstructions(a.Depth)
+	if strings.TrimSpace(layer) == "" {
+		// No document for this layer: run on baked mechanics alone. Absence is
+		// deliberately not a refusal here, unlike a missing routing policy,
+		// which is a security posture. Degrade, never brick.
+		return prompt
+	}
+	return prompt + fmt.Sprintf("\n\nOrg instructions for your layer (%s). These are managed by the fleet and define what an agent at this layer may and may not do. Where they appear to contradict the runtime mechanics above, the mechanics are facts about this build and stand; the role policy governs everything else.\n\n%s", config.LayerForDepth(a.Depth), layer)
 }
 
-func systemPromptLegacy(a *Agent) string {
-	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message and completed long_job output, is a mandatory mid-turn steer: read and act on it during your current work. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
+// bakedSystemPrompt is the harness-mechanics half, authored as one string.
+//
+// It used to be a legacy literal patched by two strings.Replace calls to
+// insert quick_py and long_py. The patches are folded in here: a prompt
+// assembled by search-and-replace has no single readable source, and layering
+// a managed tier on top of a patched string would have made that permanent.
+// The fold was verified byte-identical to the patched output before the
+// legacy form was removed.
+func bakedSystemPrompt(a *Agent) string {
+	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message and completed long_job/long_py output, is a mandatory mid-turn steer: read and act on it during your current work. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
 }
 
 // maxToolErrorOutput bounds the output carried back with a failing tool call. A five-second

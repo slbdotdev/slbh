@@ -79,6 +79,10 @@ type Config struct {
 	Policy provider.Policy
 	// PolicySource says which file Policy came from, for the TUI.
 	PolicySource PolicySource
+	// Instructions are the per-layer role documents in force, read from
+	// $SLBH_HOME/instructions. Derived like Policy, never persisted: slbh
+	// reads these files and never writes them.
+	Instructions Instructions
 }
 
 func Load() Config {
@@ -142,6 +146,7 @@ func Load() Config {
 		cfg.LeafModel = cfg.SubagentModel
 	}
 	cfg.Policy, cfg.PolicySource = ResolvePolicy(home, cfg.LocalPolicy)
+	cfg.Instructions = LoadInstructions(home)
 	return cfg
 }
 

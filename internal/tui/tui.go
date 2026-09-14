@@ -804,6 +804,11 @@ func (m Model) modelMenuView() string {
 		// who edits a local policy sees no change, and this line is the only
 		// thing that tells them the managed file is winning.
 		wrapToWidth("Routing policy: "+m.runtime.PolicySource().Describe(), width),
+		// The per-layer role documents, from the same managed directory. A
+		// converge that did not land leaves agents running on baked mechanics
+		// alone, which is a legitimate state and therefore a silent one unless
+		// it is reported here.
+		wrapToWidth("Layer instructions: "+m.runtime.InstructionSource().Describe(), width),
 		"r=seat · s=subagent · l=leaf · p=author local policy · Enter=assign · Esc=save and close",
 		"",
 	}

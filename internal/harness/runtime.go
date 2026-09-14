@@ -245,6 +245,25 @@ func (r *Runtime) ConfigureModelSlots(seatModel, subagentModel, leafModel string
 	return nil
 }
 
+// LayerInstructions returns the managed role document for an agent at the
+// given depth, or the empty string when that layer has no deployed document.
+//
+// It is read through the runtime rather than from the agent's own state
+// because the documents are org policy: one copy, resolved once at startup,
+// shared by every agent the runtime owns.
+func (r *Runtime) LayerInstructions(depth int) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.config.Instructions.For(depth)
+}
+
+// InstructionSource reports where the layer documents came from, for the TUI.
+func (r *Runtime) InstructionSource() config.InstructionSource {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.config.Instructions.Source
+}
+
 func (r *Runtime) ModelGuidance() string {
 	r.mu.RLock()
 	cfg := r.config
