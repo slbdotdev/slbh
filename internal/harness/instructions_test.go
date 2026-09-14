@@ -169,6 +169,10 @@ func TestCodexLeafReceivesLeafDocumentBesideItsMechanics(t *testing.T) {
 	if !strings.Contains(instructions, codexLeafMechanics) {
 		t.Fatal("Codex leaf lost its baked mechanics")
 	}
+	// The depth, the layer it resolves to and where the documents came from
+	// are the three things that would explain a miss here, and none of them
+	// is recoverable from the assembled string alone — so this assertion
+	// reports them rather than failing bare.
 	if !strings.Contains(instructions, leafDoc) {
 		t.Fatalf("Codex leaf did not receive the managed leaf document: depth=%d layer=%q source=%+v instructions=%q",
 			leaf.Depth, config.LayerForDepth(leaf.Depth), r.InstructionSource(), instructions)
