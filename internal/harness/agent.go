@@ -613,7 +613,17 @@ func (a *Agent) resolveContextWindow(ctx context.Context, p provider.Provider) i
 	// either fail and waste a round trip or return a figure the pin exists to
 	// override. A pin that nothing consults changes nothing, which is why this
 	// resolution path is the substance of the change and the table is not.
-	window, pinned := provider.PinnedContextWindow(model)
+	//
+	// The pin comes from the provider instance, which carries its own route's
+	// policy, and never from a lookup by model name here. Only the instance
+	// knows the endpoint the request will really reach: under an explicit
+	// endpoint override the same model name goes to OpenRouter instead of the
+	// plan, and a name-keyed pin would size the window for a route this
+	// request is not taking.
+	window, pinned := 0, false
+	if routed, ok := p.(provider.RoutePolicyProvider); ok {
+		window, pinned = routed.PinnedContextWindow()
+	}
 	if !pinned {
 		window = provider.FallbackContextWindow
 		if metadata, ok := p.(provider.ContextWindowProvider); ok {

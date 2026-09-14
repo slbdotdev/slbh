@@ -60,6 +60,21 @@ including when the same model is also listed by OpenRouter. A custom
 OpenAI-compatible endpoint uses `OPENROUTER_API_KEY` unless a native route
 wins.
 
+**Routing fails closed.** A model that belongs to a native route whose key is
+absent is refused, naming the missing variable; it is not quietly redirected to
+OpenRouter, because a model reachable on a plan never runs through OpenRouter.
+Setting `SLBH_ENDPOINT` yourself is the deliberate override and is honoured even
+for a native model — the endpoint's provenance is what routing consults, so the
+same URL arriving as the built-in default overrides nothing. A model with no
+native route and no `OPENROUTER_API_KEY` is refused when the route is resolved
+rather than at its first request. The local route needs no credential and keeps
+working with every provider key unset.
+
+Every spelling that addresses one route resolves to a single authoritative route
+key, so the routing table, the context pin and the per-route policy cannot
+disagree about which route a request took. The `[1m]` model spellings are not
+aliases of the plain slug and are never folded into it.
+
 These environment variables are read at startup:
 
 | Variable | Default | Purpose |

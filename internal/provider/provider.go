@@ -141,21 +141,153 @@ const FallbackContextWindow = 128000
 // policy file replaces this source in phase 1c, which deletes this map. It must
 // not outlive that phase.
 //
-// Keys are exact model spellings. The `[1m]` variants Z.ai's own Claude Code
-// guide publishes are rejected 1211 on both wires (fact 11), so they are not
-// aliases of the plain slug and must never resolve to this pin.
+// Keys are authoritative route keys, so the bare `glm-5.3-flash` spelling
+// needs no entry of its own: RouteKey folds it into the canonical one. The
+// `[1m]` variants Z.ai's own Claude Code guide publishes are rejected 1211 on
+// both wires (fact 11), so they are not aliases of the plain slug and must
+// never resolve to this pin.
 var contextWindowPins = map[string]int{
 	"zai/glm-5.3-flash": 1000000,
-	"glm-5.3-flash":     1000000,
 }
 
 // PinnedContextWindow reports the pinned context window for a model route. A
 // pinned window is authoritative over both catalog discovery and
 // FallbackContextWindow, because a route is pinned precisely when discovery
 // cannot answer for it.
+//
+// This keys on the authoritative route key, so every spelling that addresses
+// the route resolves to the same pin and no caller normalizes separately.
 func PinnedContextWindow(model string) (int, bool) {
-	window, ok := contextWindowPins[NormalizeModel(model)]
-	return window, ok
+	key, ok := RouteKey(model)
+	if !ok {
+		return 0, false
+	}
+	window, found := contextWindowPins[key]
+	return window, found
+}
+
+// Route is the resolved identity of one provider route: the authoritative key
+// that policy lookup, the effort map and the context pin all key on, together
+// with the transport facts needed to reach it and the policy that governs it.
+//
+// A provider instance carries its own Route, so nothing downstream re-derives
+// a route from a model string. That distinction is load-bearing rather than
+// tidy: the same model name reaches different endpoints depending on which
+// credentials are present and whether an endpoint override was set, so a pin
+// or a posture keyed on the name alone can describe a route the request did
+// not actually take.
+type Route struct {
+	// Key is the authoritative route key, such as "zai/glm-5.3-flash".
+	Key string
+	// Flavor is the provider family: zai, deepseek, openrouter or local.
+	Flavor string
+	// Endpoint is the URL this route posts inference to.
+	Endpoint string
+	// APIKey is this route's credential. Empty only for the local route,
+	// which deliberately sends none.
+	APIKey string
+	// ContextWindow is this route's pinned window, zero when unpinned. Phase
+	// 1c replaces the source of this value with the managed policy file.
+	ContextWindow int
+}
+
+// RouteKey derives the authoritative route key for a model name. Every
+// spelling that addresses the same route collapses to one key here, so policy
+// lookup, the effort map and the context pin never each normalize separately.
+// It reports false only for a name that addresses nothing at all.
+//
+// It deliberately does not invent the `[1m]` spellings. Z.ai's own Claude Code
+// guide publishes `glm-5.3-flash[1m]`, and both wires reject it with code 1211
+// (measured 2026-09-13, fact 11), so it is not an alias of the plain slug and
+// must never be folded into one.
+func RouteKey(model string) (string, bool) {
+	model = NormalizeModel(model)
+	if model == "" {
+		return "", false
+	}
+	switch {
+	case strings.HasPrefix(model, LocalProviderName+"/"):
+		return model, true
+	case strings.EqualFold(model, localWireModelID):
+		return LocalProviderName + "/" + localWireModelID, true
+	case strings.HasPrefix(model, "glm-"):
+		// The bare plan slug addresses the plan route; the `zai/` spelling is
+		// canonical so both reach one policy entry.
+		return "zai/" + model, true
+	}
+	return model, true
+}
+
+// nativeRoute is the fixed transport for one native provider family.
+type nativeRoute struct {
+	flavor   string
+	endpoint string
+	keyEnv   string
+}
+
+// nativeRouteFor matches an authoritative route key to its native family. It
+// matches on the canonical key alone, which is why the bare `glm-` spelling
+// does not appear here: RouteKey has already folded it into `zai/`.
+func nativeRouteFor(key string) (nativeRoute, bool) {
+	switch {
+	case strings.HasPrefix(key, LocalProviderName+"/"):
+		return nativeRoute{flavor: LocalProviderName}, true
+	case strings.HasPrefix(key, "deepseek/") || strings.HasPrefix(key, "deepseek-"):
+		return nativeRoute{flavor: "deepseek", endpoint: "https://api.deepseek.com/chat/completions", keyEnv: "DEEPSEEK_API_KEY"}, true
+	case strings.HasPrefix(key, "zai/"):
+		return nativeRoute{flavor: "zai", endpoint: "https://api.z.ai/api/coding/paas/v4/chat/completions", keyEnv: "ZAI_API_KEY"}, true
+	}
+	return nativeRoute{}, false
+}
+
+// ResolveRoute derives the authoritative route for a model and fails closed.
+//
+// Routing used to default to OpenRouter and leave it only when a native key
+// happened to be present, so an absent ZAI_API_KEY silently redirected a plan
+// model to OpenRouter. That is fail-open, and it is against the standing rule
+// that a model reachable on a plan never runs through OpenRouter. A native
+// model whose key is missing now refuses instead.
+//
+// endpointExplicit is the one escape: an endpoint the operator set
+// deliberately is honoured as an override, where the same value arrived at by
+// default is not. Without that distinction the refusal could not tell an
+// intentional override from the stock OpenRouter default and would either
+// never fire or override the operator.
+func ResolveRoute(model, endpoint string, endpointExplicit bool) (Route, error) {
+	key, ok := RouteKey(model)
+	if !ok {
+		return Route{}, fmt.Errorf("no model specified")
+	}
+	route := Route{Key: key, ContextWindow: contextWindowPins[key]}
+
+	if native, isNative := nativeRouteFor(key); isNative {
+		if native.flavor == LocalProviderName {
+			route.Flavor, route.Endpoint = LocalProviderName, localEndpoint()
+			return route, nil
+		}
+		if apiKey := os.Getenv(native.keyEnv); apiKey != "" {
+			route.Flavor, route.Endpoint, route.APIKey = native.flavor, native.endpoint, apiKey
+			return route, nil
+		}
+		if !endpointExplicit {
+			return Route{}, fmt.Errorf(
+				"model %q routes to the %s endpoint but %s is not set: refusing to fall through to OpenRouter, because a model reachable on a plan never runs through it (set %s, or set SLBH_ENDPOINT deliberately to override)",
+				model, native.flavor, native.keyEnv, native.keyEnv)
+		}
+		// An explicit endpoint override was set: fall through to it below. The
+		// route is no longer the native one, so it keeps no native pin.
+		route.ContextWindow = 0
+	}
+
+	if strings.TrimSpace(endpoint) == "" {
+		return Route{}, fmt.Errorf("model %q has no route: no native provider matched and no endpoint is configured", model)
+	}
+	apiKey := os.Getenv("OPENROUTER_API_KEY")
+	if apiKey == "" {
+		return Route{}, fmt.Errorf("model %q routes to %s but OPENROUTER_API_KEY is not set", model, endpoint)
+	}
+	route.Flavor, route.Endpoint, route.APIKey = "openrouter", endpoint, apiKey
+	return route, nil
 }
 
 const (
@@ -174,43 +306,56 @@ func localEndpoint() string {
 }
 
 type HTTPProvider struct {
-	Endpoint       string
-	APIKey         string
-	Client         *http.Client
-	Flavor         string
+	Endpoint string
+	APIKey   string
+	Client   *http.Client
+	Flavor   string
+	// Route is the resolved route this instance serves, carrying its own
+	// policy. An instance built by ForModel always has one; one built directly
+	// by NewHTTP has the zero Route and therefore no pinned window.
+	Route          Route
 	metadataMu     sync.Mutex
 	contextWindows map[string]int
+}
+
+// RoutePolicyProvider is implemented by a provider instance that carries its
+// own route's policy. It is optional because not every Provider is
+// route-resolved: test fakes and wrappers need not carry a route.
+//
+// The harness asks the instance rather than looking a pin up by model name,
+// because only the instance knows which endpoint the request will actually
+// reach. A model name that usually addresses the plan reaches OpenRouter under
+// an explicit endpoint override, and a pin keyed on the name would then
+// describe the wrong route.
+type RoutePolicyProvider interface {
+	PinnedContextWindow() (int, bool)
+}
+
+// PinnedContextWindow reports this route's pinned context window.
+func (p *HTTPProvider) PinnedContextWindow() (int, bool) {
+	if p.Route.ContextWindow > 0 {
+		return p.Route.ContextWindow, true
+	}
+	return 0, false
 }
 
 func NewHTTP(endpoint, key string) *HTTPProvider {
 	return &HTTPProvider{Endpoint: endpoint, APIKey: key, Client: &http.Client{Timeout: 0}, contextWindows: make(map[string]int)}
 }
 
-// ForModel selects the native endpoint where available and falls back to
-// OpenRouter, keeping all providers on the same OpenAI-compatible wire shape.
-func ForModel(model, endpointOverride string) (*HTTPProvider, error) {
-	model = NormalizeModel(model)
-	if strings.HasPrefix(model, LocalProviderName+"/") || strings.EqualFold(model, localWireModelID) {
-		provider := NewHTTP(localEndpoint(), "")
-		provider.Flavor = LocalProviderName
-		return provider, nil
+// ForModel builds the provider for a model's authoritative route. It fails
+// closed: a model whose native key is absent refuses rather than silently
+// falling through to OpenRouter. endpointExplicit distinguishes an endpoint the
+// operator set from one that merely defaulted, and only the former overrides a
+// native route.
+func ForModel(model, endpointOverride string, endpointExplicit bool) (*HTTPProvider, error) {
+	route, err := ResolveRoute(model, endpointOverride, endpointExplicit)
+	if err != nil {
+		return nil, err
 	}
-	endpoint := endpointOverride
-	key := os.Getenv("OPENROUTER_API_KEY")
-	flavor := "openrouter"
-	if (strings.HasPrefix(model, "deepseek/") || strings.HasPrefix(model, "deepseek-")) && os.Getenv("DEEPSEEK_API_KEY") != "" {
-		endpoint, key = "https://api.deepseek.com/chat/completions", os.Getenv("DEEPSEEK_API_KEY")
-		flavor = "deepseek"
-	}
-	if (strings.HasPrefix(model, "zai/") || strings.HasPrefix(model, "glm-")) && os.Getenv("ZAI_API_KEY") != "" {
-		endpoint, key = "https://api.z.ai/api/coding/paas/v4/chat/completions", os.Getenv("ZAI_API_KEY")
-		flavor = "zai"
-	}
-	if endpoint == "" {
-		return nil, fmt.Errorf("no provider endpoint configured")
-	}
-	provider := NewHTTP(endpoint, key)
-	provider.Flavor = flavor
+	provider := NewHTTP(route.Endpoint, route.APIKey)
+	provider.Flavor = route.Flavor
+	provider.Route = route
 	return provider, nil
 }
 

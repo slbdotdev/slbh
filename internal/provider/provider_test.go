@@ -92,7 +92,7 @@ func TestNormalizeDeepSeekModel(t *testing.T) {
 
 func TestForModelRoutesLocalOllamaWithoutKey(t *testing.T) {
 	t.Setenv("SLBH_LOCAL_ENDPOINT", "http://127.0.0.1:11434/v1/chat/completions")
-	p, err := ForModel(LocalModelID, "https://example.invalid/v1/chat/completions")
+	p, err := ForModel(LocalModelID, "https://example.invalid/v1/chat/completions", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,5 +284,169 @@ func TestPinnedContextWindow(t *testing.T) {
 		if window, ok := PinnedContextWindow(model); ok {
 			t.Fatalf("%q must not be pinned, got %d", model, window)
 		}
+	}
+}
+
+func TestRouteKeyNormalizesEverySpellingOfARoute(t *testing.T) {
+	// Many spellings collapse onto one authoritative key. This is the whole
+	// point of deriving it in one place: policy lookup, the effort map and the
+	// context pin would otherwise each normalize, and could disagree.
+	for _, tc := range []struct{ model, want string }{
+		{"zai/glm-5.3-flash", "zai/glm-5.3-flash"},
+		{"glm-5.3-flash", "zai/glm-5.3-flash"},
+		{"  glm-5.3-flash  ", "zai/glm-5.3-flash"},
+		{"glm-5.3", "zai/glm-5.3"},
+		{LocalModelID, LocalModelID},
+		{localWireModelID, LocalModelID},
+		{"deepseek-v4-flash", "deepseek-v4-flash"},
+		// NormalizeModel's existing alias folding still applies underneath.
+		{"deepseek/deepseek-v4.1-flash", "deepseek-v4-flash"},
+		{"deepseek-v4.1-flash", "deepseek-v4-flash"},
+		// The OpenRouter namespace is a different route to the same model and
+		// keeps its own key, so phase 3 can carry a posture for it.
+		{"z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash"},
+	} {
+		got, ok := RouteKey(tc.model)
+		if !ok {
+			t.Fatalf("RouteKey(%q) reported no route", tc.model)
+		}
+		if got != tc.want {
+			t.Fatalf("RouteKey(%q) = %q, want %q", tc.model, got, tc.want)
+		}
+	}
+
+	// A `[1m]` spelling is rejected 1211 on both wires, so it is not an alias
+	// and must keep a key of its own rather than being folded into the plain
+	// slug. Folding it would route a model that cannot run and hand it a pin.
+	for _, model := range []string{"glm-5.3-flash[1m]", "zai/glm-5.3-flash[1m]", "glm-5.3[1m]"} {
+		got, ok := RouteKey(model)
+		if !ok {
+			t.Fatalf("RouteKey(%q) reported no route", model)
+		}
+		if got == "zai/glm-5.3-flash" || got == "zai/glm-5.3" {
+			t.Fatalf("RouteKey(%q) = %q: a [1m] spelling was normalized into the plain slug", model, got)
+		}
+		if _, pinned := PinnedContextWindow(model); pinned {
+			t.Fatalf("%q must not inherit the plan route's context pin", model)
+		}
+	}
+
+	// Only a name that addresses nothing reports false.
+	for _, model := range []string{"", "   "} {
+		if got, ok := RouteKey(model); ok {
+			t.Fatalf("RouteKey(%q) = %q, want no route", model, got)
+		}
+	}
+}
+
+func TestRouteKeyAndWireModelAreInverse(t *testing.T) {
+	// The other direction: the authoritative key maps back to the id each
+	// route puts on the wire. The plan route sends the bare slug (fact 11),
+	// and OpenRouter sends its own namespaced spelling.
+	t.Setenv("ZAI_API_KEY", "test-key-not-a-credential")
+	p, err := ForModel("glm-5.3-flash", "https://openrouter.ai/api/v1/chat/completions", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Route.Key != "zai/glm-5.3-flash" {
+		t.Fatalf("route key = %q, want zai/glm-5.3-flash", p.Route.Key)
+	}
+	if got := p.modelID(p.Route.Key); got != "glm-5.3-flash" {
+		t.Fatalf("plan wire model = %q, want glm-5.3-flash", got)
+	}
+	if got := (&HTTPProvider{Flavor: "openrouter"}).modelID("deepseek-v4-flash"); got != "deepseek/deepseek-v4-flash" {
+		t.Fatalf("openrouter wire model = %q, want deepseek/deepseek-v4-flash", got)
+	}
+}
+
+func TestResolveRouteRefusesRatherThanFallingThroughToOpenRouter(t *testing.T) {
+	// The fail-open defect this replaces: ForModel defaulted to OpenRouter and
+	// left it only if a native key happened to be present, so an absent
+	// ZAI_API_KEY silently redirected a plan model to OpenRouter.
+	t.Setenv("ZAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
+	for _, model := range []string{"zai/glm-5.3-flash", "glm-5.3-flash"} {
+		route, err := ResolveRoute(model, "https://openrouter.ai/api/v1/chat/completions", false)
+		if err == nil {
+			t.Fatalf("ResolveRoute(%q) returned flavor %q instead of refusing", model, route.Flavor)
+		}
+		if !strings.Contains(err.Error(), "ZAI_API_KEY") {
+			t.Fatalf("refusal for %q does not name the missing key: %v", model, err)
+		}
+	}
+
+	// The same refusal for the other native family.
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	if _, err := ResolveRoute("deepseek-v4-flash", "https://openrouter.ai/api/v1/chat/completions", false); err == nil {
+		t.Fatal("a deepseek model with no DEEPSEEK_API_KEY did not refuse")
+	}
+}
+
+func TestResolveRouteHonoursAnExplicitEndpointOverride(t *testing.T) {
+	// An endpoint the operator set deliberately is the sanctioned escape from
+	// the refusal. The identical value arrived at by default is not, which is
+	// why provenance and not the value is what routing consults.
+	t.Setenv("ZAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
+	const endpoint = "https://openrouter.ai/api/v1/chat/completions"
+
+	if _, err := ResolveRoute("zai/glm-5.3-flash", endpoint, false); err == nil {
+		t.Fatal("a defaulted endpoint must not override a native route")
+	}
+	route, err := ResolveRoute("zai/glm-5.3-flash", endpoint, true)
+	if err != nil {
+		t.Fatalf("an explicit endpoint must override: %v", err)
+	}
+	if route.Flavor != "openrouter" || route.Endpoint != endpoint {
+		t.Fatalf("override route = %#v", route)
+	}
+	// The pin belongs to the plan route, not to this one. Carrying it across
+	// would size a 1,000,000-token window for an endpoint that never agreed to
+	// serve one.
+	if route.ContextWindow != 0 {
+		t.Fatalf("override route kept the plan pin: %d", route.ContextWindow)
+	}
+}
+
+func TestResolveRouteRefusesAnUnroutableModel(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
+	// No model at all addresses no route.
+	if _, err := ResolveRoute("  ", "https://openrouter.ai/api/v1/chat/completions", false); err == nil {
+		t.Fatal("an empty model did not refuse")
+	}
+	// A non-native model with no endpoint has nowhere to go.
+	if _, err := ResolveRoute("vendor/model", "", false); err == nil {
+		t.Fatal("a model with no native route and no endpoint did not refuse")
+	}
+	// A non-native model with an endpoint but no credential refuses at routing
+	// time rather than deferring the failure to the first request.
+	t.Setenv("OPENROUTER_API_KEY", "")
+	if _, err := ResolveRoute("vendor/model", "https://openrouter.ai/api/v1/chat/completions", false); err == nil {
+		t.Fatal("a model with no OPENROUTER_API_KEY did not refuse")
+	}
+}
+
+func TestResolveRouteKeepsTheLocalRouteKeylessAndUnpinned(t *testing.T) {
+	// The local route sends no credential by design and must keep routing with
+	// every provider key absent: fail-closed is about credentials a route
+	// needs, and this one needs none.
+	t.Setenv("SLBH_LOCAL_ENDPOINT", "http://127.0.0.1:11434/v1/chat/completions")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("ZAI_API_KEY", "")
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	route, err := ResolveRoute(LocalModelID, "", false)
+	if err != nil {
+		t.Fatalf("local route refused: %v", err)
+	}
+	if route.Flavor != LocalProviderName || route.APIKey != "" {
+		t.Fatalf("local route = %#v", route)
+	}
+	if route.Endpoint != "http://127.0.0.1:11434/v1/chat/completions" {
+		t.Fatalf("local endpoint = %q", route.Endpoint)
+	}
+	// The local window comes from the provider's own catalog answer, not from
+	// the pin table, so phases 0-3 leave that route's sizing untouched.
+	if route.ContextWindow != 0 {
+		t.Fatalf("local route carries a pin: %d", route.ContextWindow)
 	}
 }

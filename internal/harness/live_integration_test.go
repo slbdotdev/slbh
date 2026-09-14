@@ -67,6 +67,13 @@ func (p *liveProvider) ContextWindow(ctx context.Context, model string) (int, er
 	return p.inner.ContextWindow(ctx, model)
 }
 
+// PinnedContextWindow forwards the wrapped route's policy. A wrapper that
+// swallowed it would silently put the live test back on the 128,000-token
+// fallback while the real path used the pin.
+func (p *liveProvider) PinnedContextWindow() (int, bool) {
+	return p.inner.PinnedContextWindow()
+}
+
 func (p *liveProvider) RequestPayload(request provider.Request) ([]byte, error) {
 	return p.inner.RequestPayload(request)
 }
@@ -111,7 +118,7 @@ func TestLiveTranscriptReplayAndCache(t *testing.T) {
 	if effort := os.Getenv("SLBH_LIVE_TEST_EFFORT"); effort != "" {
 		cfg.SeatEffort = effort
 	}
-	inner, err := provider.ForModel(cfg.SeatModel, cfg.Endpoint)
+	inner, err := provider.ForModel(cfg.SeatModel, cfg.Endpoint, cfg.EndpointExplicit)
 	if err != nil {
 		t.Fatal(err)
 	}

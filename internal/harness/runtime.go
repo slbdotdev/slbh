@@ -108,7 +108,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	go r.dispatchEvents()
 	if r.provider == nil {
 		r.provider = func(model string) (provider.Provider, error) {
-			return provider.ForModel(model, cfg.Endpoint)
+			return provider.ForModel(model, cfg.Endpoint, cfg.EndpointExplicit)
 		}
 	}
 	r.jobs = job.NewManagerWithLogger(r.sessionLogger)

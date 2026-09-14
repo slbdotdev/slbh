@@ -88,9 +88,9 @@ func min(a, b int) int {
 	return b
 }
 
-// windowProvider is a ContextWindowProvider that reports a discoverable
-// window, so a pin can be proved to beat discovery and not merely the
-// fallback. discovery records whether the catalog was consulted at all.
+// windowProvider is a ContextWindowProvider that reports a discoverable window
+// and no route policy, so a pin can be proved to beat discovery and not merely
+// the fallback. discovery records whether the catalog was consulted at all.
 type windowProvider struct {
 	window    int
 	discovery *bool
@@ -107,12 +107,39 @@ func (p windowProvider) ContextWindow(context.Context, string) (int, error) {
 	return p.window, nil
 }
 
-// plainProvider implements no context-window capability, which is the case
+// plainProvider implements neither capability, which is the case
 // FallbackContextWindow exists for.
 type plainProvider struct{}
 
 func (plainProvider) Stream(context.Context, provider.Request, provider.StreamSink) error {
 	return nil
+}
+
+// pinnedProvider carries a route policy and a discoverable window at once, so
+// the two can be told apart by which one wins.
+type pinnedProvider struct {
+	windowProvider
+	pin int
+}
+
+func (p pinnedProvider) PinnedContextWindow() (int, bool) {
+	if p.pin > 0 {
+		return p.pin, true
+	}
+	return 0, false
+}
+
+// zaiRouteProvider builds the real route-resolved provider for the plan model,
+// which is what carries the pin in production. The key is a dummy: the route is
+// resolved and inspected, never dialled.
+func zaiRouteProvider(t *testing.T) *provider.HTTPProvider {
+	t.Helper()
+	t.Setenv("ZAI_API_KEY", "test-key-not-a-credential")
+	p, err := provider.ForModel("zai/glm-5.3-flash", "https://openrouter.ai/api/v1/chat/completions", false)
+	if err != nil {
+		t.Fatalf("resolve plan route: %v", err)
+	}
+	return p
 }
 
 func TestResolveContextWindowPrefersPinOverDiscoveryAndFallback(t *testing.T) {
@@ -121,7 +148,10 @@ func TestResolveContextWindowPrefersPinOverDiscoveryAndFallback(t *testing.T) {
 	// against the fallback would pass even if the pin were consulted last.
 	discovered := false
 	agent := &Agent{Model: "zai/glm-5.3-flash"}
-	got := agent.resolveContextWindow(context.Background(), windowProvider{window: 200000, discovery: &discovered})
+	got := agent.resolveContextWindow(context.Background(), pinnedProvider{
+		windowProvider: windowProvider{window: 200000, discovery: &discovered},
+		pin:            1000000,
+	})
 	if got != 1000000 {
 		t.Fatalf("pinned window = %d, want 1000000", got)
 	}
@@ -129,48 +159,43 @@ func TestResolveContextWindowPrefersPinOverDiscoveryAndFallback(t *testing.T) {
 		t.Fatal("catalog discovery was consulted for a pinned route")
 	}
 
-	// The pin beats the fallback on a provider with no discovery at all.
+	// The real route-resolved provider carries the pin, so the production path
+	// and not only the fake reports 1,000,000.
 	agent = &Agent{Model: "zai/glm-5.3-flash"}
-	if got := agent.resolveContextWindow(context.Background(), plainProvider{}); got != 1000000 {
-		t.Fatalf("pinned window without discovery = %d, want 1000000", got)
-	}
-
-	// The bare slug addresses the same route and carries the same pin.
-	agent = &Agent{Model: "glm-5.3-flash"}
-	if got := agent.resolveContextWindow(context.Background(), plainProvider{}); got != 1000000 {
-		t.Fatalf("bare-slug pinned window = %d, want 1000000", got)
+	if got := agent.resolveContextWindow(context.Background(), zaiRouteProvider(t)); got != 1000000 {
+		t.Fatalf("plan route window = %d, want 1000000", got)
 	}
 }
 
 func TestResolveContextWindowFallsBackForUnpinnedRoutes(t *testing.T) {
-	// An unpinned route with no discovery still falls back to 128,000.
+	// An unpinned route with no discovery falls back to 128,000.
 	agent := &Agent{Model: "deepseek-v4-flash"}
 	if got := agent.resolveContextWindow(context.Background(), plainProvider{}); got != provider.FallbackContextWindow {
 		t.Fatalf("unpinned window = %d, want %d", got, provider.FallbackContextWindow)
 	}
 
 	// An unpinned route with discovery still uses the discovered figure: the
-	// pin table must not suppress the path that already worked.
+	// pin path must not suppress the one that already worked.
 	agent = &Agent{Model: "vendor/model"}
 	if got := agent.resolveContextWindow(context.Background(), windowProvider{window: 262144}); got != 262144 {
 		t.Fatalf("discovered window = %d, want 262144", got)
 	}
 
-	// A `[1m]` spelling is rejected 1211 on both wires and is not an alias of
-	// the plain slug, so it must not inherit the pin.
-	agent = &Agent{Model: "zai/glm-5.3-flash[1m]"}
-	if got := agent.resolveContextWindow(context.Background(), plainProvider{}); got != provider.FallbackContextWindow {
-		t.Fatalf("[1m] window = %d, want the fallback %d", got, provider.FallbackContextWindow)
+	// A provider that carries a route but no pin falls back rather than
+	// reporting a zero window as if it were authoritative.
+	agent = &Agent{Model: "vendor/model"}
+	if got := agent.resolveContextWindow(context.Background(), pinnedProvider{pin: 0}); got != provider.FallbackContextWindow {
+		t.Fatalf("unpinned route window = %d, want %d", got, provider.FallbackContextWindow)
 	}
 }
 
 func TestCompactionFiresAtSeventyPercentOfThePinnedWindow(t *testing.T) {
 	agent := &Agent{Model: "zai/glm-5.3-flash"}
-	window := agent.resolveContextWindow(context.Background(), plainProvider{})
+	window := agent.resolveContextWindow(context.Background(), zaiRouteProvider(t))
 
 	// Roughly 120k estimated tokens: over the 89,600-token fallback budget
 	// that governs this route today, and well under the pinned 700,000 one.
-	// This is the whole point of the pin, so it is asserted on both budgets.
+	// That gap is the whole point of the pin, so both budgets are asserted.
 	history := make([]provider.Message, 96)
 	for i := range history {
 		history[i] = provider.Message{Role: "user", Content: strings.Repeat("x", 5000)}

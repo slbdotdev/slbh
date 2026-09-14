@@ -19,6 +19,12 @@ type Config struct {
 	SubagentEffort string
 	Provider       string
 	Endpoint       string
+	// EndpointExplicit records that Endpoint came from SLBH_ENDPOINT rather
+	// than from the default. Routing needs the provenance, not just the value:
+	// an endpoint the operator set deliberately overrides a native route,
+	// where the identical value arrived at by default must not. Endpoint keeps
+	// its default so catalog discovery still has a URL to read.
+	EndpointExplicit bool
 	// ApprovedModels is nil for programmatic legacy configs and non-nil for
 	// persisted/user-facing configs. A non-nil empty slice deliberately means
 	// no model is approved yet: this is the cost-control fail-safe.
@@ -45,6 +51,7 @@ func Load() Config {
 		Endpoint:       getenv("SLBH_ENDPOINT", "https://openrouter.ai/api/v1/chat/completions"),
 		ApprovedModels: []string{},
 	}
+	cfg.EndpointExplicit = strings.TrimSpace(os.Getenv("SLBH_ENDPOINT")) != ""
 	if persisted, ok := loadFile(home); ok {
 		if os.Getenv("SLBH_MODEL") == "" {
 			seatModel := persisted.SeatModel
