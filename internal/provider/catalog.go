@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,21 +29,32 @@ type Catalog struct {
 	Err      string
 }
 
+// catalogSpec is one catalog fetch: where it lives, what speaks to it, and
+// which credential it needs.
+//
+// Since phase 2 these are derived from the routing policy rather than
+// hardcoded here. That is not tidiness: the plan route moved to a wire whose
+// catalog URL cannot be derived from its inference URL by suffix-stripping and
+// whose document `modelMetadata` cannot decode, so a hardcoded list would have
+// gone on fetching the wrong path with the wrong parser. The policy already
+// carries the endpoint, the catalog endpoint and the wire; this reads them.
 type catalogSpec struct {
-	name     string
-	endpoint string
-	key      string
+	name            string
+	endpoint        string
+	catalogEndpoint string
+	wire            string
+	key             string
 }
 
 // DiscoverCatalog discovers only providers for which a usable API key is
 // present. OpenRouter is intentionally filtered to models created within the
 // last year: its catalog is large enough that stale entries make the TUI
 // impractical.
-func DiscoverCatalog(ctx context.Context, endpointOverride string) ([]Catalog, error) {
-	openRouterEndpoint := endpointOverride
-	if openRouterEndpoint == "" {
-		openRouterEndpoint = "https://openrouter.ai/api/v1/chat/completions"
-	}
+//
+// Routes are grouped by provider family, because several route keys share one
+// catalog — `zai/glm-5.3-flash` and `zai/glm-5.3` are two routes and one
+// endpoint — and fetching it twice would be two round trips for one answer.
+func DiscoverCatalog(ctx context.Context, policy Policy) ([]Catalog, error) {
 	catalogs := []Catalog{{
 		Name:     LocalProviderName,
 		Endpoint: localEndpoint(),
@@ -54,17 +64,9 @@ func DiscoverCatalog(ctx context.Context, endpointOverride string) ([]Catalog, e
 			Preferred:     true,
 		}},
 	}}
-	specs := []catalogSpec{
-		{name: "deepseek", endpoint: "https://api.deepseek.com/chat/completions", key: os.Getenv("DEEPSEEK_API_KEY")},
-		{name: "zai", endpoint: "https://api.z.ai/api/coding/paas/v4/chat/completions", key: os.Getenv("ZAI_API_KEY")},
-		{name: "openrouter", endpoint: openRouterEndpoint, key: os.Getenv("OPENROUTER_API_KEY")},
-	}
 
 	var firstErr error
-	for _, spec := range specs {
-		if strings.TrimSpace(spec.key) == "" {
-			continue
-		}
+	for _, spec := range catalogSpecsFor(policy) {
 		catalog, err := fetchCatalog(ctx, spec)
 		if err != nil {
 			catalog.Err = err.Error()
@@ -79,17 +81,84 @@ func DiscoverCatalog(ctx context.Context, endpointOverride string) ([]Catalog, e
 	return catalogs, firstErr
 }
 
+// catalogSpecsFor derives one spec per provider family the policy describes
+// and a credential is present for. A route whose wire this build cannot speak
+// is skipped rather than fetched: its catalog document would not decode, and
+// listing models for a route that refuses to run is a menu entry that can only
+// disappoint.
+func catalogSpecsFor(policy Policy) []catalogSpec {
+	byFamily := map[string]catalogSpec{}
+	for _, key := range sortedKeys(policy.Routes) {
+		route := policy.Routes[key]
+		if !WireSupported(route.Wire) {
+			continue
+		}
+		native, isNative := nativeRouteFor(key)
+		family, keyEnv := "openrouter", "OPENROUTER_API_KEY"
+		if isNative {
+			if native.flavor == LocalProviderName {
+				continue // already listed, and it needs no credential
+			}
+			family, keyEnv = native.flavor, native.keyEnv
+		}
+		if _, seen := byFamily[family]; seen {
+			continue
+		}
+		credential := strings.TrimSpace(os.Getenv(keyEnv))
+		if credential == "" {
+			continue
+		}
+		catalogEndpoint := strings.TrimSpace(route.CatalogEndpoint)
+		if catalogEndpoint == "" {
+			derived, err := modelsEndpoint(route.Endpoint)
+			if err != nil {
+				continue
+			}
+			catalogEndpoint = derived
+		}
+		byFamily[family] = catalogSpec{
+			name:            family,
+			endpoint:        route.Endpoint,
+			catalogEndpoint: catalogEndpoint,
+			wire:            route.Wire,
+			key:             credential,
+		}
+	}
+	specs := make([]catalogSpec, 0, len(byFamily))
+	for _, family := range []string{"deepseek", "zai", "openrouter"} {
+		if spec, ok := byFamily[family]; ok {
+			specs = append(specs, spec)
+			delete(byFamily, family)
+		}
+	}
+	for _, name := range sortedSpecNames(byFamily) {
+		specs = append(specs, byFamily[name])
+	}
+	return specs
+}
+
+func sortedSpecNames(specs map[string]catalogSpec) []string {
+	names := make([]string, 0, len(specs))
+	for name := range specs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func fetchCatalog(ctx context.Context, spec catalogSpec) (Catalog, error) {
 	catalog := Catalog{Name: spec.name, Endpoint: spec.endpoint}
-	endpoint, err := modelsEndpoint(spec.endpoint)
+	strategy, ok := wireFor(spec.wire)
+	if !ok {
+		return catalog, fmt.Errorf("no implementation for wire %q", spec.wire)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, spec.catalogEndpoint, nil)
 	if err != nil {
 		return catalog, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return catalog, err
-	}
-	request.Header.Set("Authorization", "Bearer "+spec.key)
+	// The wire owns auth headers here too: this endpoint's catalog wants the
+	// same credential shape its inference path does.
+	strategy.applyHeaders(request.Header, spec.key)
 	request.Header.Set("Accept", "application/json")
 	client := http.DefaultClient
 	response, err := client.Do(request)
@@ -99,16 +168,18 @@ func fetchCatalog(ctx context.Context, spec catalogSpec) (Catalog, error) {
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 8*1024))
-		return catalog, fmt.Errorf("model catalog returned %s: %s", response.Status, strings.TrimSpace(string(body)))
+		return catalog, strategy.classifyError(response.StatusCode, body)
 	}
-	var payload struct {
-		Data []modelMetadata `json:"data"`
+	body, err := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024))
+	if err != nil {
+		return catalog, err
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 32*1024*1024)).Decode(&payload); err != nil {
-		return catalog, fmt.Errorf("decode model catalog: %w", err)
+	models, err := strategy.decodeCatalog(body)
+	if err != nil {
+		return catalog, err
 	}
 	cutoff := time.Now().AddDate(-1, 0, 0)
-	for _, model := range payload.Data {
+	for _, model := range models {
 		if spec.name == "openrouter" && (model.Created <= 0 || time.Unix(model.Created, 0).Before(cutoff)) {
 			continue
 		}

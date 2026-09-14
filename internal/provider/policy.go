@@ -47,15 +47,33 @@ var effortFieldForWire = map[string]string{
 // Anthropic-shaped conversation down an OpenAI-shaped encoder and have the
 // endpoint answer 200 to something nobody meant.
 //
-// Phase 2 adds WireAnthropicMessages here in the same change that implements
-// it. Until then, a policy that routes the plan to that wire is inert by
-// design and says so.
+// WireAnthropicMessages joined this set in phase 2, in the same change that
+// implemented it. The set stays a set rather than collapsing into "every wire
+// the schema admits", because the whole point is that the two can diverge: a
+// future policy version may name a protocol a deployed binary has never heard
+// of, and that binary must refuse rather than guess.
 var wireSupported = map[string]bool{
-	WireOpenAIChat: true,
+	WireOpenAIChat:        true,
+	WireAnthropicMessages: true,
 }
 
 // WireSupported reports whether this build can speak a wire.
 func WireSupported(wire string) bool { return wireSupported[wire] }
+
+// withoutWireSupport removes a wire from the supported set and returns a
+// function that restores it. It exists for the test that proves the refusal
+// still fires: once both wires are implemented there is no schema-valid wire
+// this build cannot speak, so the only honest way to exercise that guard is to
+// take one away.
+func withoutWireSupport(wire string) func() {
+	previous, had := wireSupported[wire]
+	delete(wireSupported, wire)
+	return func() {
+		if had {
+			wireSupported[wire] = previous
+		}
+	}
+}
 
 // MaxPrice is the OpenRouter per-million-token price ceiling.
 type MaxPrice struct {

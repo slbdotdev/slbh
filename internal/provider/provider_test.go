@@ -14,6 +14,23 @@ import (
 	"time"
 )
 
+// forModelHTTP resolves a route and returns the concrete transport. ForModel
+// returns the Provider interface since phase 2, because a route carries a wire
+// and the strategy behind it is an implementation detail; these tests assert
+// on transport fields, so they assert the type once, here.
+func forModelHTTP(t *testing.T, model, endpoint string, explicit bool, policy Policy) *HTTPProvider {
+	t.Helper()
+	resolved, err := ForModel(model, endpoint, explicit, policy)
+	if err != nil {
+		t.Fatalf("ForModel(%q): %v", model, err)
+	}
+	instance, ok := resolved.(*HTTPProvider)
+	if !ok {
+		t.Fatalf("ForModel(%q) returned %T, want *HTTPProvider", model, resolved)
+	}
+	return instance
+}
+
 func TestStablePrefixKeyIgnoresUserTurns(t *testing.T) {
 	base := Request{Model: "deepseek/deepseek-chat", System: "stable system", Tools: []Tool{{Name: "read_file", Parameters: map[string]any{"type": "object"}}}}
 	first := base
@@ -92,10 +109,7 @@ func TestNormalizeDeepSeekModel(t *testing.T) {
 
 func TestForModelRoutesLocalOllamaWithoutKey(t *testing.T) {
 	t.Setenv("SLBH_LOCAL_ENDPOINT", "http://127.0.0.1:11434/v1/chat/completions")
-	p, err := ForModel(LocalModelID, "https://example.invalid/v1/chat/completions", true, testPolicy())
-	if err != nil {
-		t.Fatal(err)
-	}
+	p := forModelHTTP(t, LocalModelID, "https://example.invalid/v1/chat/completions", true, testPolicy())
 	if p.Flavor != LocalProviderName || p.Endpoint != "http://127.0.0.1:11434/v1/chat/completions" || p.APIKey != "" {
 		t.Fatalf("local provider = %#v", p)
 	}
@@ -183,7 +197,13 @@ func TestOpenRouterCatalogFiltersModelsOlderThanOneYear(t *testing.T) {
 	}))
 	defer server.Close()
 
-	catalog, err := fetchCatalog(context.Background(), catalogSpec{name: "openrouter", endpoint: server.URL + "/v1/chat/completions", key: "test-key"})
+	catalog, err := fetchCatalog(context.Background(), catalogSpec{
+		name:            "openrouter",
+		endpoint:        server.URL + "/v1/chat/completions",
+		catalogEndpoint: server.URL + "/v1/models",
+		wire:            WireOpenAIChat,
+		key:             "test-key",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +217,10 @@ func TestDiscoverCatalogIncludesLocalWorkhorseWithoutKey(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("SLBH_LOCAL_ENDPOINT", "http://127.0.0.1:11434/v1/chat/completions")
-	catalogs, err := DiscoverCatalog(context.Background(), "")
+	// A full policy is supplied and every credential is absent, so the only
+	// branch that can appear is the local one: it is the one route that needs
+	// no key. This asserts credential gating, not an empty policy.
+	catalogs, err := DiscoverCatalog(context.Background(), testPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,10 +284,7 @@ func TestPinnedContextWindowComesFromPolicy(t *testing.T) {
 	// Both spellings that address the plan route resolve to one key and so to
 	// one pin: that is what deriving the key in one place buys.
 	for _, model := range []string{"zai/glm-5.3-flash", "glm-5.3-flash", "  glm-5.3-flash  "} {
-		p, err := ForModel(model, OpenRouterEndpoint, false, testPolicy())
-		if err != nil {
-			t.Fatalf("ForModel(%q): %v", model, err)
-		}
+		p := forModelHTTP(t, model, OpenRouterEndpoint, false, testPolicy())
 		window, ok := p.PinnedContextWindow()
 		if !ok || window != 1000000 {
 			t.Fatalf("%q pinned at %d (ok=%v), want 1000000", model, window, ok)
@@ -284,10 +304,7 @@ func TestPinnedContextWindowComesFromPolicy(t *testing.T) {
 	// A route the policy describes without a contextWindow reports no pin
 	// rather than a zero window, so discovery and the fallback still run.
 	for _, model := range []string{"deepseek-v4-flash", LocalModelID} {
-		p, err := ForModel(model, OpenRouterEndpoint, false, testPolicy())
-		if err != nil {
-			t.Fatalf("ForModel(%q): %v", model, err)
-		}
+		p := forModelHTTP(t, model, OpenRouterEndpoint, false, testPolicy())
 		if window, ok := p.PinnedContextWindow(); ok {
 			t.Fatalf("%q must not be pinned, got %d", model, window)
 		}
@@ -353,10 +370,7 @@ func TestRouteKeyAndWireModelAreInverse(t *testing.T) {
 	// route puts on the wire. The plan route sends the bare slug (fact 11),
 	// and OpenRouter sends its own namespaced spelling.
 	t.Setenv("ZAI_API_KEY", "test-key-not-a-credential")
-	p, err := ForModel("glm-5.3-flash", OpenRouterEndpoint, false, testPolicy())
-	if err != nil {
-		t.Fatal(err)
-	}
+	p := forModelHTTP(t, "glm-5.3-flash", OpenRouterEndpoint, false, testPolicy())
 	if p.Route.Key != "zai/glm-5.3-flash" {
 		t.Fatalf("route key = %q, want zai/glm-5.3-flash", p.Route.Key)
 	}

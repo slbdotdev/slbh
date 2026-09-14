@@ -104,6 +104,53 @@ where the provider's catalog cannot report one, an effort descriptor, and — fo
 an OpenRouter route — the routing posture (`zdr`, `data_collection`, `sort`,
 `ignore`, `max_price`). No credential appears in either file.
 
+### Wires
+
+A route names the protocol it speaks, and slbh implements two.
+
+- `openai-chat` — the OpenAI-shaped chat-completions protocol: OpenRouter,
+  DeepSeek, the local Ollama server, and Z.ai's coding endpoint. Effort is
+  `reasoning_effort`.
+- `anthropic-messages` — the Anthropic-shaped Messages protocol, which the
+  Z.ai coding plan also exposes. Effort is `output_config.effort`, sent with
+  `x-api-key` and `anthropic-version`.
+
+The plan route runs on `anthropic-messages` because that is the only route on
+which an effort setting is honoured. On the coding endpoint the effort enum is
+applied but is not monotone at the top — `xhigh` and `max` both produce less
+deliberation than `high` — while `output_config.effort` produces an ordered
+ladder. On that same Anthropic endpoint `thinking.budget_tokens` and a bare
+`reasoning_effort` are both accepted with HTTP 200 and then discarded, so
+neither is representable in the policy schema at all.
+
+Everything a wire changes is normalized before it leaves the provider package,
+so nothing downstream knows or cares which one served a request. Three of those
+normalizations are worth naming because the naive version of each is silently
+wrong:
+
+- **Usage.** `input_tokens` on the Messages wire is net of cache where
+  `prompt_tokens` is gross, so `prompt_tokens` is reported as
+  `input_tokens + cache_read_input_tokens`. Mapping it straight across would
+  have told the harness a 5,550-token context was 46 tokens, and automatic
+  compaction would never have fired on a cached conversation while everything
+  still appeared to run. `reasoning_tokens` is *absent* on that wire rather
+  than zero, because the wire reports no equivalent and a synthesized zero
+  would hide exactly what the record exists to reveal.
+- **Tool indexes.** The Messages wire's index is a content-block ordinal, so
+  tools begin at 1 behind the thinking block. They are renumbered to a dense
+  ordinal from 0, and nothing downstream may treat the wire index as an array
+  position.
+- **Tool arguments** arrive fragmented on one wire and whole on the other.
+  Both are handled by accumulation, so no test asserts one chunk per call.
+
+Errors are classified by status class over three envelopes — the coding wire's
+`{"error":{...}}`, the Messages wire's `{"type":"error",...,"request_id"}`, and
+an HTTP 422 FastAPI `{"detail":[...]}` for a schema violation on that same
+wire. A 4xx is not retried and a 5xx is. A 429 is inside the 4xx rule
+deliberately: a quota refusal should surface at once rather than be spent three
+times over. `request_id` is preserved in the error text, since it is the only
+handle the provider gives for a support question.
+
 Two refusals are deliberate and worth knowing about:
 
 - **An effort level the route cannot express refuses the request**, naming the

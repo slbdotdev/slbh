@@ -157,7 +157,7 @@ func planPolicy(t *testing.T) provider.Policy {
 // zaiRouteProvider builds the real route-resolved provider for the plan model,
 // which is what carries the pin in production. The key is a dummy: the route is
 // resolved and inspected, never dialled.
-func zaiRouteProvider(t *testing.T) *provider.HTTPProvider {
+func zaiRouteProvider(t *testing.T) provider.Provider {
 	t.Helper()
 	t.Setenv("ZAI_API_KEY", "test-key-not-a-credential")
 	p, err := provider.ForModel("zai/glm-5.3-flash", provider.OpenRouterEndpoint, false, planPolicy(t))

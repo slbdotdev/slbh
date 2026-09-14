@@ -529,7 +529,7 @@ func (m *Model) openModelMenu() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		catalog, err := provider.DiscoverCatalog(ctx, m.runtime.Config().Endpoint)
+		catalog, err := provider.DiscoverCatalog(ctx, m.runtime.Config().Policy)
 		return modelCatalogMsg{catalog: catalog, err: err}
 	}
 }

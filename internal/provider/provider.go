@@ -105,9 +105,17 @@ type Event struct {
 	Text       string
 	ToolName   string
 	ToolCallID string
-	ToolIndex  int
-	Input      string
-	Usage      map[string]any
+	// ToolIndex is a dense tool ordinal from 0, normalized inside this
+	// package. It is never the wire's own index: on the Anthropic wire that is
+	// a content-block position offset by the thinking block, so tools start at
+	// 1 there. Nothing downstream may treat it as an array position.
+	ToolIndex int
+	Input     string
+	Usage     map[string]any
+	// StopReason is the terminal reason in the coding wire's vocabulary —
+	// `stop`, `tool_calls` — whichever wire served the request. It rides the
+	// usage event, which is the last thing a stream emits.
+	StopReason string
 	Err        error
 }
 
@@ -339,9 +347,52 @@ type HTTPProvider struct {
 	// Route is the resolved route this instance serves, carrying its own
 	// policy. An instance built by ForModel always has one; one built directly
 	// by NewHTTP has the zero Route and therefore no pinned window.
-	Route          Route
+	Route Route
+	// wire is the protocol strategy: headers, payload, parsing, error
+	// envelopes and catalog shape. It is never nil — NewHTTP defaults it to
+	// the OpenAI-shaped chat wire, which is what every route spoke before
+	// phase 2 and what every non-plan route still speaks.
+	wire           wireStrategy
 	metadataMu     sync.Mutex
 	contextWindows map[string]int
+}
+
+// SetHTTPClient replaces the transport. It exists because ForModel returns the
+// Provider interface, so a caller that needs to capture exact bytes — the live
+// transcript-replay test — can no longer reach the field directly.
+func (p *HTTPProvider) SetHTTPClient(client *http.Client) { p.Client = client }
+
+// TransportOverride is implemented by a Provider whose HTTP transport can be
+// replaced. Asserting this is how a test swaps in a capturing transport
+// without depending on the concrete type.
+type TransportOverride interface{ SetHTTPClient(*http.Client) }
+
+// Wire reports the protocol this instance speaks, for a caller that needs to
+// report or assert which half of a two-wire deployment served a request.
+func (p *HTTPProvider) Wire() string {
+	if p.wire == nil {
+		return WireOpenAIChat
+	}
+	return p.wire.name()
+}
+
+// effortValue maps a request's effort level through this route's descriptor.
+//
+// An instance with no route carries no policy — test fakes and embedder
+// constructions that never went through route resolution — so the level passes
+// through unchanged there. Every real request goes through ForModel.
+func (p *HTTPProvider) effortValue(level string) (string, error) {
+	if p.Route.Key == "" {
+		return level, nil
+	}
+	return p.Route.Policy.EffortValue(p.Route.Key, level)
+}
+
+func (p *HTTPProvider) strategy() wireStrategy {
+	if p.wire == nil {
+		return openAIChatWire{}
+	}
+	return p.wire
 }
 
 // RoutePolicyProvider is implemented by a provider instance that carries its
@@ -366,7 +417,20 @@ func (p *HTTPProvider) PinnedContextWindow() (int, bool) {
 }
 
 func NewHTTP(endpoint, key string) *HTTPProvider {
-	return &HTTPProvider{Endpoint: endpoint, APIKey: key, Client: &http.Client{Timeout: 0}, contextWindows: make(map[string]int)}
+	return &HTTPProvider{Endpoint: endpoint, APIKey: key, Client: &http.Client{Timeout: 0}, wire: openAIChatWire{}, contextWindows: make(map[string]int)}
+}
+
+// NewHTTPOnWire builds a provider for a named wire. It reports an error for a
+// wire this build does not implement rather than defaulting to one, because
+// defaulting is precisely the failure the wire refusal exists to prevent.
+func NewHTTPOnWire(endpoint, key, wireName string) (*HTTPProvider, error) {
+	strategy, ok := wireFor(wireName)
+	if !ok {
+		return nil, fmt.Errorf("no implementation for wire %q", wireName)
+	}
+	provider := NewHTTP(endpoint, key)
+	provider.wire = strategy
+	return provider, nil
 }
 
 // ForModel builds the provider for a model's authoritative route. It fails
@@ -374,15 +438,28 @@ func NewHTTP(endpoint, key string) *HTTPProvider {
 // falling through to OpenRouter. endpointExplicit distinguishes an endpoint the
 // operator set from one that merely defaulted, and only the former overrides a
 // native route.
-func ForModel(model, endpointOverride string, endpointExplicit bool, policy Policy) (*HTTPProvider, error) {
+// It returns the Provider interface rather than the concrete transport,
+// because a route now carries a wire and the strategy behind it is an
+// implementation detail. A caller that genuinely needs the transport — the
+// live test that captures exact request bytes — asserts TransportOverride.
+func ForModel(model, endpointOverride string, endpointExplicit bool, policy Policy) (Provider, error) {
 	route, err := ResolveRoute(model, endpointOverride, endpointExplicit, policy)
 	if err != nil {
 		return nil, err
 	}
-	provider := NewHTTP(route.Endpoint, route.APIKey)
-	provider.Flavor = route.Flavor
-	provider.Route = route
-	return provider, nil
+	strategy, ok := wireFor(route.Wire)
+	if !ok {
+		// Unreachable: ResolveRoute refuses an unsupported wire before it
+		// builds a Route. Kept so a future wire added to the policy schema but
+		// not to the factory fails here rather than defaulting to the wrong
+		// encoder.
+		return nil, fmt.Errorf("route %q resolved to wire %q, which this build cannot speak", route.Key, route.Wire)
+	}
+	instance := NewHTTP(route.Endpoint, route.APIKey)
+	instance.Flavor = route.Flavor
+	instance.Route = route
+	instance.wire = strategy
+	return instance, nil
 }
 
 // NormalizeModel keeps the old draft spelling from producing a provider 400
@@ -435,7 +512,7 @@ func (p *HTTPProvider) ContextWindow(ctx context.Context, model string) (int, er
 	if p.APIKey == "" {
 		return 0, fmt.Errorf("provider API key is not configured")
 	}
-	endpoint, err := modelsEndpoint(p.Endpoint)
+	endpoint, err := p.catalogEndpoint()
 	if err != nil {
 		return 0, err
 	}
@@ -443,7 +520,7 @@ func (p *HTTPProvider) ContextWindow(ctx context.Context, model string) (int, er
 	if err != nil {
 		return 0, err
 	}
-	request.Header.Set("Authorization", "Bearer "+p.APIKey)
+	p.strategy().applyHeaders(request.Header, p.APIKey)
 	request.Header.Set("Accept", "application/json")
 	client := p.Client
 	if client == nil {
@@ -458,13 +535,11 @@ func (p *HTTPProvider) ContextWindow(ctx context.Context, model string) (int, er
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
 		return 0, fmt.Errorf("model metadata returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
 	}
-	var catalog struct {
-		Data json.RawMessage `json:"data"`
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 8*1024*1024))
+	if err != nil {
+		return 0, err
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 8*1024*1024)).Decode(&catalog); err != nil {
-		return 0, fmt.Errorf("decode model metadata: %w", err)
-	}
-	models, err := decodeModels(catalog.Data)
+	models, err := p.strategy().decodeCatalog(data)
 	if err != nil {
 		return 0, err
 	}
@@ -512,6 +587,20 @@ func decodeModels(data json.RawMessage) ([]modelMetadata, error) {
 	return []modelMetadata{model}, nil
 }
 
+// catalogEndpoint is where this route's model catalog lives.
+//
+// The policy's `catalogEndpoint` wins where it is set, because on the
+// Anthropic wire the catalog URL is not derivable from the inference URL:
+// modelsEndpoint's suffix-stripping turns `/api/anthropic/v1/messages` into
+// `/api/anthropic/v1/messages/models`, which is not a path that exists. The
+// real one is `/api/anthropic/v1/models`, and only the policy knows it.
+func (p *HTTPProvider) catalogEndpoint() (string, error) {
+	if endpoint := strings.TrimSpace(p.Route.Policy.CatalogEndpoint); endpoint != "" {
+		return endpoint, nil
+	}
+	return modelsEndpoint(p.Endpoint)
+}
+
 func modelsEndpoint(endpoint string) (string, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil {
@@ -549,78 +638,43 @@ func (p *HTTPProvider) RequestPayload(req Request) ([]byte, error) {
 	if req.CacheKey == "" {
 		req.CacheKey = StablePrefixKey(req)
 	}
-	// A route-resolved instance renders effort through its own policy
-	// descriptor, and an unmappable level refuses the request here rather than
-	// being dropped or walked down to the nearest supported one.
-	//
-	// An instance built directly by NewHTTP carries the zero Route and no
-	// policy: those are test fakes and embedder constructions that never went
-	// through route resolution, so there is nothing to enforce and the level
-	// passes through as written. Every real request goes through ForModel.
-	effort := req.Effort
-	if p.Route.Key != "" {
-		mapped, err := p.Route.Policy.EffortValue(p.Route.Key, req.Effort)
-		if err != nil {
-			return nil, err
-		}
-		effort = mapped
-	}
-	body := wireRequest{
-		Model:            p.modelID(req.Model),
-		Stream:           true,
-		Messages:         append([]Message{{Role: "system", Content: req.System}}, req.Messages...),
-		ReasoningEffort:  effort,
-		IncludeReasoning: effort != "",
-		PromptCacheKey:   req.CacheKey,
-		Temperature:      req.Temperature,
-		StreamOptions:    streamOptions{IncludeUsage: true},
-	}
-	if len(req.Tools) > 0 {
-		body.Tools = make([]wireTool, 0, len(req.Tools))
-		for _, tool := range req.Tools {
-			body.Tools = append(body.Tools, wireTool{
-				Type: "function",
-				Function: wireToolFunction{
-					Name:        tool.Name,
-					Description: tool.Description,
-					Parameters:  tool.Parameters,
-				},
-			})
-		}
-	}
-	return json.Marshal(body)
+	return p.strategy().payload(p, req)
 }
 
 // RequestFromPayload reconstructs the provider request context from a
-// transcripted wire payload. The returned Messages omit the leading system
-// message because Request stores that context separately.
+// transcripted wire payload, detecting which wire wrote it.
+//
+// Detection is by a field only one shape has, not by guessing: the OpenAI body
+// always carries `stream_options` and the Anthropic body always carries
+// `max_tokens`, because both are set unconditionally by their own payload
+// builders. A transcript that carries neither is tried on the OpenAI wire
+// first, which is what every record written before phase 2 is.
 func RequestFromPayload(payload []byte) (Request, error) {
-	var body wireRequest
-	if err := json.Unmarshal(payload, &body); err != nil {
+	var shape struct {
+		StreamOptions *json.RawMessage `json:"stream_options"`
+		MaxTokens     *int             `json:"max_tokens"`
+	}
+	if err := json.Unmarshal(payload, &shape); err != nil {
 		return Request{}, fmt.Errorf("decode request payload: %w", err)
 	}
-	if len(body.Messages) == 0 || body.Messages[0].Role != "system" {
-		return Request{}, fmt.Errorf("request payload has no leading system message")
+	switch {
+	case shape.StreamOptions != nil:
+		return openAIChatWire{}.requestFromPayload(payload)
+	case shape.MaxTokens != nil:
+		return anthropicMessagesWire{}.requestFromPayload(payload)
 	}
-	request := Request{
-		Model:       body.Model,
-		Effort:      body.ReasoningEffort,
-		System:      body.Messages[0].Content,
-		Messages:    append([]Message(nil), body.Messages[1:]...),
-		CacheKey:    body.PromptCacheKey,
-		Temperature: body.Temperature,
+	return openAIChatWire{}.requestFromPayload(payload)
+}
+
+// RequestFromPayloadOnWire decodes a transcripted payload on a named wire, for
+// a caller that already knows which route produced it and should not depend on
+// detection.
+func RequestFromPayloadOnWire(wireName string, payload []byte) (Request, error) {
+	strategy, ok := wireFor(wireName)
+	if !ok {
+		return Request{}, fmt.Errorf("no implementation for wire %q", wireName)
 	}
-	if len(body.Tools) > 0 {
-		request.Tools = make([]Tool, 0, len(body.Tools))
-		for _, tool := range body.Tools {
-			request.Tools = append(request.Tools, Tool{
-				Name:        tool.Function.Name,
-				Description: tool.Function.Description,
-				Parameters:  tool.Function.Parameters,
-			})
-		}
-	}
-	return request, nil
+	return strategy.requestFromPayload(payload)
 }
 
 // ContextPayload serializes the provider-independent context that is sent to
@@ -654,11 +708,11 @@ func (p *HTTPProvider) Stream(ctx context.Context, req Request, sink StreamSink)
 	if err != nil {
 		return err
 	}
-	if p.APIKey != "" {
-		request.Header.Set("Authorization", "Bearer "+p.APIKey)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "text/event-stream")
+	// Headers belong to the wire strategy, not to the transport: the Anthropic
+	// shape needs x-api-key and a version header where the OpenAI one needs a
+	// bearer token, and a seam that only owned payload and parsing could not
+	// express that.
+	p.strategy().applyHeaders(request.Header, p.APIKey)
 	resp, err := p.Client.Do(request)
 	if err != nil {
 		return err
@@ -666,9 +720,9 @@ func (p *HTTPProvider) Stream(ctx context.Context, req Request, sink StreamSink)
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
-		return fmt.Errorf("provider returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
+		return p.strategy().classifyError(resp.StatusCode, data)
 	}
-	if err := parseSSE(resp.Body, sink); err != nil {
+	if err := p.strategy().parseStream(resp.Body, sink); err != nil {
 		return err
 	}
 	return sink(Event{Kind: EventDone})
@@ -689,6 +743,10 @@ func StablePrefixKey(req Request) string {
 func parseSSE(reader io.Reader, sink StreamSink) error {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 16*1024), 2*1024*1024)
+	// The terminal reason is carried on the usage event so both wires report it
+	// the same way. On this wire it arrives on the last content chunk, ahead of
+	// the usage-only chunk that follows it.
+	stopReason := ""
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, ":") {
@@ -703,7 +761,8 @@ func parseSSE(reader io.Reader, sink StreamSink) error {
 		}
 		var chunk struct {
 			Choices []struct {
-				Delta struct {
+				FinishReason string `json:"finish_reason"`
+				Delta        struct {
 					Content          string `json:"content"`
 					ReasoningContent string `json:"reasoning_content"`
 					Reasoning        string `json:"reasoning"`
@@ -729,6 +788,9 @@ func parseSSE(reader io.Reader, sink StreamSink) error {
 			return fmt.Errorf("provider stream error: %s", chunk.Error.Message)
 		}
 		for _, choice := range chunk.Choices {
+			if choice.FinishReason != "" {
+				stopReason = choice.FinishReason
+			}
 			if choice.Delta.Content != "" {
 				if err := sink(Event{Kind: EventText, Text: choice.Delta.Content}); err != nil {
 					return err
@@ -750,7 +812,7 @@ func parseSSE(reader io.Reader, sink StreamSink) error {
 			}
 		}
 		if len(chunk.Usage) > 0 {
-			if err := sink(Event{Kind: EventUsage, Usage: chunk.Usage}); err != nil {
+			if err := sink(Event{Kind: EventUsage, Usage: chunk.Usage, StopReason: stopReason}); err != nil {
 				return err
 			}
 		}
@@ -760,6 +822,13 @@ func parseSSE(reader io.Reader, sink StreamSink) error {
 
 // Retry executes an operation with short stepped delays. It intentionally
 // leaves cancellation to the caller and never retries context cancellation.
+//
+// It used to retry every stream error three times. On these endpoints every
+// refusal is an HTTP status before the stream opens and no in-stream error
+// frame was ever produced, so a refusal is a status-class decision: a 4xx will
+// say the same thing three times, and retrying it wastes quota and delays the
+// report. An error that does not classify itself is still retried, which keeps
+// transport failures — the case retrying exists for — behaving as before.
 func Retry(ctx context.Context, attempts int, fn func() error) error {
 	if attempts < 1 {
 		attempts = 1
@@ -772,6 +841,9 @@ func Retry(ctx context.Context, attempts int, fn func() error) error {
 		err = fn()
 		if err == nil {
 			return nil
+		}
+		if classified, ok := err.(retryable); ok && !classified.Retryable() {
+			return err
 		}
 		if attempt+1 < attempts {
 			delay := time.Duration(attempt+1) * 300 * time.Millisecond

@@ -85,19 +85,29 @@ func TestPolicyRefusesAWireThisBuildCannotSpeak(t *testing.T) {
 	entry.Effort = EffortDescriptor{Field: "output_config.effort", Levels: identityLevels()}
 	policy.Routes["zai/glm-5.3-flash"] = entry
 
-	// It is a valid document: the schema admits the wire, the build does not.
+	// It is a valid document either way: the schema admits the wire. Since
+	// phase 2 this build also implements it, so the only honest way to exercise
+	// the refusal is to take the support away for the length of this test.
 	if err := policy.Validate(); err != nil {
 		t.Fatalf("anthropic-messages must be a valid schema value: %v", err)
 	}
-	if WireSupported(WireAnthropicMessages) {
-		t.Fatal("this build claims to speak anthropic-messages; phase 2 must update this test with the implementation")
+	if !WireSupported(WireAnthropicMessages) {
+		t.Fatal("phase 2 implements anthropic-messages; this build does not claim to speak it")
 	}
+	restore := withoutWireSupport(WireAnthropicMessages)
+	defer restore()
+
 	_, err := ResolveRoute("zai/glm-5.3-flash", OpenRouterEndpoint, false, policy)
 	if err == nil {
 		t.Fatal("a route on an unimplemented wire was resolved")
 	}
 	if !strings.Contains(err.Error(), "cannot speak") || !strings.Contains(err.Error(), WireAnthropicMessages) {
 		t.Fatalf("refusal does not name the wire: %v", err)
+	}
+	// And with support restored, the same policy routes.
+	restore()
+	if _, err := ResolveRoute("zai/glm-5.3-flash", OpenRouterEndpoint, false, policy); err != nil {
+		t.Fatalf("the same policy must route once the wire is implemented: %v", err)
 	}
 }
 
@@ -235,10 +245,7 @@ func TestRequestPayloadRefusesAnUnmappableLevelOnARoutedProvider(t *testing.T) {
 	entry.Effort.Levels = map[string]string{"low": "low", "medium": "medium", "high": "high"}
 	policy.Routes["deepseek-v4-flash"] = entry
 
-	p, err := ForModel("deepseek-v4-flash", OpenRouterEndpoint, false, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
+	p := forModelHTTP(t, "deepseek-v4-flash", OpenRouterEndpoint, false, policy)
 	if _, err := p.RequestPayload(Request{Model: "deepseek-v4-flash", Effort: "max", System: "s"}); err == nil {
 		t.Fatal("a request at an unsupported effort was encoded")
 	}
