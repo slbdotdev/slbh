@@ -389,6 +389,136 @@ func TestAcceptanceEffortLadder(t *testing.T) {
 	}
 }
 
+// ------------------------------------------------- open question: tool replay
+//
+// The third adversarial audit flagged, and declined to rank, that this wire has
+// never been shown to accept the shape slbh sends it on a multi-tool turn.
+// anthropicMessages converts each `tool` message into its own `user` message
+// carrying one tool_result block, so a turn with N tool calls produces N
+// consecutive `user` messages, where the canonical Messages shape merges them
+// into one. The offline round-trip tests cover the codec, not the endpoint, and
+// the capability matrix records that no probe ever exercised a multi-turn tool
+// round-trip.
+//
+// This settles it in one billed call, and asserts both halves: that the
+// outbound body really does carry consecutive user messages (otherwise a pass
+// would only mean the encoder merged them and the question was moot), and that
+// the endpoint accepts them and continues the turn.
+func TestAcceptanceConsecutiveToolResults(t *testing.T) {
+	if os.Getenv("SLBH_ACCEPT_TOOLREPLAY") != "1" {
+		t.Skip("set SLBH_ACCEPT_TOOLREPLAY=1 to run the one billed tool-replay call")
+	}
+	cfg := acceptPolicy(t)
+	instance, tee := acceptProvider(t, cfg, acceptPlanRoute)
+	routed := instance.(*provider.HTTPProvider)
+	if routed.Route.Wire != provider.WireAnthropicMessages {
+		t.Fatalf("this question is about the Anthropic wire; route resolved to %q", routed.Route.Wire)
+	}
+
+	call := func(id, name, args string) provider.ToolCall {
+		c := provider.ToolCall{ID: id, Type: "function"}
+		c.Function.Name = name
+		c.Function.Arguments = args
+		return c
+	}
+
+	// A completed two-tool round: the assistant asked for both, and both
+	// results come back as separate `tool` messages — exactly what the agent
+	// loop builds after executing a parallel batch.
+	history := []provider.Message{
+		{Role: "user", Content: "Call read_gauge for both sensors, then report both values."},
+		{
+			Role:      "assistant",
+			Content:   "",
+			ToolCalls: []provider.ToolCall{call("call_a", "read_gauge", `{"sensor":"alpha"}`), call("call_b", "read_gauge", `{"sensor":"beta"}`)},
+		},
+		{Role: "tool", ToolCallID: "call_a", Name: "read_gauge", Content: "alpha=41"},
+		{Role: "tool", ToolCallID: "call_b", Name: "read_gauge", Content: "beta=42"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	result, err := acceptStream(ctx, instance, provider.Request{
+		Model:    acceptPlanRoute,
+		Effort:   "low",
+		System:   "You report gauge readings tersely.",
+		Messages: history,
+		Tools: []provider.Tool{{
+			Name:        "read_gauge",
+			Description: "Read one sensor gauge.",
+			Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"sensor": map[string]any{"type": "string"}},
+				"required":   []string{"sensor"},
+			},
+		}},
+	})
+	cancel()
+	if err != nil {
+		t.Fatalf("the endpoint refused a continuation carrying two tool results: %v", err)
+	}
+
+	// Half one: prove the body really is the shape in question.
+	sent := tee.requestBodies()[0]
+	var payload struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type      string `json:"type"`
+				ToolUseID string `json:"tool_use_id"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(sent, &payload); err != nil {
+		t.Fatalf("decoding the sent body: %v", err)
+	}
+	consecutive, seen := 0, []string{}
+	for i, m := range payload.Messages {
+		toolResults := 0
+		for _, block := range m.Content {
+			if block.Type == "tool_result" {
+				toolResults++
+				seen = append(seen, block.ToolUseID)
+			}
+		}
+		if toolResults > 0 && m.Role == "user" && i > 0 && payload.Messages[i-1].Role == "user" {
+			consecutive++
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("sent %d tool_result blocks, want 2: %s", len(seen), sent)
+	}
+
+	// Half two: the endpoint accepted it and the turn continued.
+	if strings.TrimSpace(result.Text) == "" {
+		t.Fatalf("the continuation produced no text; stop=%q", result.StopReason)
+	}
+	if result.OutputTokens <= 0 {
+		t.Fatalf("the continuation reported %d output tokens", result.OutputTokens)
+	}
+
+	shape := "merged into one user message"
+	if consecutive > 0 {
+		shape = "consecutive user messages"
+	}
+	t.Logf("tool replay: shape=%s consecutive=%d tool_result_ids=%v text=%q stop=%s prompt_tokens=%d output_tokens=%d",
+		shape, consecutive, seen, strings.TrimSpace(result.Text), result.StopReason, result.PromptTokens, result.OutputTokens)
+
+	acceptWriteJSON(t, "open-question-tool-replay.json", map[string]any{
+		"route":            routed.Route.Key,
+		"endpoint":         routed.Route.Endpoint,
+		"wire":             routed.Route.Wire,
+		"sent_body":        json.RawMessage(sent),
+		"shape":            shape,
+		"consecutive_user": consecutive,
+		"tool_result_ids":  seen,
+		"text":             result.Text,
+		"stop_reason":      result.StopReason,
+		"prompt_tokens":    result.PromptTokens,
+		"output_tokens":    result.OutputTokens,
+		"asserted":         "two tool_result blocks sent; endpoint returned text and output_tokens>0",
+	})
+}
+
 // --------------------------------------------------------------- criterion 4
 
 // TestAcceptanceRouteCalls is criterion 4: one live call per affected route on
