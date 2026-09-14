@@ -81,8 +81,13 @@ within the last year. Model and effort settings from the environment take
 precedence over their persisted counterparts.
 
 For native provider agents, the harness estimates context usage before a
-request and compacts history at 70% of the active model's discovered context
-window. If model metadata is unavailable, it uses a 128,000-token fallback.
+request and compacts history at 70% of the active model's context window. That
+window is resolved in three steps: a pinned window for the route if it has one,
+otherwise the model's discovered context length, otherwise a 128,000-token
+fallback. A route is pinned when its provider catalog cannot report a length —
+`zai/glm-5.3-flash` is pinned at 1,000,000 tokens, measured, because neither
+Z.ai catalog publishes one and the fallback understates it eightfold. A pin
+therefore beats discovery as well as the fallback.
 Automatic compaction keeps the most recent 24 messages and writes a durable
 marker; `/compact` does the same on demand. Requests stream responses and
 include tool definitions, reasoning options where supported, usage, and a

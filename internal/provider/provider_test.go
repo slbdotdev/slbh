@@ -250,3 +250,39 @@ func TestParseSSE(t *testing.T) {
 		t.Fatalf("unexpected events: %#v", got)
 	}
 }
+
+func TestPinnedContextWindow(t *testing.T) {
+	// Both spellings that address the plan route today carry the pin.
+	for _, model := range []string{"zai/glm-5.3-flash", "glm-5.3-flash"} {
+		window, ok := PinnedContextWindow(model)
+		if !ok {
+			t.Fatalf("%q is not pinned", model)
+		}
+		if window != 1000000 {
+			t.Fatalf("%q pinned at %d, want 1000000", model, window)
+		}
+	}
+
+	// Surrounding whitespace is normalized away, as it is everywhere else a
+	// model name is accepted.
+	if window, ok := PinnedContextWindow("  zai/glm-5.3-flash  "); !ok || window != 1000000 {
+		t.Fatalf("padded slug pinned at %d (ok=%v), want 1000000", window, ok)
+	}
+
+	// The `[1m]` spellings Z.ai's own Claude Code guide publishes are rejected
+	// 1211 on both wires, so they are not aliases and must not be pinned. A
+	// pin invented for them would size a window for a model that cannot run.
+	for _, model := range []string{"zai/glm-5.3-flash[1m]", "glm-5.3-flash[1m]", "zai/glm-5.3[1m]"} {
+		if window, ok := PinnedContextWindow(model); ok {
+			t.Fatalf("%q must not be pinned, got %d", model, window)
+		}
+	}
+
+	// Unpinned routes report no pin rather than a zero window, so the caller
+	// can tell "no pin" from "pinned at nothing".
+	for _, model := range []string{"deepseek-v4-flash", LocalModelID, "vendor/model", ""} {
+		if window, ok := PinnedContextWindow(model); ok {
+			t.Fatalf("%q must not be pinned, got %d", model, window)
+		}
+	}
+}

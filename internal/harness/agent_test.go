@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -85,4 +86,99 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// windowProvider is a ContextWindowProvider that reports a discoverable
+// window, so a pin can be proved to beat discovery and not merely the
+// fallback. discovery records whether the catalog was consulted at all.
+type windowProvider struct {
+	window    int
+	discovery *bool
+}
+
+func (windowProvider) Stream(context.Context, provider.Request, provider.StreamSink) error {
+	return nil
+}
+
+func (p windowProvider) ContextWindow(context.Context, string) (int, error) {
+	if p.discovery != nil {
+		*p.discovery = true
+	}
+	return p.window, nil
+}
+
+// plainProvider implements no context-window capability, which is the case
+// FallbackContextWindow exists for.
+type plainProvider struct{}
+
+func (plainProvider) Stream(context.Context, provider.Request, provider.StreamSink) error {
+	return nil
+}
+
+func TestResolveContextWindowPrefersPinOverDiscoveryAndFallback(t *testing.T) {
+	// The pin beats discovery. A route is pinned because its catalog cannot
+	// answer, so a catalog that answers anyway must not win: asserting only
+	// against the fallback would pass even if the pin were consulted last.
+	discovered := false
+	agent := &Agent{Model: "zai/glm-5.3-flash"}
+	got := agent.resolveContextWindow(context.Background(), windowProvider{window: 200000, discovery: &discovered})
+	if got != 1000000 {
+		t.Fatalf("pinned window = %d, want 1000000", got)
+	}
+	if discovered {
+		t.Fatal("catalog discovery was consulted for a pinned route")
+	}
+
+	// The pin beats the fallback on a provider with no discovery at all.
+	agent = &Agent{Model: "zai/glm-5.3-flash"}
+	if got := agent.resolveContextWindow(context.Background(), plainProvider{}); got != 1000000 {
+		t.Fatalf("pinned window without discovery = %d, want 1000000", got)
+	}
+
+	// The bare slug addresses the same route and carries the same pin.
+	agent = &Agent{Model: "glm-5.3-flash"}
+	if got := agent.resolveContextWindow(context.Background(), plainProvider{}); got != 1000000 {
+		t.Fatalf("bare-slug pinned window = %d, want 1000000", got)
+	}
+}
+
+func TestResolveContextWindowFallsBackForUnpinnedRoutes(t *testing.T) {
+	// An unpinned route with no discovery still falls back to 128,000.
+	agent := &Agent{Model: "deepseek-v4-flash"}
+	if got := agent.resolveContextWindow(context.Background(), plainProvider{}); got != provider.FallbackContextWindow {
+		t.Fatalf("unpinned window = %d, want %d", got, provider.FallbackContextWindow)
+	}
+
+	// An unpinned route with discovery still uses the discovered figure: the
+	// pin table must not suppress the path that already worked.
+	agent = &Agent{Model: "vendor/model"}
+	if got := agent.resolveContextWindow(context.Background(), windowProvider{window: 262144}); got != 262144 {
+		t.Fatalf("discovered window = %d, want 262144", got)
+	}
+
+	// A `[1m]` spelling is rejected 1211 on both wires and is not an alias of
+	// the plain slug, so it must not inherit the pin.
+	agent = &Agent{Model: "zai/glm-5.3-flash[1m]"}
+	if got := agent.resolveContextWindow(context.Background(), plainProvider{}); got != provider.FallbackContextWindow {
+		t.Fatalf("[1m] window = %d, want the fallback %d", got, provider.FallbackContextWindow)
+	}
+}
+
+func TestCompactionFiresAtSeventyPercentOfThePinnedWindow(t *testing.T) {
+	agent := &Agent{Model: "zai/glm-5.3-flash"}
+	window := agent.resolveContextWindow(context.Background(), plainProvider{})
+
+	// Roughly 120k estimated tokens: over the 89,600-token fallback budget
+	// that governs this route today, and well under the pinned 700,000 one.
+	// This is the whole point of the pin, so it is asserted on both budgets.
+	history := make([]provider.Message, 96)
+	for i := range history {
+		history[i] = provider.Message{Role: "user", Content: strings.Repeat("x", 5000)}
+	}
+	if !contextLimitReached(provider.FallbackContextWindow, "system", history, nil) {
+		t.Fatal("history did not reach the fallback budget, so the pin is not what this test measures")
+	}
+	if contextLimitReached(window, "system", history, nil) {
+		t.Fatalf("compaction fired below 70%% of the pinned %d-token window", window)
+	}
 }

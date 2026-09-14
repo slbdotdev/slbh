@@ -607,13 +607,22 @@ func (a *Agent) resolveContextWindow(ctx context.Context, p provider.Provider) i
 	}
 	a.mu.RUnlock()
 
-	window := provider.FallbackContextWindow
-	if metadata, ok := p.(provider.ContextWindowProvider); ok {
-		metadataCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		if discovered, err := metadata.ContextWindow(metadataCtx, model); err == nil && discovered > 0 {
-			window = discovered
+	// A pinned route window is consulted first and wins outright. It beats
+	// discovery as well as the fallback: a route carries a pin precisely
+	// because its catalog cannot answer, so asking the catalog first would
+	// either fail and waste a round trip or return a figure the pin exists to
+	// override. A pin that nothing consults changes nothing, which is why this
+	// resolution path is the substance of the change and the table is not.
+	window, pinned := provider.PinnedContextWindow(model)
+	if !pinned {
+		window = provider.FallbackContextWindow
+		if metadata, ok := p.(provider.ContextWindowProvider); ok {
+			metadataCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			if discovered, err := metadata.ContextWindow(metadataCtx, model); err == nil && discovered > 0 {
+				window = discovered
+			}
+			cancel()
 		}
-		cancel()
 	}
 	a.mu.Lock()
 	a.contextModel = model

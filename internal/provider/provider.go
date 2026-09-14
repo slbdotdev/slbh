@@ -126,6 +126,38 @@ type ContextWindowProvider interface {
 
 const FallbackContextWindow = 128000
 
+// contextWindowPins is the route-keyed context window table. A pinned route is
+// one whose real ceiling cannot be discovered: neither Z.ai catalog publishes a
+// context length at all (measured 2026-09-13, fact 2 of
+// org/slbh-capability-matrix-2026-09-13.md), so ContextWindow errors on that
+// route and FallbackContextWindow is what runs — understating a measured
+// ~1,000,605-token ceiling by a factor of eight, and compacting a
+// zai/glm-5.3-flash agent at roughly 89,600 tokens.
+//
+// This table is deliberately temporary. A context window is a capability fact
+// about an endpoint rather than routing or posture policy, so pinning one here
+// does not breach the ruling against compiled-in policy, and it fails safe in
+// the only direction that matters: too small merely compacts early. The managed
+// policy file replaces this source in phase 1c, which deletes this map. It must
+// not outlive that phase.
+//
+// Keys are exact model spellings. The `[1m]` variants Z.ai's own Claude Code
+// guide publishes are rejected 1211 on both wires (fact 11), so they are not
+// aliases of the plain slug and must never resolve to this pin.
+var contextWindowPins = map[string]int{
+	"zai/glm-5.3-flash": 1000000,
+	"glm-5.3-flash":     1000000,
+}
+
+// PinnedContextWindow reports the pinned context window for a model route. A
+// pinned window is authoritative over both catalog discovery and
+// FallbackContextWindow, because a route is pinned precisely when discovery
+// cannot answer for it.
+func PinnedContextWindow(model string) (int, bool) {
+	window, ok := contextWindowPins[NormalizeModel(model)]
+	return window, ok
+}
+
 const (
 	LocalProviderName  = "local"
 	LocalModelID       = "local/q27-IQ2_M-96k"
