@@ -1,6 +1,9 @@
 package harness
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // secretRedactor replaces the literal value of every credential variable in the
 // process environment wherever it appears in text bound for a transcript or the
@@ -69,8 +72,19 @@ func (s *secretRedactor) redactMetadata(meta map[string]any) map[string]any {
 	}
 	var out map[string]any
 	for key, value := range meta {
-		text, ok := value.(string)
-		if !ok {
+		var text string
+		switch typed := value.(type) {
+		case string:
+			text = typed
+		case json.RawMessage:
+			// The request payload is stored as RawMessage — a []byte, not a
+			// string — so a type switch on string alone skipped the one field
+			// most likely to carry a credential: the whole conversation,
+			// marshalled for the wire.
+			text = string(typed)
+		case []byte:
+			text = string(typed)
+		default:
 			continue
 		}
 		clean := s.repl.Replace(text)
@@ -83,7 +97,14 @@ func (s *secretRedactor) redactMetadata(meta map[string]any) map[string]any {
 				out[k] = v
 			}
 		}
-		out[key] = clean
+		switch value.(type) {
+		case json.RawMessage:
+			out[key] = json.RawMessage(clean)
+		case []byte:
+			out[key] = []byte(clean)
+		default:
+			out[key] = clean
+		}
 	}
 	if out == nil {
 		return meta

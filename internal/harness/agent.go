@@ -420,6 +420,12 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			if toolErr != nil {
 				result = toolFailure(toolErr, result)
 			}
+			// Before it is emitted and before it enters history. A tool runs
+			// with the parent environment by design, so `env` — or any script
+			// with `set -x` — puts a provider key on stdout; from history it
+			// would be marshalled into the next request, reaching both the
+			// transcript and the provider itself.
+			result = a.runtime.redactSecrets(result)
 			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool_result", Text: result, Metadata: map[string]any{"name": call.Function.Name, "call_id": call.ID}})
 			history = append(history, provider.Message{Role: "tool", ToolCallID: call.ID, Name: call.Function.Name, Content: result})
 			history = a.appendMessages(history, a.takeMessages())
@@ -511,7 +517,9 @@ func (a *Agent) receiveChildResult(child *Agent, text string) error {
 }
 
 func (a *Agent) receiveJobResult(snapshot job.Snapshot, stdout, stderr string) error {
-	text := formatJobResult(snapshot, stdout, stderr)
+	// Same reason as the foreground tools: a job's captured output reaches
+	// history through deliver(), and from there the next request payload.
+	text := a.runtime.redactSecrets(formatJobResult(snapshot, stdout, stderr))
 	toolName := snapshot.ToolName
 	if toolName == "" {
 		toolName = "long_job"

@@ -76,6 +76,17 @@ func (l *JSONL) Append(entry Entry) error {
 			return err
 		}
 	}
+	// Trimming Text does nothing when the bulk is in Metadata, and an
+	// inference_request carries the whole marshalled conversation there with
+	// Text empty. Without this second pass the record still went over the cap
+	// and made the entire file unreadable — the same "durable but unopenable"
+	// outcome the trim above exists to prevent, through the neighbouring field.
+	if len(b) > maxRecordBytes {
+		entry.Metadata = elideLargeMetadata(entry.Metadata)
+		if b, err = json.Marshal(entry); err != nil {
+			return err
+		}
+	}
 	if _, err = l.file.Write(append(b, '\n')); err != nil {
 		return err
 	}
@@ -134,6 +145,28 @@ func Read(path string) ([]Entry, error) {
 // maxRecordBytes bounds one JSONL line. Append's trim and Read's scanner use
 // the same figure, so neither can produce a record the other refuses.
 const maxRecordBytes = 16 * 1024 * 1024
+
+// elideLargeMetadata replaces the values that can actually blow a record —
+// marshalled payloads — with a marker, keeping the small scalars beside them
+// (round, the sha256 digests) that say what the record was. It is deliberately
+// not a trim: metadata is structured, and half a JSON document is not more
+// useful than a note saying how much was dropped.
+func elideLargeMetadata(meta map[string]any) map[string]any {
+	if len(meta) == 0 {
+		return meta
+	}
+	const keep = 4096
+	out := make(map[string]any, len(meta))
+	for key, value := range meta {
+		encoded, err := json.Marshal(value)
+		if err != nil || len(encoded) <= keep {
+			out[key] = value
+			continue
+		}
+		out[key] = fmt.Sprintf("[%d bytes elided to fit one transcript record]", len(encoded))
+	}
+	return out
+}
 
 // truncateText removes at least overflow bytes from the middle of text and says
 // so in place of what it removed, keeping the head and the tail — the two parts

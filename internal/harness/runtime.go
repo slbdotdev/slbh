@@ -508,11 +508,14 @@ func (r *Runtime) Clear(agentID string) error {
 	// file would open mid-answer to a question it does not contain. The swap
 	// therefore waits for the turn boundary; an idle agent has no turn in
 	// flight, so for it the boundary is now.
-	// A Codex leaf's clear interrupts its turn — turn/interrupt, then
-	// thread/start — so nothing further can stream into the old transcript and
-	// the swap is safe at once. Only the native backend leaves a provider
-	// request in flight, which is the case this defers for.
-	idle := agent.codexBackend() != nil || agent.Snapshot().Status != "thinking"
+	// Both backends defer. An earlier version excepted Codex on the grounds
+	// that its clear interrupts the turn, but clear() only sets `resetting` and
+	// signals `wake`: the turn/interrupt RPC happens later, in reset(), when
+	// the leaf's run loop next services that signal. In the gap the
+	// app-server's already-queued deltas still pass the threadID guard and
+	// would land in the new transcript — the very defect this defers to avoid.
+	// reset() promotes explicitly once the interrupt has returned.
+	idle := agent.codexBackend() == nil && agent.Snapshot().Status != "thinking"
 	r.mu.Lock()
 	if superseded, ok := r.pending[agentID]; ok {
 		_ = superseded.log.Close()
@@ -525,6 +528,19 @@ func (r *Runtime) Clear(agentID string) error {
 		r.promotePending(agentID)
 	}
 	return nil
+}
+
+// redactSecrets strips credential values from text that is about to enter
+// durable state or the conversation. Redacting at emit alone was not enough:
+// the raw tool result also entered `history`, so the next round marshalled the
+// credential into the request payload — storing it *and sending it to the
+// provider*. Capture-time redaction closes both, and is the only one of the
+// two that prevents transmission.
+func (r *Runtime) redactSecrets(text string) string {
+	r.mu.RLock()
+	redactor := r.redactor
+	r.mu.RUnlock()
+	return redactor.redact(text)
 }
 
 // promotePending makes a session opened by Clear the log target. It runs at a

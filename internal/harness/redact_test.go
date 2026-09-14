@@ -1,8 +1,12 @@
 package harness
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/slbdotdev/slbh/internal/config"
+	"github.com/slbdotdev/slbh/internal/provider"
 )
 
 func TestSecretRedactorReplacesCredentialValuesInToolOutput(t *testing.T) {
@@ -54,5 +58,51 @@ func TestSecretRedactorDoesNotMutateTheCallersMetadata(t *testing.T) {
 	}
 	if cleaned["index"] != 3 || cleaned["name"] != "quick_bash" {
 		t.Fatalf("non-string and clean values were not carried over: %#v", cleaned)
+	}
+}
+
+func TestSecretRedactorCoversRawJSONMetadata(t *testing.T) {
+	// The request payload is stored as json.RawMessage — a []byte, not a
+	// string — so a type switch on string alone skipped the single field most
+	// likely to carry a credential: the whole marshalled conversation.
+	const key = "sk-not-a-real-credential-0003"
+	r := newSecretRedactor([]string{"ZAI_API_KEY=" + key})
+	meta := map[string]any{
+		"round":   2,
+		"payload": json.RawMessage(`{"messages":[{"role":"tool","content":"ZAI_API_KEY=` + key + `"}]}`),
+	}
+	cleaned := r.redactMetadata(meta)
+	raw, ok := cleaned["payload"].(json.RawMessage)
+	if !ok {
+		t.Fatalf("payload changed kind: %T", cleaned["payload"])
+	}
+	if strings.Contains(string(raw), key) {
+		t.Fatalf("the key survived in the request payload: %s", raw)
+	}
+	if !json.Valid(raw) {
+		t.Fatalf("redaction broke the payload's JSON: %s", raw)
+	}
+	if cleaned["round"] != 2 {
+		t.Fatalf("scalar metadata was lost: %#v", cleaned)
+	}
+}
+
+func TestToolOutputIsRedactedBeforeItReachesHistory(t *testing.T) {
+	// Redacting at emit alone left the raw result in history, so the next
+	// round marshalled the credential into the request payload — storing it
+	// and sending it to the provider. Capture-time redaction is the only one
+	// of the two that prevents transmission.
+	const key = "sk-not-a-real-credential-0004"
+	t.Setenv("ZAI_API_KEY", key)
+	r, err := New(
+		config.Config{Home: t.TempDir(), SeatModel: "test"},
+		Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if got := r.redactSecrets("leaked ZAI_API_KEY=" + key); strings.Contains(got, key) {
+		t.Fatalf("runtime redaction missed the key: %q", got)
 	}
 }

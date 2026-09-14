@@ -122,3 +122,50 @@ func TestReadStillRejectsCorruptionThatIsNotTheFinalRecord(t *testing.T) {
 		t.Fatal("a malformed record in the middle of the file was accepted")
 	}
 }
+
+func TestAppendBoundsARecordWhoseBulkIsInMetadata(t *testing.T) {
+	// Trimming Text does nothing when the payload sits in Metadata and Text is
+	// empty, which is exactly the shape of an inference_request. Without a
+	// second pass the record went over the cap and made the whole file
+	// unreadable — the same durable-but-unopenable outcome the trim exists to
+	// prevent, reached through the neighbouring field.
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	log, err := OpenSession(path, "run-test", "session-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	huge := make([]byte, maxRecordBytes+(2<<20))
+	for i := range huge {
+		huge[i] = 'z'
+	}
+	entry := Entry{Kind: "inference_request", Metadata: map[string]any{
+		"round":   1,
+		"payload": string(huge),
+	}}
+	if err := log.Append(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Append(Entry{Kind: "assistant", Text: "after the big one"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := Read(path)
+	if err != nil {
+		t.Fatalf("an oversized metadata record made the transcript unreadable: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("read %d entries, want 2", len(entries))
+	}
+	if entries[0].Metadata["round"] != float64(1) {
+		t.Fatalf("the small scalar beside the payload was dropped: %#v", entries[0].Metadata)
+	}
+	payload, _ := entries[0].Metadata["payload"].(string)
+	if !strings.Contains(payload, "elided to fit one transcript record") {
+		t.Fatalf("the oversized value was not elided: %.80s", payload)
+	}
+	if entries[1].Text != "after the big one" {
+		t.Fatalf("the record after it was lost: %#v", entries[1])
+	}
+}

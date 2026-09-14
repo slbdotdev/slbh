@@ -570,3 +570,50 @@ func TestExplicitEndpointOverrideAlsoDropsTheCatalogPointer(t *testing.T) {
 		t.Fatalf("catalog resolved to %q, which is not the endpoint the operator selected", catalog)
 	}
 }
+
+func TestOverrideWithoutTheNativeKeyKeepsTheNativeWireAndSendsNoCredential(t *testing.T) {
+	// The refusal points the operator at SLBH_ENDPOINT. Following it used to
+	// fall through to the OpenRouter arm, which demanded OPENROUTER_API_KEY —
+	// a variable the refusal never named — and then stamped the route with the
+	// OpenRouter flavor, sending that credential to whatever private endpoint
+	// the operator chose, on a wire they never asked for.
+	t.Setenv("ZAI_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "or-key-not-a-credential")
+
+	const private = "https://gateway.internal.invalid/v1/messages"
+	route, err := ResolveRoute("zai/glm-5.3-flash", private, true, testPolicy())
+	if err != nil {
+		t.Fatalf("the documented escape hatch refused: %v", err)
+	}
+	if route.Endpoint != private {
+		t.Fatalf("endpoint %q, want the override", route.Endpoint)
+	}
+	if route.Flavor == "openrouter" {
+		t.Fatal("a private endpoint was stamped with the OpenRouter flavor")
+	}
+	if route.APIKey != "" {
+		t.Fatal("a credential was sent to an endpoint that never asked for one")
+	}
+	if route.ContextWindow != 0 || route.Policy.CatalogEndpoint != "" {
+		t.Fatalf("the override kept the plan's pin or catalog: %#v", route)
+	}
+}
+
+func TestCodingWireInStreamErrorWithATypeIsClassified(t *testing.T) {
+	// The Anthropic arm maps an in-stream error type onto a status class; this
+	// wire returned a bare error, which Retry treats as unclassified and
+	// retries — wrong for a rate limit, and the opposite of the settled ruling
+	// on the other wire.
+	body := "data: {\"error\":{\"type\":\"rate_limit_error\",\"message\":\"quota exhausted\"}}\n\n"
+	err := parseSSE(strings.NewReader(body), func(Event) error { return nil })
+	var status *StatusError
+	if !errors.As(err, &status) {
+		t.Fatalf("in-stream error %v is not a StatusError", err)
+	}
+	if status.Code != "rate_limit_error" {
+		t.Fatalf("code = %q", status.Code)
+	}
+	if status.Retryable() {
+		t.Fatal("an in-stream rate limit was classified as retryable")
+	}
+}

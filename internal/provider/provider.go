@@ -374,13 +374,30 @@ func ResolveRoute(model, endpoint string, endpointExplicit bool, policy Policy) 
 		}
 		if !endpointExplicit {
 			return Route{}, fmt.Errorf(
-				"model %q routes to the %s endpoint but %s is not set: refusing to fall through to OpenRouter, because a model reachable on a plan never runs through it (set %s, or set SLBH_ENDPOINT deliberately to override)",
-				model, native.flavor, native.keyEnv, native.keyEnv)
+				"model %q routes to the %s endpoint but %s is not set: refusing to fall through to OpenRouter, because a model reachable on a plan never runs through it (set %s, or set SLBH_ENDPOINT deliberately to override, which keeps this route's %s wire and sends no credential)",
+				model, native.flavor, native.keyEnv, native.keyEnv, native.flavor)
 		}
-		// An explicit endpoint override was set: fall through to it below. The
-		// route is no longer the one the policy entry describes, so the pin
-		// goes — a window measured on the plan endpoint says nothing about
-		// wherever the operator has pointed this.
+		// An explicit override on a native route with no native key. Where the
+		// override points decides which arm takes it, because the endpoint is
+		// what determines the protocol and the credential.
+		//
+		// Pointing at OpenRouter is a deliberate, sanctioned route through it,
+		// and takes the OpenRouter flavor, credential and posture below.
+		// Pointing anywhere else must not: stamping the OpenRouter flavor on a
+		// private endpoint sent OPENROUTER_API_KEY to a host that never asked
+		// for it, switched the wire under the operator, and demanded a
+		// credential the refusal above never mentioned. Such a route keeps the
+		// policy's wire — as the key-present arm does, and the two arms of one
+		// escape hatch must not disagree about protocol — and carries no
+		// credential, there being no plan key to carry. That is right for the
+		// local or private endpoint this hatch exists to reach, and fails
+		// loudly anywhere else rather than leaking a key to find out.
+		if strings.TrimSpace(endpoint) != openRouterEndpoint {
+			route.Flavor, route.Endpoint, route.APIKey = native.flavor, strings.TrimSpace(endpoint), ""
+			route.ContextWindow = 0
+			route.Policy.CatalogEndpoint = ""
+			return route, nil
+		}
 		route.ContextWindow = 0
 		viaOverride = true
 	}
@@ -903,12 +920,28 @@ func parseSSE(reader io.Reader, sink StreamSink) error {
 			Usage map[string]any `json:"usage"`
 			Error *struct {
 				Message string `json:"message"`
+				Type    string `json:"type"`
 			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			return fmt.Errorf("decode provider event: %w", err)
 		}
 		if chunk.Error != nil {
+			// Parity with the Anthropic arm. An unclassified error is retried,
+			// which is right for a transient but wrong for a rate limit — and
+			// this wire had no classification at all, so an in-stream
+			// rate_limit_error would have been retried against the ruling that
+			// keeps it non-retryable. Where the endpoint names a type, it is
+			// mapped the same way; where it does not, the plain error stands
+			// and today's behaviour is unchanged.
+			if kind := strings.TrimSpace(chunk.Error.Type); kind != "" {
+				return &StatusError{
+					Status:  anthropicErrorStatus(kind),
+					Wire:    WireOpenAIChat,
+					Code:    kind,
+					Message: chunk.Error.Message,
+				}
+			}
 			return fmt.Errorf("provider stream error: %s", chunk.Error.Message)
 		}
 		for _, choice := range chunk.Choices {

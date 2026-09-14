@@ -416,6 +416,10 @@ func (c *codexLeaf) reset(ctx context.Context) {
 	if oldThread != "" && oldTurn != "" {
 		_, _ = c.call(ctx, "turn/interrupt", map[string]any{"threadId": oldThread, "turnId": oldTurn})
 	}
+	// The interrupt has returned and threadID is already cleared, so no further
+	// event from the old turn can be emitted. This is the turn boundary for a
+	// Codex leaf, and the first moment a session opened by Clear may take over.
+	c.runtime.promotePending(c.agent.ID)
 	if err := c.startThread(ctx); err != nil {
 		c.fail(err)
 		return
@@ -508,6 +512,12 @@ func (c *codexLeaf) startThread(ctx context.Context) error {
 }
 
 func (c *codexLeaf) pump(ctx context.Context) {
+	// A stale-turn retry is a race being lost, not a condition to sit in: the
+	// run loop is inside pump, so an unbounded retry stops every notification
+	// including a real turn/completed, and the leaf looks alive while doing
+	// nothing. Past the bound it fails loudly instead.
+	const maxStaleTurnRetries = 8
+	staleTurnRetries := 0
 	for {
 		c.mu.Lock()
 		if !c.ready || c.stopped || len(c.pending) == 0 || c.threadID == "" {
@@ -530,7 +540,12 @@ func (c *codexLeaf) pump(ctx context.Context) {
 			c.mu.Lock()
 			c.pending = append([]string{message}, c.pending...)
 			c.mu.Unlock()
-			if strings.Contains(err.Error(), "no active turn") || strings.Contains(err.Error(), "turn") {
+			// Narrow, and bounded. The second clause used to be a bare
+			// "turn", which subsumes the first and matched any error text
+			// mentioning a turn — so a persistent turn/start failure spun here
+			// forever.
+			if strings.Contains(err.Error(), "no active turn") && staleTurnRetries < maxStaleTurnRetries {
+				staleTurnRetries++
 				c.mu.Lock()
 				c.activeTurn = ""
 				c.mu.Unlock()
