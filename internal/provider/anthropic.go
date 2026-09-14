@@ -469,8 +469,12 @@ func newAnthropicStream() *anthropicStream {
 
 // ordinalFor renumbers a content-block index into a dense tool ordinal,
 // assigned in order of first appearance. Nothing downstream may treat the wire
-// index as an array position: on this wire block 0 is the thinking block, so
-// the first tool is at index 1 and an array pre-sized by it would be wrong.
+// index as an array position, and nothing may subtract a constant from it: the
+// offset is conditional on a thinking block being emitted, which is not
+// guaranteed. Measured 2026-09-14: a single-tool turn produced no thinking
+// block and put tool_use at index 0, while a parallel-tool turn on the same
+// endpoint put thinking at 0 and tools at 1..n. Order of appearance is correct
+// under both, which is why it is used.
 func (s *anthropicStream) ordinalFor(blockIndex int) int {
 	if ordinal, ok := s.toolOrdinal[blockIndex]; ok {
 		return ordinal
