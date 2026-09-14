@@ -435,6 +435,9 @@ func (anthropicMessagesWire) parseStream(body io.Reader, sink StreamSink) error 
 	if err := scanner.Err(); err != nil {
 		return err
 	}
+	if !state.sawStop && state.stopReason == "" {
+		return errTruncatedStream
+	}
 	return state.flush(sink)
 }
 
@@ -454,6 +457,10 @@ type anthropicStream struct {
 	cacheReadTokens int
 	sawUsage        bool
 	stopReason      string
+	// sawStop records this wire's terminal marker, `message_stop`. It was
+	// parsed into the default arm and discarded before 2026-09-14, which left a
+	// truncated stream looking exactly like a complete one.
+	sawStop bool
 }
 
 func newAnthropicStream() *anthropicStream {
@@ -569,6 +576,9 @@ func (s *anthropicStream) consume(data []byte, sink StreamSink) error {
 		if frame.Delta.StopReason != "" {
 			s.stopReason = frame.Delta.StopReason
 		}
+		return nil
+	case "message_stop":
+		s.sawStop = true
 		return nil
 	}
 	return nil

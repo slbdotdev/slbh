@@ -145,6 +145,14 @@ func runHeadless(prompt, workdir, model, effort string, timeout time.Duration, a
 		}
 		return 2
 	}
+	// A degraded resolution — a managed policy present but unreadable or
+	// invalid, falling through to the local block the precedence rule allows —
+	// is otherwise visible only on the TUI's policy line. A headless run would
+	// route on the weaker policy and say nothing, which is the silent
+	// substitution ResolvePolicy's own comment promises will not happen.
+	if cfg.PolicySource.Note != "" {
+		fmt.Fprintln(os.Stderr, "slbh:", cfg.PolicySource.Note)
+	}
 
 	rt, err := harness.New(cfg, harness.Options{Config: cfg})
 	if err != nil {

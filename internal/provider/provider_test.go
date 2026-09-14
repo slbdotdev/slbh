@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -271,6 +272,75 @@ func TestParseSSE(t *testing.T) {
 	}
 	if len(got) != 4 || got[0].Kind != EventText || got[1].Kind != EventReasoning || got[2].Kind != EventTool || got[3].Kind != EventUsage {
 		t.Fatalf("unexpected events: %#v", got)
+	}
+}
+
+func TestExplicitEndpointOverridesANativeRouteEvenWithItsKeySet(t *testing.T) {
+	// Plan decision 5 honours an explicit SLBH_ENDPOINT as a deliberate
+	// override. The override used to be consulted only on the branch taken when
+	// the native key is absent, so on any configured host — the normal case —
+	// the escape hatch did nothing, while the refusal that points at it named
+	// the very variable the code above it ignored.
+	t.Setenv("ZAI_API_KEY", "zai-key-not-a-credential")
+	t.Setenv("OPENROUTER_API_KEY", "or-key-not-a-credential")
+
+	const override = "https://proxy.example.invalid/api/anthropic/v1/messages"
+	route, err := ResolveRoute("zai/glm-5.3-flash", override, true, testPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.Endpoint != override {
+		t.Fatalf("endpoint %q, want the explicit override %q", route.Endpoint, override)
+	}
+	// The native credential and the policy's wire both survive. The operator is
+	// redirecting this provider, not swapping protocols or handing the plan's
+	// traffic to OpenRouter's key.
+	if route.APIKey != "zai-key-not-a-credential" {
+		t.Fatalf("the override swapped the credential to %q", route.APIKey)
+	}
+	if route.Flavor != "zai" {
+		t.Fatalf("the override changed the flavor to %q", route.Flavor)
+	}
+	// The pin goes: a window measured on the plan endpoint says nothing about
+	// wherever the operator has now pointed this.
+	if route.ContextWindow != 0 {
+		t.Fatalf("context window %d survived an override, want it dropped", route.ContextWindow)
+	}
+
+	// The same endpoint arrived at by default is not an override, so the policy
+	// endpoint and its pin both stand. That distinction is the whole reason
+	// endpointExplicit exists.
+	defaulted, err := ResolveRoute("zai/glm-5.3-flash", override, false, testPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaulted.Endpoint == override {
+		t.Fatal("a defaulted endpoint was treated as an explicit override")
+	}
+	if defaulted.ContextWindow == 0 {
+		t.Fatal("a defaulted endpoint dropped the policy pin")
+	}
+}
+
+func TestParseSSERejectsATruncatedStream(t *testing.T) {
+	// A connection cut mid-response closes cleanly, so without enforcing the
+	// terminal marker there is nothing to tell a truncated turn from a complete
+	// one: the harness commits partial content, or executes a partial tool-call
+	// batch, as a successful round.
+	body := "data: {\"choices\":[{\"delta\":{\"content\":\"half a senten\"}}]}\n\n"
+	err := parseSSE(strings.NewReader(body), func(Event) error { return nil })
+	if !errors.Is(err, errTruncatedStream) {
+		t.Fatalf("truncated stream returned %v, want errTruncatedStream", err)
+	}
+}
+
+func TestParseSSEAcceptsAFinishReasonWithoutDone(t *testing.T) {
+	// Either marker suffices. An endpoint that drops `[DONE]` after sending a
+	// finish reason has still delivered the whole message, and rejecting that
+	// would turn a cosmetic wire difference into a broken route.
+	body := "data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{\"content\":\"whole\"}}]}\n\n"
+	if err := parseSSE(strings.NewReader(body), func(Event) error { return nil }); err != nil {
+		t.Fatalf("a finish reason without [DONE] was rejected: %v", err)
 	}
 }
 

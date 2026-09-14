@@ -337,6 +337,28 @@ func TestInferenceToolBatchIsPreservedWhenMessagesArrive(t *testing.T) {
 	waitAgentTurn(t, r, a.ID)
 }
 
+// waitForQueuedMessage blocks until the agent holds at least one queued
+// message. That is the observable the end-of-turn check reads, and it is not
+// the same event as the job's own completion: the manager closes job.done when
+// the process exits, then cancels, then logs, and only then does the
+// completion handler enqueue here.
+func waitForQueuedMessage(t *testing.T, a *Agent) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		a.mu.Lock()
+		queued := len(a.inbox)
+		a.mu.Unlock()
+		if queued > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("job completion was never queued on the agent")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 func TestLongJobCompletionIsDeliveredAtNextBoundary(t *testing.T) {
 	r, p := messagingRuntime(t)
 	a := r.Seat()
@@ -388,6 +410,12 @@ func TestLongJobCompletionIsDeliveredAtNextBoundary(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("long_job did not finish")
 	}
+	// The property under test is that the completion is delivered at the next
+	// turn boundary, so the wait has to be for the delivery and not for the
+	// process exit. Finishing the turn on job.Done() alone races the enqueue:
+	// the turn-end check finds an empty inbox and goes idle, which failed about
+	// three runs in thirty measured on fox.
+	waitForQueuedMessage(t, a)
 	second.finish(t, textEvent("continued while job ran"))
 	third := p.next(t)
 	continuedAt := requireMessage(t, third.request, "assistant", "continued while job ran")

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -345,6 +346,22 @@ func ResolveRoute(model, endpoint string, endpointExplicit bool, policy Policy) 
 		}
 		if apiKey := os.Getenv(native.keyEnv); apiKey != "" {
 			route.Flavor, route.Endpoint, route.APIKey = native.flavor, entry.Endpoint, apiKey
+			// Decision 5 honours an explicit SLBH_ENDPOINT as a deliberate
+			// override, and it has to be honoured here and not only on the
+			// missing-key path below. The key being present is the normal case, so
+			// overriding only when it is absent means the override never works on a
+			// configured host — and the refusal below would be telling the operator
+			// to set a variable this branch ignored.
+			//
+			// The native key and the policy's wire are both kept: the operator is
+			// redirecting this provider, not swapping protocols. The context pin
+			// goes, for the same reason as the fall-through below — a window
+			// measured on the plan endpoint says nothing about wherever this now
+			// points.
+			if endpointExplicit && strings.TrimSpace(endpoint) != "" {
+				route.Endpoint = strings.TrimSpace(endpoint)
+				route.ContextWindow = 0
+			}
 			return route, nil
 		}
 		if !endpointExplicit {
@@ -821,6 +838,13 @@ func StablePrefixKey(req Request) string {
 	return "slbh-" + hex.EncodeToString(sum[:])
 }
 
+// errTruncatedStream reports a response that ended before its wire's terminal
+// marker and without a finish reason. It deliberately carries no status, so
+// Retry's rule that "an error that does not classify itself is still retried"
+// applies: a connection cut mid-response is exactly the transport failure
+// retrying exists for.
+var errTruncatedStream = errors.New("provider stream ended before its terminal marker and without a finish reason: the response was truncated")
+
 func parseSSE(reader io.Reader, sink StreamSink) error {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 16*1024), 2*1024*1024)
@@ -828,6 +852,13 @@ func parseSSE(reader io.Reader, sink StreamSink) error {
 	// the same way. On this wire it arrives on the last content chunk, ahead of
 	// the usage-only chunk that follows it.
 	stopReason := ""
+	// A stream that ends with neither `[DONE]` nor a finish reason was cut
+	// short. Without this the transport closing cleanly mid-response is
+	// indistinguishable from a complete turn, and the harness commits partial
+	// content — or executes a partial tool-call batch — as a successful round.
+	// Either marker suffices: an endpoint that drops `[DONE]` after delivering
+	// a finish reason has still delivered the whole message.
+	sawTerminal := false
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, ":") {
@@ -838,6 +869,7 @@ func parseSSE(reader io.Reader, sink StreamSink) error {
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
+			sawTerminal = true
 			continue
 		}
 		var chunk struct {
@@ -898,7 +930,13 @@ func parseSSE(reader io.Reader, sink StreamSink) error {
 			}
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if !sawTerminal && stopReason == "" {
+		return errTruncatedStream
+	}
+	return nil
 }
 
 // Retry executes an operation with short stepped delays. It intentionally

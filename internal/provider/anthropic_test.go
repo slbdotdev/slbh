@@ -668,6 +668,27 @@ func drainStream(body string) error {
 	return anthropicMessagesWire{}.parseStream(strings.NewReader(body), func(Event) error { return nil })
 }
 
+func TestAnthropicStreamRejectsATruncatedStream(t *testing.T) {
+	// `message_stop` is this wire's terminal marker. It was parsed into the
+	// default arm and discarded, so a stream that stopped early flushed its
+	// partial usage and reported a clean turn.
+	body := "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":11}}}\n\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"half\"}}\n\n"
+	if err := drainStream(body); !errors.Is(err, errTruncatedStream) {
+		t.Fatalf("truncated stream returned %v, want errTruncatedStream", err)
+	}
+}
+
+func TestAnthropicStreamAcceptsAStopReasonWithoutMessageStop(t *testing.T) {
+	// The same leniency as the other wire: a delivered stop_reason means the
+	// message completed, whatever the endpoint did with the terminal frame.
+	body := "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":11}}}\n\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}\n\n"
+	if err := drainStream(body); err != nil {
+		t.Fatalf("a stop_reason without message_stop was rejected: %v", err)
+	}
+}
+
 func TestInStreamErrorFrameCarriesItsStatusClass(t *testing.T) {
 	// An in-stream frame used to be raised as StatusError{Status: 0}, and
 	// Retryable() reads 0 as "not 5xx", so Retry returned on the first
