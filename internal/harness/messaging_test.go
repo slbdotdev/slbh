@@ -337,6 +337,35 @@ func TestInferenceToolBatchIsPreservedWhenMessagesArrive(t *testing.T) {
 	waitAgentTurn(t, r, a.ID)
 }
 
+// waitJobResultQueued blocks until the finished job's completion has actually
+// been enqueued into the agent's inbox. The job manager closes Done before its
+// completion handler delivers the result, so waiting on Done alone races the
+// turn-end inbox check: the agent can find an empty inbox, close the turn, and
+// only then receive the completion. The inbox is the thing the turn boundary
+// reads, so it is the thing this test waits on.
+func waitJobResultQueued(t *testing.T, a *Agent, jobID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		a.mu.RLock()
+		queued := false
+		for _, message := range a.inbox {
+			if message.kind == "job_result" && message.metadata["job"] == jobID {
+				queued = true
+				break
+			}
+		}
+		a.mu.RUnlock()
+		if queued {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("long_job %q completion never reached the inbox", jobID)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 func TestLongJobCompletionIsDeliveredAtNextBoundary(t *testing.T) {
 	r, p := messagingRuntime(t)
 	a := r.Seat()
@@ -374,8 +403,7 @@ func TestLongJobCompletionIsDeliveredAtNextBoundary(t *testing.T) {
 	if jobID == "" {
 		t.Fatalf("continuation did not retain long_job result: %#v", second.request.Messages)
 	}
-	job, ok := r.Jobs().Get(jobID)
-	if !ok {
+	if _, ok := r.Jobs().Get(jobID); !ok {
 		t.Fatalf("long_job %q was not registered", jobID)
 	}
 	if runtime.GOOS != "windows" {
@@ -383,11 +411,7 @@ func TestLongJobCompletionIsDeliveredAtNextBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	select {
-	case <-job.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("long_job did not finish")
-	}
+	waitJobResultQueued(t, a, jobID)
 	second.finish(t, textEvent("continued while job ran"))
 	third := p.next(t)
 	continuedAt := requireMessage(t, third.request, "assistant", "continued while job ran")
