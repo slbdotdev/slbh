@@ -87,12 +87,39 @@ type MaxPrice struct {
 // enforcement of that posture — nothing checks it before a launch any more, so
 // it holds because it is in the file the harness reads.
 type ProviderPosture struct {
-	ZDR            bool      `json:"zdr"`
+	// ZDR is a pointer so an omitted field is distinguishable from a
+	// deliberate false. That distinction is the whole refusal: a posture that
+	// simply forgot `zdr` would otherwise decode to false and quietly ship a
+	// request with the org's zero-data-retention guarantee dropped, which is
+	// indistinguishable on the wire from one that never had it.
+	ZDR            *bool     `json:"zdr"`
 	DataCollection string    `json:"data_collection"`
 	Sort           string    `json:"sort,omitempty"`
 	Ignore         []string  `json:"ignore,omitempty"`
 	MaxPrice       *MaxPrice `json:"max_price,omitempty"`
 }
+
+// Complete reports whether a posture carries the two fields that are the
+// guarantee rather than a preference.
+//
+// `sort`, `ignore` and `max_price` are routing preferences and their absence
+// costs money or latency. `zdr` and `data_collection` are the posture itself,
+// and their absence costs the guarantee, so only those two are required.
+func (p *ProviderPosture) Complete() error {
+	if p == nil {
+		return fmt.Errorf("no provider posture")
+	}
+	if p.ZDR == nil {
+		return fmt.Errorf("posture does not state zdr")
+	}
+	if strings.TrimSpace(p.DataCollection) == "" {
+		return fmt.Errorf("posture does not state data_collection")
+	}
+	return nil
+}
+
+// BoolPtr is a helper for building a posture in code, since ZDR is a pointer.
+func BoolPtr(value bool) *bool { return &value }
 
 // EffortDescriptor maps slbh's effort levels onto one endpoint's spelling of
 // them. Field is the wire field; Levels maps an slbh level to the value sent.
@@ -291,7 +318,7 @@ func DefaultLocalPolicy(models []string) Policy {
 		} else {
 			route.Endpoint = openRouterEndpoint
 			route.CatalogEndpoint, _ = modelsEndpoint(openRouterEndpoint)
-			route.Provider = &ProviderPosture{ZDR: true, DataCollection: "deny", Sort: "throughput"}
+			route.Provider = &ProviderPosture{ZDR: BoolPtr(true), DataCollection: "deny", Sort: "throughput"}
 		}
 		if route.Endpoint == "" {
 			continue

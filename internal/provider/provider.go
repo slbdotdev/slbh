@@ -72,6 +72,55 @@ type wireRequest struct {
 	Temperature      *float64      `json:"temperature,omitempty"`
 	StreamOptions    streamOptions `json:"stream_options"`
 	Tools            []wireTool    `json:"tools,omitempty"`
+	// Provider is OpenRouter's routing object, and it is populated for the
+	// openrouter route and for no other. It is what decides which upstream
+	// endpoint serves a request and on what terms, and since the pi-run
+	// preflight was retired on 2026-09-10 it is the entire enforcement of that
+	// posture — nothing checks it before a launch any more, so it holds
+	// because it is in the body that goes out.
+	Provider *wireProviderObject `json:"provider,omitempty"`
+}
+
+// wireProviderObject is the `provider` field OpenRouter reads. Its shape is
+// OpenRouter's, not ours, so the JSON names are theirs.
+type wireProviderObject struct {
+	ZDR            bool          `json:"zdr"`
+	DataCollection string        `json:"data_collection"`
+	Sort           string        `json:"sort,omitempty"`
+	Ignore         []string      `json:"ignore,omitempty"`
+	MaxPrice       *wireMaxPrice `json:"max_price,omitempty"`
+}
+
+type wireMaxPrice struct {
+	Prompt     float64 `json:"prompt"`
+	Completion float64 `json:"completion"`
+}
+
+// providerObjectFor renders a route's posture into the wire object, and
+// returns nil for every route that is not the OpenRouter one.
+//
+// `zdr` and `data_collection` are OpenRouter concepts and say nothing about
+// the Z.ai plan endpoint or a server on the house network, so sending them
+// there would be noise at best and a false record of a guarantee at worst.
+func providerObjectFor(route Route) *wireProviderObject {
+	if route.Flavor != "openrouter" || route.Policy.Provider == nil {
+		return nil
+	}
+	posture := route.Policy.Provider
+	object := &wireProviderObject{
+		DataCollection: posture.DataCollection,
+		Sort:           posture.Sort,
+	}
+	if posture.ZDR != nil {
+		object.ZDR = *posture.ZDR
+	}
+	if len(posture.Ignore) > 0 {
+		object.Ignore = append([]string(nil), posture.Ignore...)
+	}
+	if posture.MaxPrice != nil {
+		object.MaxPrice = &wireMaxPrice{Prompt: posture.MaxPrice.Prompt, Completion: posture.MaxPrice.Completion}
+	}
+	return object
 }
 
 type streamOptions struct {
@@ -275,6 +324,11 @@ func ResolveRoute(model, endpoint string, endpointExplicit bool, policy Policy) 
 			key, entry.Wire)
 	}
 	route := Route{Key: key, ContextWindow: entry.ContextWindow, Wire: entry.Wire, Policy: entry}
+	// viaOverride records that a native route was redirected by an explicit
+	// SLBH_ENDPOINT rather than being an OpenRouter route in its own right.
+	// The two are not the same thing and phase 3's posture requirement applies
+	// to one of them only.
+	viaOverride := false
 
 	if native, isNative := nativeRouteFor(key); isNative {
 		if native.flavor == LocalProviderName {
@@ -303,6 +357,7 @@ func ResolveRoute(model, endpoint string, endpointExplicit bool, policy Policy) 
 		// goes — a window measured on the plan endpoint says nothing about
 		// wherever the operator has pointed this.
 		route.ContextWindow = 0
+		viaOverride = true
 	}
 
 	// The policy names this route's endpoint. An explicit SLBH_ENDPOINT still
@@ -319,6 +374,32 @@ func ResolveRoute(model, endpoint string, endpointExplicit bool, policy Policy) 
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" {
 		return Route{}, fmt.Errorf("model %q routes to %s but OPENROUTER_API_KEY is not set", model, target)
+	}
+	// The refusal is total, and this is the half phase 3 adds. A route with no
+	// entry already refused in phase 1c; a route whose entry describes no
+	// posture refuses here. Routing to OpenRouter without stating zdr and
+	// data_collection would send a request whose upstream is chosen on price
+	// and availability alone, which is the exact guarantee this document
+	// exists to carry — and nothing downstream would ever report its absence,
+	// because a request with no `provider` object looks like a normal one.
+	//
+	// This is a per-route refusal rather than a whole-document one, on the
+	// same reasoning as the wire refusal: rejecting the file would take every
+	// other route down with this one.
+	//
+	// It does not apply to a native route the operator redirected with an
+	// explicit SLBH_ENDPOINT. That policy entry describes the plan endpoint
+	// and says nothing about wherever the override points, so requiring its
+	// posture would be requiring the wrong document's answer — and would make
+	// the sanctioned escape hatch unusable for exactly the native routes it
+	// exists for. No posture is known for that destination, so none is sent
+	// rather than one being invented: an override is the operator stepping
+	// outside the managed path deliberately, and it is the one hole in this
+	// guarantee that is signed for by hand.
+	if err := route.Policy.Provider.Complete(); !viaOverride && err != nil {
+		return Route{}, fmt.Errorf(
+			"route %q goes to OpenRouter but its policy states no routing posture (%v): refusing rather than letting the request pick an upstream on price and availability alone. Add a provider block with zdr and data_collection",
+			key, err)
 	}
 	route.Flavor, route.Endpoint, route.APIKey = "openrouter", target, apiKey
 	return route, nil

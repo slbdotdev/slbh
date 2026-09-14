@@ -104,6 +104,23 @@ where the provider's catalog cannot report one, an effort descriptor, and — fo
 an OpenRouter route — the routing posture (`zdr`, `data_collection`, `sort`,
 `ignore`, `max_price`). No credential appears in either file.
 
+That posture is sent as OpenRouter's `provider` routing object on the
+OpenRouter route and on no other, because `zdr` and `data_collection` are
+OpenRouter concepts that say nothing about a plan endpoint or a server on your
+own network. **An OpenRouter route whose policy states no posture refuses**:
+routing there without it would pick an upstream on price and availability
+alone, and a request carrying no `provider` object looks exactly like a normal
+one, so nothing downstream would ever report the absence. `zdr` is required to
+be *stated* rather than required to be true — a deliberate `false` is
+expressible, an omission is not, because the two are indistinguishable once
+decoded.
+
+The one exception is an explicit `SLBH_ENDPOINT` override of a native route.
+That route's policy entry describes its own endpoint and says nothing about
+wherever you have pointed it, so no posture is demanded and none is invented.
+An override is stepping outside the managed path deliberately, and it is the
+one hole in this guarantee that you sign for by hand.
+
 ### Wires
 
 A route names the protocol it speaks, and slbh implements two.

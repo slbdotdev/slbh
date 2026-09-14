@@ -10,6 +10,27 @@ import (
 
 // identityLevels is the effort map every fleet route carries: the level is
 // sent as written, and nothing is clamped.
+// committedManagedPolicy reads the managed artifact phase 1a committed, which
+// is the fleet's target shape. Reading it rather than restating it is what
+// makes these tests fail when the document and the code that reads it drift
+// apart.
+func committedManagedPolicy(t *testing.T) Policy {
+	t.Helper()
+	path := filepath.Join("..", "config", "testdata", "policy.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policy Policy
+	if err := json.Unmarshal(data, &policy); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	if err := policy.Validate(); err != nil {
+		t.Fatalf("%s does not validate: %v", path, err)
+	}
+	return policy
+}
+
 func identityLevels() map[string]string {
 	return map[string]string{"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max"}
 }
@@ -30,7 +51,7 @@ func testPolicy() Policy {
 		}
 	}
 	orr := openai(OpenRouterEndpoint, 0)
-	orr.Provider = &ProviderPosture{ZDR: true, DataCollection: "deny", Sort: "throughput"}
+	orr.Provider = &ProviderPosture{ZDR: BoolPtr(true), DataCollection: "deny", Sort: "throughput"}
 	return Policy{Version: PolicyVersion, Routes: map[string]RoutePolicy{
 		"zai/glm-5.3-flash": openai("https://api.z.ai/api/coding/paas/v4/chat/completions", 1000000),
 		"zai/glm-5.3":       openai("https://api.z.ai/api/coding/paas/v4/chat/completions", 1000000),
@@ -295,7 +316,7 @@ func TestDefaultLocalPolicyAuthorsRoutesThisBuildCanSpeak(t *testing.T) {
 	// a locally authored policy may be weaker than the managed one, but not by
 	// omitting the guarantee entirely.
 	posture := policy.Routes["vendor/model"].Provider
-	if posture == nil || !posture.ZDR || posture.DataCollection != "deny" {
+	if posture == nil || posture.ZDR == nil || !*posture.ZDR || posture.DataCollection != "deny" {
 		t.Fatalf("openrouter route authored without posture: %#v", posture)
 	}
 	// And the local route keeps the identity effort map: the known local
@@ -309,18 +330,7 @@ func TestCommittedPolicyArtifactsValidate(t *testing.T) {
 	// The two artifacts phase 1a committed are the schema's worked examples
 	// and the fleet's target shape. If either stops validating, the document
 	// and the code that reads it have drifted apart.
-	managed := filepath.Join("..", "config", "testdata", "policy.json")
-	data, err := os.ReadFile(managed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var policy Policy
-	if err := json.Unmarshal(data, &policy); err != nil {
-		t.Fatalf("decode %s: %v", managed, err)
-	}
-	if err := policy.Validate(); err != nil {
-		t.Fatalf("%s does not validate: %v", managed, err)
-	}
+	policy := committedManagedPolicy(t)
 	// The managed shape is the one phase 2 is required for: it routes the plan
 	// to anthropic-messages with output_config.effort and a measured pin.
 	plan := policy.Routes["zai/glm-5.3-flash"]
@@ -331,7 +341,7 @@ func TestCommittedPolicyArtifactsValidate(t *testing.T) {
 		t.Fatal("managed plan route has no catalogEndpoint; modelsEndpoint cannot derive it on that wire")
 	}
 	orr := policy.Routes["z-ai/glm-5.3-flash"]
-	if orr.Provider == nil || !orr.Provider.ZDR || orr.Provider.DataCollection != "deny" {
+	if err := orr.Provider.Complete(); err != nil || !*orr.Provider.ZDR || orr.Provider.DataCollection != "deny" {
 		t.Fatalf("managed openrouter route posture = %#v", orr.Provider)
 	}
 	if orr.ContextWindow != 1048576 {

@@ -134,6 +134,7 @@ func (openAIChatWire) payload(p *HTTPProvider, req Request) ([]byte, error) {
 		PromptCacheKey:   req.CacheKey,
 		Temperature:      req.Temperature,
 		StreamOptions:    streamOptions{IncludeUsage: true},
+		Provider:         providerObjectFor(p.Route),
 	}
 	if len(req.Tools) > 0 {
 		body.Tools = make([]wireTool, 0, len(req.Tools))
