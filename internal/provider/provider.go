@@ -904,12 +904,17 @@ func parseSSE(reader io.Reader, sink StreamSink) error {
 // Retry executes an operation with short stepped delays. It intentionally
 // leaves cancellation to the caller and never retries context cancellation.
 //
-// It used to retry every stream error three times. On these endpoints every
-// refusal is an HTTP status before the stream opens and no in-stream error
-// frame was ever produced, so a refusal is a status-class decision: a 4xx will
-// say the same thing three times, and retrying it wastes quota and delays the
-// report. An error that does not classify itself is still retried, which keeps
-// transport failures — the case retrying exists for — behaving as before.
+// It used to retry every stream error three times. A refusal on these
+// endpoints is a status-class decision instead: a 4xx will say the same thing
+// three times, and retrying it wastes quota and delays the report. An error
+// that does not classify itself is still retried, which keeps transport
+// failures — the case retrying exists for — behaving as before.
+//
+// Most refusals are an HTTP status before the stream opens, which is all the
+// capability matrix produced. An in-stream `error` frame was observed live
+// under overload on 2026-09-14, so the Anthropic wire maps that frame's type
+// onto the status its pre-stream equivalent would have carried and both halves
+// classify under the one rule.
 func Retry(ctx context.Context, attempts int, fn func() error) error {
 	if attempts < 1 {
 		attempts = 1

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -633,5 +634,130 @@ func TestAnthropicStreamSendsCanonicalHeaders(t *testing.T) {
 func TestNewHTTPOnWireRefusesAnUnknownWire(t *testing.T) {
 	if _, err := NewHTTPOnWire("https://example.invalid/v1", "k", "responses-api"); err == nil {
 		t.Fatal("an unknown wire was constructed rather than refused")
+	}
+}
+
+// anthropicOverloadStream is the frame observed live on 2026-09-14: the stream
+// opened, carried content, and then produced an `error` frame mid-flight. The
+// capability matrix produced none from either endpoint, so this shape had no
+// test until the endpoint produced one under overload.
+const anthropicOverloadStream = `event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":12}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"par"}}
+
+event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"[500][Operation failed][20260914112046b125d352f3a64642]"}}
+
+`
+
+// anthropicRateLimitStream is the same shape carrying the one in-stream type
+// this fleet must never retry.
+const anthropicRateLimitStream = `event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":12}}}
+
+event: error
+data: {"type":"error","error":{"type":"rate_limit_error","message":"quota exhausted"}}
+
+`
+
+// drainStream runs a stream to its end and returns whatever it failed with,
+// discarding events. It exists so a Retry body is one line.
+func drainStream(body string) error {
+	return anthropicMessagesWire{}.parseStream(strings.NewReader(body), func(Event) error { return nil })
+}
+
+func TestInStreamErrorFrameCarriesItsStatusClass(t *testing.T) {
+	// An in-stream frame used to be raised as StatusError{Status: 0}, and
+	// Retryable() reads 0 as "not 5xx", so Retry returned on the first
+	// attempt. A plain fmt.Errorf would have been retried three times; the
+	// typed error actively opted out of the behaviour retrying exists for.
+	// Mapping the frame's `type` onto the status the same condition carries
+	// before the stream opens puts both halves under one rule.
+	cases := []struct {
+		frameType string
+		status    int
+	}{
+		{"invalid_request_error", http.StatusBadRequest},
+		{"authentication_error", http.StatusUnauthorized},
+		{"billing_error", http.StatusForbidden},
+		{"permission_error", http.StatusForbidden},
+		{"not_found_error", http.StatusNotFound},
+		{"request_too_large", http.StatusRequestEntityTooLarge},
+		{"rate_limit_error", http.StatusTooManyRequests},
+		{"api_error", http.StatusInternalServerError},
+		// 529 is Anthropic's own overload status. It is non-standard, so there
+		// is no net/http constant, and the literal is asserted here rather
+		// than the production constant so the test pins the wire value.
+		{"overloaded_error", 529},
+	}
+	for _, c := range cases {
+		body := fmt.Sprintf("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":%q,\"message\":\"m\"}}\n\n", c.frameType)
+		err := drainStream(body)
+		var status *StatusError
+		if !errors.As(err, &status) {
+			t.Fatalf("%s: error is %T, want *StatusError", c.frameType, err)
+		}
+		if status.Status != c.status {
+			t.Fatalf("%s: status = %d, want %d", c.frameType, status.Status, c.status)
+		}
+		if status.Code != c.frameType {
+			t.Fatalf("%s: code = %q; the frame's own type is the only handle on it", c.frameType, status.Code)
+		}
+		if status.Wire != WireAnthropicMessages {
+			t.Fatalf("%s: wire = %q", c.frameType, status.Wire)
+		}
+	}
+
+	// An unrecognised type defaults to the retryable side, which is what this
+	// package already does for an error that carries no classification at all.
+	err := drainStream("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"some_future_error\",\"message\":\"m\"}}\n\n")
+	var status *StatusError
+	if !errors.As(err, &status) || !status.Retryable() {
+		t.Fatalf("an unrecognised in-stream type is not retryable: %#v", err)
+	}
+}
+
+func TestRetryHonoursInStreamErrorFrames(t *testing.T) {
+	// The live defect, end to end. An `overloaded_error` is a server-side
+	// transient and is the textbook retryable case; before the type was
+	// mapped it failed the turn on the first attempt.
+	attempts := 0
+	err := Retry(context.Background(), 3, func() error {
+		attempts++
+		return drainStream(anthropicOverloadStream)
+	})
+	if attempts != 3 {
+		t.Fatalf("an in-stream overloaded_error was attempted %d times, want 3", attempts)
+	}
+	var status *StatusError
+	if !errors.As(err, &status) {
+		t.Fatalf("error is %T, want *StatusError", err)
+	}
+	if !status.Retryable() || status.Code != "overloaded_error" {
+		t.Fatalf("classified = %#v", status)
+	}
+	if !strings.Contains(status.Error(), "20260914112046b125d352f3a64642") {
+		t.Fatalf("the provider's own message was dropped: %s", status.Error())
+	}
+
+	// The fleet ruling is unchanged by the fix: a quota refusal stops the work
+	// and is reported at once, because three silent retries would spend three
+	// times the quota before anyone heard about it. A blanket "Status 0 is
+	// retryable" would have broken exactly this.
+	attempts = 0
+	err = Retry(context.Background(), 3, func() error {
+		attempts++
+		return drainStream(anthropicRateLimitStream)
+	})
+	if attempts != 1 {
+		t.Fatalf("an in-stream rate_limit_error was attempted %d times, want 1", attempts)
+	}
+	if !errors.As(err, &status) || status.Status != http.StatusTooManyRequests {
+		t.Fatalf("classified = %#v", err)
+	}
+	if status.Retryable() {
+		t.Fatal("a 429 must not be retried, in-stream or not")
 	}
 }

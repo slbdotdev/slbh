@@ -321,6 +321,55 @@ func (anthropicMessagesWire) classifyError(status int, body []byte) error {
 	return err
 }
 
+// anthropicStatusOverloaded is Anthropic's own overload status. It is
+// non-standard, so `net/http` has no constant for it, and it is 5xx, which is
+// what makes an overload retryable under the rule below.
+const anthropicStatusOverloaded = 529
+
+// anthropicErrorStatus maps an in-stream error frame's `type` onto the HTTP
+// status the same condition carries when the endpoint refuses before the
+// stream opens.
+//
+// This exists because retry classification is a status-class decision, and an
+// in-stream frame has no status of its own. Raising one with `Status: 0` made
+// `StatusError.Retryable` false, so `provider.Retry` returned on the first
+// attempt and a server-side transient failed the turn outright — a plain
+// `fmt.Errorf` would have been retried, and the typed error opted out of the
+// one behaviour retrying exists for. Mapping the type rather than making
+// `Status: 0` blanket-retryable is deliberate: a blanket rule would also
+// retry the in-stream 4xx equivalents, and `rate_limit_error` among them,
+// which the ruling on `StatusError.Retryable` forbids.
+//
+// An unrecognised type defaults to 500, the **retryable** side. That matches
+// what this package already does with an error carrying no classification at
+// all, and it matches the nil-error fallback in the same `case "error":`
+// branch, which returns a bare `fmt.Errorf` and is therefore retried. The one
+// refusal class that must never be retried here is a quota refusal, and it
+// arrives as `rate_limit_error`, which is mapped — so the default cannot
+// swallow it.
+func anthropicErrorStatus(errorType string) int {
+	switch errorType {
+	case "invalid_request_error":
+		return http.StatusBadRequest
+	case "authentication_error":
+		return http.StatusUnauthorized
+	case "billing_error", "permission_error":
+		return http.StatusForbidden
+	case "not_found_error":
+		return http.StatusNotFound
+	case "request_too_large":
+		return http.StatusRequestEntityTooLarge
+	case "rate_limit_error":
+		return http.StatusTooManyRequests
+	case "api_error":
+		return http.StatusInternalServerError
+	case "overloaded_error":
+		return anthropicStatusOverloaded
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
 // anthropicCatalog is this endpoint's own catalog shape. `modelMetadata`
 // cannot read it: `created_at` is an RFC3339 string where the OpenAI shape has
 // a Unix integer `created`, and there is no context length on either wire, so
@@ -459,11 +508,19 @@ func (s *anthropicStream) consume(data []byte, sink StreamSink) error {
 		// Carries nothing. Never content.
 		return nil
 	case "error":
-		// No in-stream error frame was produced by either endpoint in the
-		// capability matrix, but the dialect defines one and a stream that
-		// produced it must not be read as a successful end.
+		// The capability matrix produced no in-stream error frame from either
+		// endpoint, but this endpoint produced one live under overload on
+		// 2026-09-14 — `overloaded_error`, mid-stream, after the stream had
+		// already opened. A stream that produced it must not be read as a
+		// successful end, and it must carry the same status class the same
+		// condition carries when it arrives as a pre-stream refusal.
 		if frame.Error != nil {
-			return &StatusError{Status: 0, Wire: WireAnthropicMessages, Code: frame.Error.Type, Message: frame.Error.Message}
+			return &StatusError{
+				Status:  anthropicErrorStatus(frame.Error.Type),
+				Wire:    WireAnthropicMessages,
+				Code:    frame.Error.Type,
+				Message: frame.Error.Message,
+			}
 		}
 		return fmt.Errorf("provider stream error")
 	case "message_start":
