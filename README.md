@@ -168,6 +168,14 @@ deliberately: a quota refusal should surface at once rather than be spent three
 times over. `request_id` is preserved in the error text, since it is the only
 handle the provider gives for a support question.
 
+An in-stream `error` frame is classified the same way. The Messages dialect can
+raise one after the stream has already opened — observed live under overload on
+2026-09-14 — and such a frame carries no status of its own, so its `type` is
+mapped onto the status the same condition carries as a pre-stream refusal:
+`overloaded_error` and `api_error` are retried, `rate_limit_error` is not, and
+an unrecognised type defaults to the retryable side, which is what an error
+carrying no classification at all already gets.
+
 Two refusals are deliberate and worth knowing about:
 
 - **An effort level the route cannot express refuses the request**, naming the
