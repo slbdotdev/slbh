@@ -118,7 +118,14 @@ func TestLiveTranscriptReplayAndCache(t *testing.T) {
 	if effort := os.Getenv("SLBH_LIVE_TEST_EFFORT"); effort != "" {
 		cfg.SeatEffort = effort
 	}
-	inner, err := provider.ForModel(cfg.SeatModel, cfg.Endpoint, cfg.EndpointExplicit)
+	// The live test routes through the real policy, because routing through
+	// anything else would not be testing the production path. On a host with
+	// no policy every route refuses, so say that plainly rather than letting
+	// it surface as an opaque routing error.
+	if cfg.PolicySource.Kind == config.PolicyNone {
+		t.Fatalf("no routing policy is in force (%s); this test routes through the real policy", cfg.PolicySource.Describe())
+	}
+	inner, err := provider.ForModel(cfg.SeatModel, cfg.Endpoint, cfg.EndpointExplicit, cfg.Policy)
 	if err != nil {
 		t.Fatal(err)
 	}
