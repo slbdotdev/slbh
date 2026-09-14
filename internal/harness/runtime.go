@@ -107,8 +107,14 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	go r.dispatchEvents()
 	if r.provider == nil {
+		// The current config is read per call rather than captured, so a policy
+		// authored from /models on an unmanaged host takes effect on the next
+		// request instead of at the next launch. That is the whole point of the
+		// escape hatch: a refusal the user cannot clear without restarting is
+		// still a brick.
 		r.provider = func(model string) (provider.Provider, error) {
-			return provider.ForModel(model, cfg.Endpoint, cfg.EndpointExplicit)
+			current := r.Config()
+			return provider.ForModel(model, current.Endpoint, current.EndpointExplicit, current.Policy)
 		}
 	}
 	r.jobs = job.NewManagerWithLogger(r.sessionLogger)
@@ -167,6 +173,44 @@ func (r *Runtime) ModelCatalog() []provider.Catalog {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return append([]provider.Catalog(nil), r.catalog...)
+}
+
+// PolicySource reports which routing policy is in force and where it came
+// from, so the TUI can say so rather than leaving a user to guess why a local
+// edit changed nothing.
+func (r *Runtime) PolicySource() config.PolicySource {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.config.PolicySource
+}
+
+// AuthorLocalPolicy writes a local routing policy into the app-owned
+// config.json and re-resolves which policy is in force.
+//
+// On a managed host the managed file still wins, and the returned source says
+// so: the write is honest but inert, which is exactly what the precedence rule
+// promises and what the user must be told. On an unmanaged host this is what
+// turns the fail-closed refusal back into a working harness.
+func (r *Runtime) AuthorLocalPolicy(policy provider.Policy) (config.PolicySource, error) {
+	// Resolution re-reads the managed file, so it happens on a copy with no
+	// lock held: a request resolving its own route takes the same lock, and
+	// blocking it behind a file read for a menu keypress would be a poor
+	// trade. Only the three policy fields are then written back, so a model
+	// change made in between is not clobbered by this copy.
+	cfg := r.Config()
+	if err := cfg.ApplyLocalPolicy(policy); err != nil {
+		return config.PolicySource{}, err
+	}
+	r.mu.Lock()
+	r.config.LocalPolicy = cfg.LocalPolicy
+	r.config.Policy = cfg.Policy
+	r.config.PolicySource = cfg.PolicySource
+	saved := r.config
+	r.mu.Unlock()
+	if err := saved.Save(); err != nil {
+		return saved.PolicySource, err
+	}
+	return saved.PolicySource, nil
 }
 
 // ConfigureModels preserves the older two-slot API while keeping the leaf

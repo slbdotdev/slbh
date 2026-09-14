@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -128,6 +129,21 @@ func runHeadless(prompt, workdir, model, effort string, timeout time.Duration, a
 	}
 	if effort != "" {
 		cfg.SeatEffort = effort
+	}
+	// Fail fast and say what to do about it. Without a policy every route
+	// refuses, and a headless run has no /models menu to author one in, so
+	// discovering that as a wrapped error at the first inference round is a
+	// worse report than refusing up front. This is a usage problem, not a
+	// runtime error, so it takes exit 2.
+	if cfg.PolicySource.Kind == config.PolicyNone {
+		fmt.Fprintln(os.Stderr, "slbh: no routing policy is in force, so every route refuses.")
+		fmt.Fprintf(os.Stderr, "slbh: expected a managed %s, or a local_policy block in %s.\n",
+			filepath.Join(cfg.Home, "policy.json"), filepath.Join(cfg.Home, "config.json"))
+		fmt.Fprintln(os.Stderr, "slbh: on an unmanaged host, start the TUI, open /models and press p to author one.")
+		if cfg.PolicySource.Note != "" {
+			fmt.Fprintln(os.Stderr, "slbh:", cfg.PolicySource.Note)
+		}
+		return 2
 	}
 
 	rt, err := harness.New(cfg, harness.Options{Config: cfg})

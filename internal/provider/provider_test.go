@@ -92,7 +92,7 @@ func TestNormalizeDeepSeekModel(t *testing.T) {
 
 func TestForModelRoutesLocalOllamaWithoutKey(t *testing.T) {
 	t.Setenv("SLBH_LOCAL_ENDPOINT", "http://127.0.0.1:11434/v1/chat/completions")
-	p, err := ForModel(LocalModelID, "https://example.invalid/v1/chat/completions", true)
+	p, err := ForModel(LocalModelID, "https://example.invalid/v1/chat/completions", true, testPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,37 +251,44 @@ func TestParseSSE(t *testing.T) {
 	}
 }
 
-func TestPinnedContextWindow(t *testing.T) {
-	// Both spellings that address the plan route today carry the pin.
-	for _, model := range []string{"zai/glm-5.3-flash", "glm-5.3-flash"} {
-		window, ok := PinnedContextWindow(model)
-		if !ok {
-			t.Fatalf("%q is not pinned", model)
-		}
-		if window != 1000000 {
-			t.Fatalf("%q pinned at %d, want 1000000", model, window)
-		}
-	}
+func TestPinnedContextWindowComesFromPolicy(t *testing.T) {
+	// Phase 1c deleted the compiled-in pin table. The pin now arrives on the
+	// route from the policy, and it reaches the harness through the instance
+	// rather than through a lookup by model name.
+	t.Setenv("ZAI_API_KEY", "test-key-not-a-credential")
+	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
 
-	// Surrounding whitespace is normalized away, as it is everywhere else a
-	// model name is accepted.
-	if window, ok := PinnedContextWindow("  zai/glm-5.3-flash  "); !ok || window != 1000000 {
-		t.Fatalf("padded slug pinned at %d (ok=%v), want 1000000", window, ok)
+	// Both spellings that address the plan route resolve to one key and so to
+	// one pin: that is what deriving the key in one place buys.
+	for _, model := range []string{"zai/glm-5.3-flash", "glm-5.3-flash", "  glm-5.3-flash  "} {
+		p, err := ForModel(model, OpenRouterEndpoint, false, testPolicy())
+		if err != nil {
+			t.Fatalf("ForModel(%q): %v", model, err)
+		}
+		window, ok := p.PinnedContextWindow()
+		if !ok || window != 1000000 {
+			t.Fatalf("%q pinned at %d (ok=%v), want 1000000", model, window, ok)
+		}
 	}
 
 	// The `[1m]` spellings Z.ai's own Claude Code guide publishes are rejected
-	// 1211 on both wires, so they are not aliases and must not be pinned. A
-	// pin invented for them would size a window for a model that cannot run.
+	// 1211 on both wires, so they are not aliases. They have no policy entry
+	// of their own, so they now refuse outright rather than merely going
+	// unpinned — a strictly stronger outcome than before.
 	for _, model := range []string{"zai/glm-5.3-flash[1m]", "glm-5.3-flash[1m]", "zai/glm-5.3[1m]"} {
-		if window, ok := PinnedContextWindow(model); ok {
-			t.Fatalf("%q must not be pinned, got %d", model, window)
+		if _, err := ForModel(model, OpenRouterEndpoint, false, testPolicy()); err == nil {
+			t.Fatalf("%q resolved a route; a [1m] spelling has no policy entry and must refuse", model)
 		}
 	}
 
-	// Unpinned routes report no pin rather than a zero window, so the caller
-	// can tell "no pin" from "pinned at nothing".
-	for _, model := range []string{"deepseek-v4-flash", LocalModelID, "vendor/model", ""} {
-		if window, ok := PinnedContextWindow(model); ok {
+	// A route the policy describes without a contextWindow reports no pin
+	// rather than a zero window, so discovery and the fallback still run.
+	for _, model := range []string{"deepseek-v4-flash", LocalModelID} {
+		p, err := ForModel(model, OpenRouterEndpoint, false, testPolicy())
+		if err != nil {
+			t.Fatalf("ForModel(%q): %v", model, err)
+		}
+		if window, ok := p.PinnedContextWindow(); ok {
 			t.Fatalf("%q must not be pinned, got %d", model, window)
 		}
 	}
@@ -326,8 +333,10 @@ func TestRouteKeyNormalizesEverySpellingOfARoute(t *testing.T) {
 		if got == "zai/glm-5.3-flash" || got == "zai/glm-5.3" {
 			t.Fatalf("RouteKey(%q) = %q: a [1m] spelling was normalized into the plain slug", model, got)
 		}
-		if _, pinned := PinnedContextWindow(model); pinned {
-			t.Fatalf("%q must not inherit the plan route's context pin", model)
+		// And with the pin's source in policy, a key nothing describes gets no
+		// entry at all, so it cannot inherit the plan route's window.
+		if _, found := testPolicy().Route(got); found {
+			t.Fatalf("%q resolved to key %q, which the policy describes: it must not inherit the plan route", model, got)
 		}
 	}
 
@@ -344,7 +353,7 @@ func TestRouteKeyAndWireModelAreInverse(t *testing.T) {
 	// route puts on the wire. The plan route sends the bare slug (fact 11),
 	// and OpenRouter sends its own namespaced spelling.
 	t.Setenv("ZAI_API_KEY", "test-key-not-a-credential")
-	p, err := ForModel("glm-5.3-flash", "https://openrouter.ai/api/v1/chat/completions", false)
+	p, err := ForModel("glm-5.3-flash", OpenRouterEndpoint, false, testPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +375,7 @@ func TestResolveRouteRefusesRatherThanFallingThroughToOpenRouter(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
 	for _, model := range []string{"zai/glm-5.3-flash", "glm-5.3-flash"} {
-		route, err := ResolveRoute(model, "https://openrouter.ai/api/v1/chat/completions", false)
+		route, err := ResolveRoute(model, OpenRouterEndpoint, false, testPolicy())
 		if err == nil {
 			t.Fatalf("ResolveRoute(%q) returned flavor %q instead of refusing", model, route.Flavor)
 		}
@@ -377,7 +386,7 @@ func TestResolveRouteRefusesRatherThanFallingThroughToOpenRouter(t *testing.T) {
 
 	// The same refusal for the other native family.
 	t.Setenv("DEEPSEEK_API_KEY", "")
-	if _, err := ResolveRoute("deepseek-v4-flash", "https://openrouter.ai/api/v1/chat/completions", false); err == nil {
+	if _, err := ResolveRoute("deepseek-v4-flash", OpenRouterEndpoint, false, testPolicy()); err == nil {
 		t.Fatal("a deepseek model with no DEEPSEEK_API_KEY did not refuse")
 	}
 }
@@ -390,10 +399,10 @@ func TestResolveRouteHonoursAnExplicitEndpointOverride(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
 	const endpoint = "https://openrouter.ai/api/v1/chat/completions"
 
-	if _, err := ResolveRoute("zai/glm-5.3-flash", endpoint, false); err == nil {
+	if _, err := ResolveRoute("zai/glm-5.3-flash", endpoint, false, testPolicy()); err == nil {
 		t.Fatal("a defaulted endpoint must not override a native route")
 	}
-	route, err := ResolveRoute("zai/glm-5.3-flash", endpoint, true)
+	route, err := ResolveRoute("zai/glm-5.3-flash", endpoint, true, testPolicy())
 	if err != nil {
 		t.Fatalf("an explicit endpoint must override: %v", err)
 	}
@@ -411,17 +420,17 @@ func TestResolveRouteHonoursAnExplicitEndpointOverride(t *testing.T) {
 func TestResolveRouteRefusesAnUnroutableModel(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
 	// No model at all addresses no route.
-	if _, err := ResolveRoute("  ", "https://openrouter.ai/api/v1/chat/completions", false); err == nil {
+	if _, err := ResolveRoute("  ", OpenRouterEndpoint, false, testPolicy()); err == nil {
 		t.Fatal("an empty model did not refuse")
 	}
 	// A non-native model with no endpoint has nowhere to go.
-	if _, err := ResolveRoute("vendor/model", "", false); err == nil {
+	if _, err := ResolveRoute("unknown/model", "", false, testPolicy()); err == nil {
 		t.Fatal("a model with no native route and no endpoint did not refuse")
 	}
 	// A non-native model with an endpoint but no credential refuses at routing
 	// time rather than deferring the failure to the first request.
 	t.Setenv("OPENROUTER_API_KEY", "")
-	if _, err := ResolveRoute("vendor/model", "https://openrouter.ai/api/v1/chat/completions", false); err == nil {
+	if _, err := ResolveRoute("vendor/model", OpenRouterEndpoint, false, testPolicy()); err == nil {
 		t.Fatal("a model with no OPENROUTER_API_KEY did not refuse")
 	}
 }
@@ -434,7 +443,7 @@ func TestResolveRouteKeepsTheLocalRouteKeylessAndUnpinned(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("ZAI_API_KEY", "")
 	t.Setenv("DEEPSEEK_API_KEY", "")
-	route, err := ResolveRoute(LocalModelID, "", false)
+	route, err := ResolveRoute(LocalModelID, "", false, testPolicy())
 	if err != nil {
 		t.Fatalf("local route refused: %v", err)
 	}

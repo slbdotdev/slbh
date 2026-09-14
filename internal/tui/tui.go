@@ -12,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/harness"
 	"github.com/slbdotdev/slbh/internal/provider"
 )
@@ -595,8 +596,52 @@ func (m *Model) updateModelMenu(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.assignModel(nodes[m.modelCursor], slot)
 		}
+	case 'p', 'P':
+		m.authorLocalPolicy()
 	}
 	return m, nil
+}
+
+// authorLocalPolicy writes a working routing policy into the app-owned
+// config.json for the models this configuration actually uses.
+//
+// This is the escape hatch that keeps the fail-closed refusal from being a
+// brick on a host ansible does not manage. Every route it writes is on a wire
+// this build can speak, so the policy it authors works rather than merely
+// parsing. On a managed host the write still happens and is still inert,
+// because the managed file wins — and the notice says so outright, since a
+// user who edits a local policy and sees nothing change has no other way to
+// tell why.
+func (m *Model) authorLocalPolicy() {
+	cfg := m.runtime.Config()
+	models := []string{m.modelSeat, m.modelSubagent, m.modelLeaf, cfg.SeatModel, cfg.SubagentModel, cfg.LeafModel}
+	models = append(models, cfg.ApprovedModels...)
+	policy := provider.DefaultLocalPolicy(models)
+	if len(policy.Routes) == 0 {
+		m.modelNotice = "no models selected yet, so there is no route to author a policy for"
+		m.modelNoticeErr = true
+		m.modelNoticeOK = false
+		return
+	}
+	source, err := m.runtime.AuthorLocalPolicy(policy)
+	if err != nil {
+		m.modelNotice = "author local policy: " + err.Error()
+		m.modelNoticeErr = true
+		m.modelNoticeOK = false
+		return
+	}
+	routes := len(policy.Routes)
+	if source.Kind == config.PolicyManaged {
+		m.modelNotice = fmt.Sprintf(
+			"local policy written for %d route(s), but it is not in force: the managed policy at %s wins and slbh never writes that file",
+			routes, source.Path)
+		m.modelNoticeErr = false
+		m.modelNoticeOK = true
+		return
+	}
+	m.modelNotice = fmt.Sprintf("local policy authored for %d route(s); policy source is now %s", routes, source.Describe())
+	m.modelNoticeErr = false
+	m.modelNoticeOK = true
 }
 
 func (m *Model) updateModelSubmenu(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -755,7 +800,11 @@ func (m Model) modelMenuView() string {
 		accent.Render("MODELS"),
 		"Providers with configured keys; OpenRouter shows models created within the last year.",
 		fmt.Sprintf("Slots: seat=%s · subagent=%s · leaf=%s", modelSlotValue(m.modelSeat), modelSlotValue(m.modelSubagent), modelSlotValue(m.modelLeaf)),
-		"r=seat · s=subagent · l=leaf · Enter=assign · Esc=save and close",
+		// Which policy is in force, and from where. A user on a managed host
+		// who edits a local policy sees no change, and this line is the only
+		// thing that tells them the managed file is winning.
+		wrapToWidth("Routing policy: "+m.runtime.PolicySource().Describe(), width),
+		"r=seat · s=subagent · l=leaf · p=author local policy · Enter=assign · Esc=save and close",
 		"",
 	}
 	if m.modelsLoading {

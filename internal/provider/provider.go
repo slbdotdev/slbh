@@ -126,45 +126,21 @@ type ContextWindowProvider interface {
 
 const FallbackContextWindow = 128000
 
-// contextWindowPins is the route-keyed context window table. A pinned route is
-// one whose real ceiling cannot be discovered: neither Z.ai catalog publishes a
-// context length at all (measured 2026-09-13, fact 2 of
-// org/slbh-capability-matrix-2026-09-13.md), so ContextWindow errors on that
-// route and FallbackContextWindow is what runs — understating a measured
-// ~1,000,605-token ceiling by a factor of eight, and compacting a
-// zai/glm-5.3-flash agent at roughly 89,600 tokens.
-//
-// This table is deliberately temporary. A context window is a capability fact
-// about an endpoint rather than routing or posture policy, so pinning one here
-// does not breach the ruling against compiled-in policy, and it fails safe in
-// the only direction that matters: too small merely compacts early. The managed
-// policy file replaces this source in phase 1c, which deletes this map. It must
-// not outlive that phase.
-//
-// Keys are authoritative route keys, so the bare `glm-5.3-flash` spelling
-// needs no entry of its own: RouteKey folds it into the canonical one. The
-// `[1m]` variants Z.ai's own Claude Code guide publishes are rejected 1211 on
-// both wires (fact 11), so they are not aliases of the plain slug and must
-// never resolve to this pin.
-var contextWindowPins = map[string]int{
-	"zai/glm-5.3-flash": 1000000,
-}
+// OpenRouterEndpoint is the stock chat-completions endpoint, and the default
+// value of SLBH_ENDPOINT. It lives here rather than in config so the policy
+// author and the route resolver cannot disagree about the URL.
+const OpenRouterEndpoint = "https://openrouter.ai/api/v1/chat/completions"
 
-// PinnedContextWindow reports the pinned context window for a model route. A
-// pinned window is authoritative over both catalog discovery and
-// FallbackContextWindow, because a route is pinned precisely when discovery
-// cannot answer for it.
-//
-// This keys on the authoritative route key, so every spelling that addresses
-// the route resolves to the same pin and no caller normalizes separately.
-func PinnedContextWindow(model string) (int, bool) {
-	key, ok := RouteKey(model)
-	if !ok {
-		return 0, false
-	}
-	window, found := contextWindowPins[key]
-	return window, found
-}
+// openRouterEndpoint is the unexported spelling used inside this package.
+const openRouterEndpoint = OpenRouterEndpoint
+
+// The compiled-in context pin table that step one introduced was deleted in
+// phase 1c, which is where the plan said it must not outlive. A route's window
+// now comes from the routing policy's `contextWindow`, carried on Route and
+// read back through HTTPProvider.PinnedContextWindow. The resolution path
+// itself — pin beats discovery beats fallback, in resolveContextWindow — is
+// unchanged, because that path was always the substance and the table never
+// was.
 
 // Route is the resolved identity of one provider route: the authoritative key
 // that policy lookup, the effort map and the context pin all key on, together
@@ -184,11 +160,20 @@ type Route struct {
 	// Endpoint is the URL this route posts inference to.
 	Endpoint string
 	// APIKey is this route's credential. Empty only for the local route,
-	// which deliberately sends none.
+	// which deliberately sends none. It is never read from the policy file:
+	// route-to-credential mapping is compiled in, so no document can point a
+	// key at an endpoint it was not minted for.
 	APIKey string
-	// ContextWindow is this route's pinned window, zero when unpinned. Phase
-	// 1c replaces the source of this value with the managed policy file.
+	// ContextWindow is this route's pinned window, zero when unpinned. Its
+	// source is the routing policy since phase 1c.
 	ContextWindow int
+	// Wire is the protocol this route speaks. Only a wire this build supports
+	// ever reaches a Route: an unsupported one refuses at resolution.
+	Wire string
+	// Policy is this route's whole policy entry, carried so the instance can
+	// answer for its own effort map and posture without a second lookup by
+	// model name — which could describe a route the request did not take.
+	Policy RoutePolicy
 }
 
 // RouteKey derives the authoritative route key for a model name. Every
@@ -253,20 +238,51 @@ func nativeRouteFor(key string) (nativeRoute, bool) {
 // default is not. Without that distinction the refusal could not tell an
 // intentional override from the stock OpenRouter default and would either
 // never fire or override the operator.
-func ResolveRoute(model, endpoint string, endpointExplicit bool) (Route, error) {
+//
+// The policy is the suspenders, and they are what make this total. A route
+// with no policy entry refuses; a policy that is absent from both sources
+// refuses everything; a route configured for a wire this build cannot speak
+// refuses by name. What is compiled in is the requirement that policy exist
+// and the mapping from a route to its credential — never the policy itself,
+// which must change by converge rather than by a rebuild.
+func ResolveRoute(model, endpoint string, endpointExplicit bool, policy Policy) (Route, error) {
 	key, ok := RouteKey(model)
 	if !ok {
 		return Route{}, fmt.Errorf("no model specified")
 	}
-	route := Route{Key: key, ContextWindow: contextWindowPins[key]}
+	if !policy.Defined() {
+		return Route{}, fmt.Errorf(
+			"model %q cannot be routed: no routing policy is in force. A managed policy.json is deployed by ansible into $SLBH_HOME; on an unmanaged host, author one from /models. Refusing rather than routing without a posture",
+			model)
+	}
+	entry, found := policy.Route(key)
+	if !found {
+		return Route{}, fmt.Errorf(
+			"route %q has no entry in the routing policy in force: refusing to route a model the policy does not describe. Add the route to the managed policy, or author one from /models",
+			key)
+	}
+	if !WireSupported(entry.Wire) {
+		return Route{}, fmt.Errorf(
+			"route %q is configured for wire %q, which this build cannot speak: refusing rather than sending it down another wire's encoder, which these endpoints would answer 200 to. The policy and the binary that implements its wire must ship together",
+			key, entry.Wire)
+	}
+	route := Route{Key: key, ContextWindow: entry.ContextWindow, Wire: entry.Wire, Policy: entry}
 
 	if native, isNative := nativeRouteFor(key); isNative {
 		if native.flavor == LocalProviderName {
-			route.Flavor, route.Endpoint = LocalProviderName, localEndpoint()
+			// The policy names the local endpoint, and SLBH_LOCAL_ENDPOINT
+			// still overrides it — the same environment-over-file precedence
+			// the model and effort settings have, kept because that variable
+			// is how a developer points slbh at a loopback Ollama without
+			// rewriting a policy file.
+			route.Flavor, route.Endpoint = LocalProviderName, entry.Endpoint
+			if override := strings.TrimSpace(os.Getenv("SLBH_LOCAL_ENDPOINT")); override != "" {
+				route.Endpoint = override
+			}
 			return route, nil
 		}
 		if apiKey := os.Getenv(native.keyEnv); apiKey != "" {
-			route.Flavor, route.Endpoint, route.APIKey = native.flavor, native.endpoint, apiKey
+			route.Flavor, route.Endpoint, route.APIKey = native.flavor, entry.Endpoint, apiKey
 			return route, nil
 		}
 		if !endpointExplicit {
@@ -275,18 +291,28 @@ func ResolveRoute(model, endpoint string, endpointExplicit bool) (Route, error) 
 				model, native.flavor, native.keyEnv, native.keyEnv)
 		}
 		// An explicit endpoint override was set: fall through to it below. The
-		// route is no longer the native one, so it keeps no native pin.
+		// route is no longer the one the policy entry describes, so the pin
+		// goes — a window measured on the plan endpoint says nothing about
+		// wherever the operator has pointed this.
 		route.ContextWindow = 0
 	}
 
-	if strings.TrimSpace(endpoint) == "" {
-		return Route{}, fmt.Errorf("model %q has no route: no native provider matched and no endpoint is configured", model)
+	// The policy names this route's endpoint. An explicit SLBH_ENDPOINT still
+	// overrides it, which is the deliberate escape hatch banked decision 5
+	// preserved, and it drops the pin for the same reason as above.
+	target := entry.Endpoint
+	if endpointExplicit && strings.TrimSpace(endpoint) != "" {
+		target = endpoint
+		route.ContextWindow = 0
+	}
+	if strings.TrimSpace(target) == "" {
+		return Route{}, fmt.Errorf("route %q has no endpoint in the routing policy", key)
 	}
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" {
-		return Route{}, fmt.Errorf("model %q routes to %s but OPENROUTER_API_KEY is not set", model, endpoint)
+		return Route{}, fmt.Errorf("model %q routes to %s but OPENROUTER_API_KEY is not set", model, target)
 	}
-	route.Flavor, route.Endpoint, route.APIKey = "openrouter", endpoint, apiKey
+	route.Flavor, route.Endpoint, route.APIKey = "openrouter", target, apiKey
 	return route, nil
 }
 
@@ -348,8 +374,8 @@ func NewHTTP(endpoint, key string) *HTTPProvider {
 // falling through to OpenRouter. endpointExplicit distinguishes an endpoint the
 // operator set from one that merely defaulted, and only the former overrides a
 // native route.
-func ForModel(model, endpointOverride string, endpointExplicit bool) (*HTTPProvider, error) {
-	route, err := ResolveRoute(model, endpointOverride, endpointExplicit)
+func ForModel(model, endpointOverride string, endpointExplicit bool, policy Policy) (*HTTPProvider, error) {
+	route, err := ResolveRoute(model, endpointOverride, endpointExplicit, policy)
 	if err != nil {
 		return nil, err
 	}
@@ -523,12 +549,28 @@ func (p *HTTPProvider) RequestPayload(req Request) ([]byte, error) {
 	if req.CacheKey == "" {
 		req.CacheKey = StablePrefixKey(req)
 	}
+	// A route-resolved instance renders effort through its own policy
+	// descriptor, and an unmappable level refuses the request here rather than
+	// being dropped or walked down to the nearest supported one.
+	//
+	// An instance built directly by NewHTTP carries the zero Route and no
+	// policy: those are test fakes and embedder constructions that never went
+	// through route resolution, so there is nothing to enforce and the level
+	// passes through as written. Every real request goes through ForModel.
+	effort := req.Effort
+	if p.Route.Key != "" {
+		mapped, err := p.Route.Policy.EffortValue(p.Route.Key, req.Effort)
+		if err != nil {
+			return nil, err
+		}
+		effort = mapped
+	}
 	body := wireRequest{
 		Model:            p.modelID(req.Model),
 		Stream:           true,
 		Messages:         append([]Message{{Role: "system", Content: req.System}}, req.Messages...),
-		ReasoningEffort:  req.Effort,
-		IncludeReasoning: req.Effort != "",
+		ReasoningEffort:  effort,
+		IncludeReasoning: effort != "",
 		PromptCacheKey:   req.CacheKey,
 		Temperature:      req.Temperature,
 		StreamOptions:    streamOptions{IncludeUsage: true},

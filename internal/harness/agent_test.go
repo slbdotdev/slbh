@@ -2,6 +2,9 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -129,13 +132,35 @@ func (p pinnedProvider) PinnedContextWindow() (int, bool) {
 	return 0, false
 }
 
+// planPolicy loads the committed local-policy artifact rather than writing a
+// policy inline, so the pin these tests assert is the one a real document
+// carries and not one the test invented. It is the /models-authored example,
+// which puts the plan route on the coding wire — the wire this build speaks.
+func planPolicy(t *testing.T) provider.Policy {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "config", "testdata", "config-with-local-policy.json"))
+	if err != nil {
+		t.Fatalf("read local policy artifact: %v", err)
+	}
+	var doc struct {
+		LocalPolicy provider.Policy `json:"local_policy"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("decode local policy artifact: %v", err)
+	}
+	if err := doc.LocalPolicy.Validate(); err != nil {
+		t.Fatalf("committed local policy artifact is invalid: %v", err)
+	}
+	return doc.LocalPolicy
+}
+
 // zaiRouteProvider builds the real route-resolved provider for the plan model,
 // which is what carries the pin in production. The key is a dummy: the route is
 // resolved and inspected, never dialled.
 func zaiRouteProvider(t *testing.T) *provider.HTTPProvider {
 	t.Helper()
 	t.Setenv("ZAI_API_KEY", "test-key-not-a-credential")
-	p, err := provider.ForModel("zai/glm-5.3-flash", "https://openrouter.ai/api/v1/chat/completions", false)
+	p, err := provider.ForModel("zai/glm-5.3-flash", provider.OpenRouterEndpoint, false, planPolicy(t))
 	if err != nil {
 		t.Fatalf("resolve plan route: %v", err)
 	}

@@ -75,6 +75,47 @@ key, so the routing table, the context pin and the per-route policy cannot
 disagree about which route a request took. The `[1m]` model spellings are not
 aliases of the plain slug and are never folded into it.
 
+## Routing policy
+
+Routing is governed by a policy document, and **a route with no policy entry
+refuses**. What is compiled into the binary is the requirement that a policy
+exist, and the mapping from a route to the environment variable holding its
+credential — never the policy itself, which has to change without a rebuild.
+
+The policy resolves in a fixed order:
+
+1. `$SLBH_HOME/policy.json`, if present and valid. This file is wholly managed
+   — on the fleet, Ansible deploys it — and slbh only ever reads it.
+2. otherwise a `local_policy` block in the app-owned `$SLBH_HOME/config.json`,
+   which `/models` can author.
+3. otherwise slbh refuses to route.
+
+Provenance is the filename, which is what lets a managed value beat a local one
+without the application ever opening the managed file. On a host nobody manages,
+open `/models` and press `p`: slbh authors a working policy for the models you
+have selected, writes it into `config.json`, and routes on it from the next
+request. On a managed host that write still happens and is still inert, because
+the managed file wins — `/models` says so rather than leaving you to wonder why
+an edit changed nothing.
+
+Per route the policy carries the endpoint, the wire protocol, a separate
+catalog endpoint where one cannot be derived from the other, a context window
+where the provider's catalog cannot report one, an effort descriptor, and — for
+an OpenRouter route — the routing posture (`zdr`, `data_collection`, `sort`,
+`ignore`, `max_price`). No credential appears in either file.
+
+Two refusals are deliberate and worth knowing about:
+
+- **An effort level the route cannot express refuses the request**, naming the
+  route, the level asked for and what the route supports. It is never dropped
+  and never walked down to the nearest supported level, because either would
+  let a benchmark record results at an effort nobody configured.
+- **A route configured for a wire this build does not implement refuses**,
+  naming the wire. A policy is deployed by one mechanism and a binary by
+  another, so the two can arrive in either order; refusing is the only safe
+  reading, since sending one wire's conversation down another's encoder is
+  something these endpoints will answer 200 to.
+
 These environment variables are read at startup:
 
 | Variable | Default | Purpose |
@@ -102,7 +143,11 @@ otherwise the model's discovered context length, otherwise a 128,000-token
 fallback. A route is pinned when its provider catalog cannot report a length —
 `zai/glm-5.3-flash` is pinned at 1,000,000 tokens, measured, because neither
 Z.ai catalog publishes one and the fallback understates it eightfold. A pin
-therefore beats discovery as well as the fallback.
+therefore beats discovery as well as the fallback. The pin comes from the
+routing policy above, and from the resolved provider instance rather than from
+a lookup by model name: only the instance knows which endpoint the request will
+really reach, so a name-keyed pin could size the window for a route this
+request is not taking.
 Automatic compaction keeps the most recent 24 messages and writes a durable
 marker; `/compact` does the same on demand. Requests stream responses and
 include tool definitions, reasoning options where supported, usage, and a
@@ -139,7 +184,7 @@ Input history is stored as JSON lines in `$SLBH_HOME/history`, normally
 | --- | --- |
 | `/exit`, `/quit`, `/q` | Stop agents and jobs, close transcripts, and exit. |
 | `/clear` | Clear the selected agent and start a new session. |
-| `/models` | Refresh provider catalogs and open the model menu. |
+| `/models` | Refresh provider catalogs and open the model menu. Shows which routing policy is in force and from where; `p` authors a local one. |
 | `/model NAME` | Approve and select a model for the seat agent. |
 | `/effort LEVEL` | Change the seat agent's effort. |
 | `/agents` | Record the current agent tree as a status event. |
