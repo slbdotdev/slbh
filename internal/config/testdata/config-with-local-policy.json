@@ -1,0 +1,46 @@
+{
+  "seat_model": "zai/glm-5.3-flash",
+  "seat_effort": "xhigh",
+  "subagent_model": "zai/glm-5.3-flash",
+  "leaf_model": "local/q27-IQ2_M-96k",
+  "subagent_effort": "high",
+  "approved_models": [
+    "zai/glm-5.3-flash",
+    "local/q27-IQ2_M-96k"
+  ],
+  "local_policy": {
+    "version": 1,
+    "routes": {
+      "zai/glm-5.3-flash": {
+        "endpoint": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+        "wire": "openai-chat",
+        "catalogEndpoint": "https://api.z.ai/api/coding/paas/v4/models",
+        "contextWindow": 1000000,
+        "effort": {
+          "field": "reasoning_effort",
+          "levels": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        }
+      },
+      "local/q27-IQ2_M-96k": {
+        "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
+        "wire": "openai-chat",
+        "effort": {
+          "field": "reasoning_effort",
+          "levels": {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          }
+        }
+      }
+    }
+  }
+}

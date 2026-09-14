@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "routes": {
+    "zai/glm-5.3-flash": {
+      "endpoint": "https://api.z.ai/api/anthropic/v1/messages",
+      "wire": "anthropic-messages",
+      "catalogEndpoint": "https://api.z.ai/api/anthropic/v1/models",
+      "contextWindow": 1000000,
+      "effort": {
+        "field": "output_config.effort",
+        "levels": {
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": "xhigh",
+          "max": "max"
+        }
+      }
+    },
+    "z-ai/glm-5.3-flash": {
+      "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+      "wire": "openai-chat",
+      "catalogEndpoint": "https://openrouter.ai/api/v1/models",
+      "contextWindow": 1048576,
+      "effort": {
+        "field": "reasoning_effort",
+        "levels": {
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": "xhigh",
+          "max": "max"
+        }
+      },
+      "provider": {
+        "zdr": true,
+        "data_collection": "deny",
+        "sort": "throughput",
+        "ignore": [
+          "reka",
+          "io-net"
+        ],
+        "max_price": {
+          "prompt": 0.19,
+          "completion": 0.5
+        }
+      }
+    },
+    "deepseek-v4-flash": {
+      "endpoint": "https://api.deepseek.com/chat/completions",
+      "wire": "openai-chat",
+      "catalogEndpoint": "https://api.deepseek.com/models",
+      "effort": {
+        "field": "reasoning_effort",
+        "levels": {
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": "xhigh",
+          "max": "max"
+        }
+      }
+    },
+    "local/q27-IQ2_M-96k": {
+      "endpoint": "http://fractal.wyvern-temperature.ts.net:11434/v1/chat/completions",
+      "wire": "openai-chat",
+      "effort": {
+        "field": "reasoning_effort",
+        "levels": {
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": "xhigh",
+          "max": "max"
+        }
+      }
+    }
+  }
+}
