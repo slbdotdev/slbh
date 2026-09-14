@@ -1,0 +1,145 @@
+{
+  "probe": "text",
+  "endpoint": "openai-coding",
+  "wire": "openai",
+  "model": "glm-5.3-flash",
+  "repetition": 1,
+  "started_utc": "2026-09-14T03:51:04Z",
+  "calls": [
+    {
+      "label": "plain text",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "content": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "role": "system"
+          },
+          {
+            "content": "Reply with exactly these five words and nothing else: the quick brown fox jumps",
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash",
+        "prompt_cache_key": "slbh-matrix-text",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "temperature": 0
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 2343,
+      "raw_sse_events": [
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"The\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" user\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" wants\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" exactly\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" these\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" five\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" words\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\":\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \\\"\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"the\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" quick\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" brown\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" fox\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" jumps\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"\\\"\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" -\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" wait\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" let\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" me\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" count\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \\\"\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"the\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"\\\"\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" (\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"1\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\")\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \\\"\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"quick\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"\\\"\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" (\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"2\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\")\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \\\"\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"brown\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"\\\"\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" (\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"3\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\")\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \\\"\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"fox\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"\\\"\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" (\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"4\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\")\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \\\"\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"j\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"umps\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"\\\"\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" (\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"5\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\").\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" Yes\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" five\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" words\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" I\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" should\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" reply\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" with\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" exactly\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" that\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" and\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" nothing\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" else\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"the\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\" quick brown fox jumps\"}}]}",
+        "data: {\"id\":\"20260914115104678d3efa8da24e0a\",\"created\":1789357864,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":51,\"completion_tokens\":75,\"total_tokens\":126,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"reasoning_tokens\":68}}}",
+        "data: [DONE]"
+      ],
+      "observations": {
+        "event_types": {
+          "[DONE]": 1,
+          "data": 71
+        },
+        "text_chars": 25,
+        "text_sample": "the quick brown fox jumps",
+        "reasoning_chars": 215,
+        "reasoning_sample": "The user wants exactly these five words: \"the quick brown fox jumps\" - wait, let me count. \"the\" (1) \"quick\" (2) \"brown\" (3) \"fox\" (4) \"jumps\" (5). Yes, five words. I should reply with exactly that and nothing else.",
+        "usage": {
+          "completion_tokens": 75,
+          "completion_tokens_details": {
+            "reasoning_tokens": 68
+          },
+          "prompt_tokens": 51,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 126
+        },
+        "stop_reason": "stop",
+        "terminal": "[DONE]"
+      }
+    }
+  ],
+  "verdict": "pass",
+  "notes": [
+    "terminal=[DONE] stop_reason=stop text_chars=25 reasoning_chars=215",
+    "text: \"the quick brown fox jumps\""
+  ]
+}

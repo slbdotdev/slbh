@@ -1,0 +1,124 @@
+{
+  "probe": "text",
+  "endpoint": "openai-coding",
+  "wire": "openai",
+  "model": "glm-5.3-flash",
+  "repetition": 2,
+  "started_utc": "2026-09-14T03:51:06Z",
+  "calls": [
+    {
+      "label": "plain text",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "content": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "role": "system"
+          },
+          {
+            "content": "Reply with exactly these five words and nothing else: the quick brown fox jumps",
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash",
+        "prompt_cache_key": "slbh-matrix-text",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "temperature": 0
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 2418,
+      "raw_sse_events": [
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"The\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" user\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" wants\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" exactly\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" these\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" five\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" words\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\":\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \\\"\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"the\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" quick\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" brown\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" fox\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" jumps\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"\\\"\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" -\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" nothing\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" else\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" The\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" system\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" prompt\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" says\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" to\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" be\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" terse\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" no\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" preamble\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" no\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" closing\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" remarks\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" So\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" I\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" should\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" just\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" output\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" those\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" five\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" words\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" exactly\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"the\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\" quick\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\" brown\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\" fox\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\" jumps\"}}]}",
+        "data: {\"id\":\"202609141151064365f9e29ee84cfb\",\"created\":1789357867,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":51,\"completion_tokens\":51,\"total_tokens\":102,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"reasoning_tokens\":44}}}",
+        "data: [DONE]"
+      ],
+      "observations": {
+        "event_types": {
+          "[DONE]": 1,
+          "data": 50
+        },
+        "text_chars": 25,
+        "text_sample": "the quick brown fox jumps",
+        "reasoning_chars": 203,
+        "reasoning_sample": "The user wants exactly these five words: \"the quick brown fox jumps\" - nothing else. The system prompt says to be terse, no preamble, no closing remarks. So I should just output those five words exactly.",
+        "usage": {
+          "completion_tokens": 51,
+          "completion_tokens_details": {
+            "reasoning_tokens": 44
+          },
+          "prompt_tokens": 51,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 102
+        },
+        "stop_reason": "stop",
+        "terminal": "[DONE]"
+      }
+    }
+  ],
+  "verdict": "pass",
+  "notes": [
+    "terminal=[DONE] stop_reason=stop text_chars=25 reasoning_chars=203",
+    "text: \"the quick brown fox jumps\""
+  ]
+}

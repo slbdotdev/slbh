@@ -1,0 +1,141 @@
+{
+  "probe": "usage",
+  "endpoint": "openai-coding",
+  "wire": "openai",
+  "model": "glm-5.3-flash",
+  "repetition": 2,
+  "started_utc": "2026-09-14T03:51:10Z",
+  "calls": [
+    {
+      "label": "usage",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "max_tokens": 512,
+        "messages": [
+          {
+            "content": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "role": "system"
+          },
+          {
+            "content": "Name three primary colours, comma separated.",
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash",
+        "prompt_cache_key": "slbh-matrix-usage",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "temperature": 0
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 2533,
+      "raw_sse_events": [
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"The\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" user\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" asks\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" for\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" three\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" primary\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" colours\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" comma\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" separated\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" Ter\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"se\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" answer\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" no\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" preamble\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" no\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" closing\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" remarks\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\\n\\n\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Primary\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" colours\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\":\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" red\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" blue\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" yellow\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" (\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"traditional\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\")\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" or\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" red\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" green\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" blue\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" (\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"add\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"itive\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" light\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\").\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" The\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" most\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" common\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" answer\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" for\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" primary\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" colours\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" is\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" red\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" blue\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" yellow\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" Answer\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" exactly\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" what\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" is\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" asked\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Red\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\", blue, yellow\"}}]}",
+        "data: {\"id\":\"2026091411511047b2129a170a492c\",\"created\":1789357871,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":44,\"completion_tokens\":71,\"total_tokens\":115,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"reasoning_tokens\":64}}}",
+        "data: [DONE]"
+      ],
+      "observations": {
+        "event_types": {
+          "[DONE]": 1,
+          "data": 67
+        },
+        "text_chars": 17,
+        "text_sample": "Red, blue, yellow",
+        "reasoning_chars": 287,
+        "reasoning_sample": "The user asks for three primary colours, comma separated. Terse answer, no preamble, no closing remarks.\n\nPrimary colours: red, blue, yellow (traditional) or red, green, blue (additive light). The most common answer for primary colours is red, blue, yellow. Answer exactly what is asked.",
+        "usage": {
+          "completion_tokens": 71,
+          "completion_tokens_details": {
+            "reasoning_tokens": 64
+          },
+          "prompt_tokens": 44,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 115
+        },
+        "stop_reason": "stop",
+        "terminal": "[DONE]"
+      }
+    }
+  ],
+  "verdict": "pass",
+  "notes": [
+    "usage object: {\"completion_tokens\":71,\"completion_tokens_details\":{\"reasoning_tokens\":64},\"prompt_tokens\":44,\"prompt_tokens_details\":{\"cached_tokens\":0},\"total_tokens\":115}",
+    "prompt-token field=\"prompt_tokens\" completion-token field=\"completion_tokens\""
+  ]
+}
