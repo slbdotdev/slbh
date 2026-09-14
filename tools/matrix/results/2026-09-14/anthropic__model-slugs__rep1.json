@@ -1,0 +1,346 @@
+{
+  "probe": "model-slugs",
+  "endpoint": "anthropic",
+  "wire": "anthropic",
+  "model": "glm-5.3-flash",
+  "repetition": 1,
+  "started_utc": "2026-09-14T04:10:03Z",
+  "calls": [
+    {
+      "label": "slug glm-5.3-flash",
+      "method": "POST",
+      "url": "https://api.z.ai/api/anthropic/v1/messages",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Anthropic-Version": "2023-06-01",
+        "Content-Type": "application/json",
+        "X-Api-Key": "REDACTED"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "Reply with the single word: ok",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash",
+        "stream": true,
+        "system": [
+          {
+            "text": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "type": "text"
+          }
+        ],
+        "temperature": 0
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 2062,
+      "raw_sse_events": [
+        "event: message_start",
+        "data: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_20260914121004425b57fe67af461a\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"glm-5.3-flash\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 0, \"output_tokens\": 0}}}",
+        "event: ping",
+        "data: {\"type\": \"ping\"}",
+        "event: content_block_start",
+        "data: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"thinking\", \"thinking\": \"\", \"signature\": \"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"The\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" user\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" wants\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" me\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" to\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" reply\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" with\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" the\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" single\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" word\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" \\\"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"ok\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"\\\".\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" This\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" is\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" a\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" simple\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \",\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" direct\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" instruction\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \".\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" I\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" should\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" comply\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" exactly\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" as\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" requested.\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"signature_delta\", \"signature\": \"d644b5285b6f45bbaf78d2d9\"}}",
+        "event: content_block_stop",
+        "data: {\"type\": \"content_block_stop\", \"index\": 0}",
+        "event: content_block_start",
+        "data: {\"type\": \"content_block_start\", \"index\": 1, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"ok\"}}",
+        "event: content_block_stop",
+        "data: {\"type\": \"content_block_stop\", \"index\": 1}",
+        "event: message_delta",
+        "data: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"input_tokens\": 43, \"output_tokens\": 31, \"cache_read_input_tokens\": 0, \"server_tool_use\": {\"web_search_requests\": 0}, \"service_tier\": \"standard\"}}",
+        "event: message_stop",
+        "data: {\"type\": \"message_stop\"}"
+      ],
+      "observations": {
+        "event_types": {
+          "content_block_delta": 29,
+          "content_block_start": 2,
+          "content_block_stop": 2,
+          "message_delta": 1,
+          "message_start": 1,
+          "message_stop": 1,
+          "ping": 1
+        },
+        "text_chars": 2,
+        "text_sample": "ok",
+        "reasoning_chars": 129,
+        "reasoning_sample": "The user wants me to reply with the single word \"ok\". This is a simple, direct instruction. I should comply exactly as requested.",
+        "usage": {
+          "cache_read_input_tokens": 0,
+          "input_tokens": 43,
+          "output_tokens": 31,
+          "server_tool_use": {
+            "web_search_requests": 0
+          },
+          "service_tier": "standard"
+        },
+        "stop_reason": "end_turn",
+        "terminal": "message_stop"
+      }
+    },
+    {
+      "label": "slug glm-5.3-flash[1m]",
+      "method": "POST",
+      "url": "https://api.z.ai/api/anthropic/v1/messages",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Anthropic-Version": "2023-06-01",
+        "Content-Type": "application/json",
+        "X-Api-Key": "REDACTED"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "Reply with the single word: ok",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash[1m]",
+        "stream": true,
+        "system": [
+          {
+            "text": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "type": "text"
+          }
+        ],
+        "temperature": 0
+      },
+      "http_status": 400,
+      "http_status_text": "400 Bad Request",
+      "duration_ms": 259,
+      "raw_body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"1211\",\"message\":\"[1211][Unknown Model, please check the model code.][20260914121006bb26aefff9ab44aa]\"},\"request_id\":\"20260914121006bb26aefff9ab44aa\"}"
+    },
+    {
+      "label": "slug glm-5.3",
+      "method": "POST",
+      "url": "https://api.z.ai/api/anthropic/v1/messages",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Anthropic-Version": "2023-06-01",
+        "Content-Type": "application/json",
+        "X-Api-Key": "REDACTED"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "Reply with the single word: ok",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3",
+        "stream": true,
+        "system": [
+          {
+            "text": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "type": "text"
+          }
+        ],
+        "temperature": 0
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 2192,
+      "raw_sse_events": [
+        "event: message_start",
+        "data: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_20260914121006815c5d9ca22f4b80\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"glm-5.3\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 0, \"output_tokens\": 0}}}",
+        "event: ping",
+        "data: {\"type\": \"ping\"}",
+        "event: content_block_start",
+        "data: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"thinking\", \"thinking\": \"\", \"signature\": \"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"The\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" user\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" wants\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" me\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" to\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" reply\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" with\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" just\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" the\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" single\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" word\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" \\\"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"ok\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"\\\".\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"signature_delta\", \"signature\": \"89e19f72123a4a1c80f66408\"}}",
+        "event: content_block_stop",
+        "data: {\"type\": \"content_block_stop\", \"index\": 0}",
+        "event: content_block_start",
+        "data: {\"type\": \"content_block_start\", \"index\": 1, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"ok\"}}",
+        "event: content_block_stop",
+        "data: {\"type\": \"content_block_stop\", \"index\": 1}",
+        "event: message_delta",
+        "data: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"input_tokens\": 43, \"output_tokens\": 17, \"cache_read_input_tokens\": 0, \"server_tool_use\": {\"web_search_requests\": 0}, \"service_tier\": \"standard\"}}",
+        "event: message_stop",
+        "data: {\"type\": \"message_stop\"}"
+      ],
+      "observations": {
+        "event_types": {
+          "content_block_delta": 16,
+          "content_block_start": 2,
+          "content_block_stop": 2,
+          "message_delta": 1,
+          "message_start": 1,
+          "message_stop": 1,
+          "ping": 1
+        },
+        "text_chars": 2,
+        "text_sample": "ok",
+        "reasoning_chars": 58,
+        "reasoning_sample": "The user wants me to reply with just the single word \"ok\".",
+        "usage": {
+          "cache_read_input_tokens": 0,
+          "input_tokens": 43,
+          "output_tokens": 17,
+          "server_tool_use": {
+            "web_search_requests": 0
+          },
+          "service_tier": "standard"
+        },
+        "stop_reason": "end_turn",
+        "terminal": "message_stop"
+      }
+    },
+    {
+      "label": "slug glm-5.3[1m]",
+      "method": "POST",
+      "url": "https://api.z.ai/api/anthropic/v1/messages",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Anthropic-Version": "2023-06-01",
+        "Content-Type": "application/json",
+        "X-Api-Key": "REDACTED"
+      },
+      "request_body": {
+        "max_tokens": 64,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "Reply with the single word: ok",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3[1m]",
+        "stream": true,
+        "system": [
+          {
+            "text": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "type": "text"
+          }
+        ],
+        "temperature": 0
+      },
+      "http_status": 400,
+      "http_status_text": "400 Bad Request",
+      "duration_ms": 262,
+      "raw_body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"1211\",\"message\":\"[1211][Unknown Model, please check the model code.][20260914121008fe7431f976e64dfe]\"},\"request_id\":\"20260914121008fe7431f976e64dfe\"}"
+    }
+  ],
+  "verdict": "pass",
+  "notes": [
+    "slug \"glm-5.3-flash\" accepted (HTTP 200)",
+    "slug \"glm-5.3-flash[1m]\" rejected: HTTP 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"1211\",\"message\":\"[1211][Unknown Model, please check the model code.][20260914121006bb26aefff9ab44aa]\"},\"request_id\":\"20260914121006bb26aefff9ab44aa\"}",
+    "slug \"glm-5.3\" accepted (HTTP 200)",
+    "slug \"glm-5.3[1m]\" rejected: HTTP 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"1211\",\"message\":\"[1211][Unknown Model, please check the model code.][20260914121008fe7431f976e64dfe]\"},\"request_id\":\"20260914121008fe7431f976e64dfe\"}",
+    "accepted slugs: glm-5.3-flash, glm-5.3"
+  ]
+}

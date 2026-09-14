@@ -1,0 +1,203 @@
+{
+  "probe": "context-ceiling",
+  "endpoint": "anthropic",
+  "wire": "anthropic",
+  "model": "glm-5.3-flash",
+  "repetition": 1,
+  "started_utc": "2026-09-14T04:13:55Z",
+  "calls": [
+    {
+      "label": "~1400000 prompt tokens (932400 filler words)",
+      "method": "POST",
+      "url": "https://api.z.ai/api/anthropic/v1/messages",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Anthropic-Version": "2023-06-01",
+        "Content-Type": "application/json",
+        "X-Api-Key": "REDACTED"
+      },
+      "request_body": {
+        "_elided": "body omitted; user turn is 932400 filler words plus the instruction",
+        "max_tokens": 32,
+        "model": "glm-5.3-flash"
+      },
+      "http_status": 400,
+      "http_status_text": "400 Bad Request",
+      "duration_ms": 9119,
+      "raw_body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"1261\",\"message\":\"[1261][prompt is too long][202609141213559ed3ff5fa8cf4a54]\"},\"request_id\":\"202609141213559ed3ff5fa8cf4a54\"}"
+    },
+    {
+      "label": "~1150000 prompt tokens (765900 filler words)",
+      "method": "POST",
+      "url": "https://api.z.ai/api/anthropic/v1/messages",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Anthropic-Version": "2023-06-01",
+        "Content-Type": "application/json",
+        "X-Api-Key": "REDACTED"
+      },
+      "request_body": {
+        "_elided": "body omitted; user turn is 765900 filler words plus the instruction",
+        "max_tokens": 32,
+        "model": "glm-5.3-flash"
+      },
+      "http_status": 400,
+      "http_status_text": "400 Bad Request",
+      "duration_ms": 7558,
+      "raw_body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"1261\",\"message\":\"[1261][prompt is too long][20260914121404db143b55a8e84489]\"},\"request_id\":\"20260914121404db143b55a8e84489\"}"
+    },
+    {
+      "label": "~1050000 prompt tokens (699300 filler words)",
+      "method": "POST",
+      "url": "https://api.z.ai/api/anthropic/v1/messages",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Anthropic-Version": "2023-06-01",
+        "Content-Type": "application/json",
+        "X-Api-Key": "REDACTED"
+      },
+      "request_body": {
+        "_elided": "body omitted; user turn is 699300 filler words plus the instruction",
+        "max_tokens": 32,
+        "model": "glm-5.3-flash"
+      },
+      "http_status": 400,
+      "http_status_text": "400 Bad Request",
+      "duration_ms": 7211,
+      "raw_body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"1261\",\"message\":\"[1261][prompt is too long][202609141214126c9551b67c90494c]\"},\"request_id\":\"202609141214126c9551b67c90494c\"}"
+    },
+    {
+      "label": "~1000000 prompt tokens (666000 filler words)",
+      "method": "POST",
+      "url": "https://api.z.ai/api/anthropic/v1/messages",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Anthropic-Version": "2023-06-01",
+        "Content-Type": "application/json",
+        "X-Api-Key": "REDACTED"
+      },
+      "request_body": {
+        "_elided": "body omitted; user turn is 666000 filler words plus the instruction",
+        "max_tokens": 32,
+        "model": "glm-5.3-flash"
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 75914,
+      "raw_sse_events": [
+        "event: message_start",
+        "data: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_20260914121419b0e3ef94467943e0\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"glm-5.3-flash\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 0, \"output_tokens\": 0}}}",
+        "event: ping",
+        "data: {\"type\": \"ping\"}",
+        "event: content_block_start",
+        "data: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"thinking\", \"thinking\": \"\", \"signature\": \"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"The\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" user\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" has\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" sent\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" a\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" long\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" string\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" of\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" NATO\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" phon\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"etic\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" alphabet\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" words\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" (\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"hotel\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \",\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" fo\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"xt\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"rot\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \",\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" br\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"avo\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \",\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" golf\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \",\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" char\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"lie\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \",\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" alpha\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \",\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" delta\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \",\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"signature_delta\", \"signature\": \"4430d025bc074c00828c8bfb\"}}",
+        "event: content_block_stop",
+        "data: {\"type\": \"content_block_stop\", \"index\": 0}",
+        "event: message_delta",
+        "data: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"max_tokens\", \"stop_sequence\": null}, \"usage\": {\"input_tokens\": 1000605, \"output_tokens\": 32, \"cache_read_input_tokens\": 0, \"server_tool_use\": {\"web_search_requests\": 0}, \"service_tier\": \"standard\"}}",
+        "event: message_stop",
+        "data: {\"type\": \"message_stop\"}"
+      ],
+      "observations": {
+        "event_types": {
+          "content_block_delta": 33,
+          "content_block_start": 1,
+          "content_block_stop": 1,
+          "message_delta": 1,
+          "message_start": 1,
+          "message_stop": 1,
+          "ping": 1
+        },
+        "text_chars": 0,
+        "text_sample": "",
+        "reasoning_chars": 116,
+        "reasoning_sample": "The user has sent a long string of NATO phonetic alphabet words (hotel, foxtrot, bravo, golf, charlie, alpha, delta,",
+        "usage": {
+          "cache_read_input_tokens": 0,
+          "input_tokens": 1000605,
+          "output_tokens": 32,
+          "server_tool_use": {
+            "web_search_requests": 0
+          },
+          "service_tier": "standard"
+        },
+        "stop_reason": "max_tokens",
+        "terminal": "message_stop"
+      }
+    }
+  ],
+  "verdict": "recorded",
+  "notes": [
+    "~1400000 prompt tokens (932400 filler words) -\u003e HTTP 400 usage= body={\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"1261\",\"message\":\"[1261][prompt is too long][202609141213559ed3ff5fa8cf4a54]\"},\"request_id\":\"202609141213559ed3ff5fa8cf4a54\"}",
+    "~1150000 prompt tokens (765900 filler words) -\u003e HTTP 400 usage= body={\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"1261\",\"message\":\"[1261][prompt is too long][20260914121404db143b55a8e84489]\"},\"request_id\":\"20260914121404db143b55a8e84489\"}",
+    "~1050000 prompt tokens (699300 filler words) -\u003e HTTP 400 usage= body={\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"1261\",\"message\":\"[1261][prompt is too long][202609141214126c9551b67c90494c]\"},\"request_id\":\"202609141214126c9551b67c90494c\"}",
+    "~1000000 prompt tokens (666000 filler words) -\u003e HTTP 200 usage={\"cache_read_input_tokens\":0,\"input_tokens\":1000605,\"output_tokens\":32,\"server_tool_use\":{\"web_search_requests\":0},\"service_tier\":\"standard\"} body=",
+    "first acceptance at ~1000000 prompt tokens; last rejection at ~1050000: the ceiling is between them"
+  ]
+}
