@@ -251,6 +251,12 @@ func TestAcceptanceEffortLadder(t *testing.T) {
 	}
 	cfg := acceptPolicy(t)
 	levels := []string{"low", "medium", "high", "xhigh", "max"}
+	// SLBH_ACCEPT_LEVELS resumes a run that a provider-side 500 cut short,
+	// without respending the levels already measured. The plan's budget is
+	// about twenty live calls and a transient must not cost the whole ladder.
+	if only := strings.TrimSpace(os.Getenv("SLBH_ACCEPT_LEVELS")); only != "" {
+		levels = strings.Split(only, ",")
+	}
 	reps := 3
 	calls := make([]ladderCall, 0, len(levels)*reps)
 
@@ -316,7 +322,7 @@ func TestAcceptanceEffortLadder(t *testing.T) {
 			calls = append(calls, call)
 			t.Logf("level=%s rep=%d output_tokens=%d reasoning_chars=%d text_chars=%d stop=%s elapsed=%.1fs",
 				level, rep, call.OutputTokens, call.ReasoningChars, call.TextChars, call.StopReason, call.ElapsedSeconds)
-			acceptWriteJSON(t, "ladder-progress.json", calls)
+			acceptWriteJSON(t, "ladder-progress-"+strings.Join(levels, "-")+".json", calls)
 		}
 	}
 
@@ -349,7 +355,7 @@ func TestAcceptanceEffortLadder(t *testing.T) {
 		}
 		summaries = append(summaries, summary)
 	}
-	acceptWriteJSON(t, "criterion-3-effort-ladder.json", map[string]any{
+	acceptWriteJSON(t, "criterion-3-effort-ladder-"+strings.Join(levels, "-")+".json", map[string]any{
 		"route":    acceptPlanRoute,
 		"endpoint": "https://api.z.ai/api/anthropic/v1/messages",
 		"wire":     provider.WireAnthropicMessages,
@@ -364,6 +370,11 @@ func TestAcceptanceEffortLadder(t *testing.T) {
 	// returns the same volume whatever is asked for. Separation is the
 	// feature; the exact order is measured and reported, not asserted, because
 	// the gate itself measured xhigh below high on this wire.
+	if len(levels) < 5 {
+		// A resumed partial run measures and reports; the inertness check
+		// needs the whole ladder to mean anything.
+		return
+	}
 	lowest, highest := 1<<30, 0
 	for _, summary := range summaries {
 		if summary.Mean < float64(lowest) {
