@@ -170,7 +170,8 @@ func TestCodexLeafReceivesLeafDocumentBesideItsMechanics(t *testing.T) {
 		t.Fatal("Codex leaf lost its baked mechanics")
 	}
 	if !strings.Contains(instructions, leafDoc) {
-		t.Fatal("Codex leaf did not receive the managed leaf document")
+		t.Fatalf("Codex leaf did not receive the managed leaf document: depth=%d layer=%q source=%+v instructions=%q",
+			leaf.Depth, config.LayerForDepth(leaf.Depth), r.InstructionSource(), instructions)
 	}
 	if strings.Contains(instructions, managerDoc) || strings.Contains(instructions, seatDoc) {
 		t.Fatalf("Codex leaf received another layer's document: %q", instructions)
