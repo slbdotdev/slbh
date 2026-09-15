@@ -71,12 +71,19 @@ type Job struct {
 	finished  time.Time
 	exitCode  int
 	warnAfter time.Duration
-	stdout    bytes.Buffer
-	stderr    bytes.Buffer
-	cancel    context.CancelFunc
-	done      chan struct{}
-	cmd       *exec.Cmd
-	log       *logx.JSONL
+	// stdout and stderr are the job's capture buffers, and they are the
+	// command's own cmd.Stdout and cmd.Stderr rather than copies taken after
+	// cmd.Wait. They carry their own mutex and are never guarded by mu: the
+	// exec copy goroutine writes them while the job runs and Output reads them
+	// at any time, including mid-run, which is the whole point of read_job.
+	// Each is a leaf lock, taken under mu by snapshotLocked and never the other
+	// way round.
+	stdout *limitedBuffer
+	stderr *limitedBuffer
+	cancel context.CancelFunc
+	done   chan struct{}
+	cmd    *exec.Cmd
+	log    *logx.JSONL
 }
 
 func (j *Job) Snapshot() Snapshot {
@@ -118,9 +125,16 @@ func (j *Job) snapshotLocked() Snapshot {
 	return Snapshot{ID: j.id, Author: j.author, Script: j.script, ToolName: j.toolName, Status: j.status, Started: j.started, Finished: j.finished, ExitCode: j.exitCode, StdoutBytes: j.stdout.Len(), StderrBytes: j.stderr.Len(), WarnAfter: j.warnAfter}
 }
 
+// Output returns everything captured from the job's two streams so far. It is
+// valid while the job is still running and returns what has been captured up to
+// that instant, which is what read_job answers with; it does not wait for the
+// job to finish. Until 2026-09-15 the buffers it reads were filled only after
+// cmd.Wait returned, so a live job answered with two empty strings.
+//
+// It takes no job lock. The buffers guard themselves, and taking mu here would
+// serialise a read of a running job behind whatever else holds it without
+// making the answer any fresher.
 func (j *Job) Output() (string, string) {
-	j.mu.RLock()
-	defer j.mu.RUnlock()
 	return j.stdout.String(), j.stderr.String()
 }
 
@@ -229,9 +243,8 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 	if m.logger != nil {
 		log = m.logger(spec.Author)
 	}
-	job := &Job{id: id.New("job"), author: spec.Author, script: spec.Script, toolName: spec.ToolName, status: Running, started: time.Now().UTC(), warnAfter: spec.WarnAfter, cancel: cancel, done: make(chan struct{}), cmd: cmd, log: log}
-	stdout, stderr := &limitedBuffer{}, &limitedBuffer{}
-	cmd.Stdout, cmd.Stderr = stdout, stderr
+	job := &Job{id: id.New("job"), author: spec.Author, script: spec.Script, toolName: spec.ToolName, status: Running, started: time.Now().UTC(), warnAfter: spec.WarnAfter, stdout: &limitedBuffer{}, stderr: &limitedBuffer{}, cancel: cancel, done: make(chan struct{}), cmd: cmd, log: log}
+	cmd.Stdout, cmd.Stderr = job.stdout, job.stderr
 	// Registration, the closed check and the warning count are one acquisition.
 	// A Start that lands after Close has begun would otherwise Add to a
 	// WaitGroup already at zero and being waited on — WaitGroup misuse — and
@@ -312,9 +325,10 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 	go func() {
 		err := cmd.Wait()
 		job.mu.Lock()
-		_, wasKilled := job.status, job.status == Killed
-		job.stdout.Write(stdout.Bytes())
-		job.stderr.Write(stderr.Bytes())
+		wasKilled := job.status == Killed
+		// Nothing is copied into the capture buffers here. They are the
+		// command's own sinks, already filled by the exec copy goroutines that
+		// cmd.Wait has just joined.
 		if !wasKilled {
 			if err == nil {
 				job.status = Complete
@@ -424,15 +438,41 @@ func (m *Manager) Close() {
 	}
 }
 
-type limitedBuffer struct{ bytes.Buffer }
+// limitedBuffer is one stream's capture buffer, written by the exec copy
+// goroutine while the job runs and read concurrently by Job.Output and
+// Job.Snapshot, so every access goes through mu.
+//
+// bytes.Buffer is a field and deliberately not embedded: embedding promotes
+// every one of its unsynchronised methods, and a single promoted call from a
+// reader would be a data race against the copy goroutine with nothing in the
+// type to show it.
+type limitedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+const limitedBufferMax = 4 * 1024 * 1024
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
-	const max = 4 * 1024 * 1024
-	if b.Len() < max {
-		remaining := max - b.Len()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.buf.Len() < limitedBufferMax {
+		remaining := limitedBufferMax - b.buf.Len()
 		if len(p) > remaining {
 			p = p[:remaining]
 		}
 	}
-	return b.Buffer.Write(p)
+	return b.buf.Write(p)
+}
+
+func (b *limitedBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Len()
+}
+
+func (b *limitedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

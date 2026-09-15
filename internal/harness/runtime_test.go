@@ -487,6 +487,76 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	}
 }
 
+// TestReadJobReturnsOutputOfRunningJob walks the tool path the defect was
+// reported on rather than the package under it: long_job, then read_job while
+// the job is still running. Until 2026-09-15 that answered
+// {"stdout":"","stderr":""}, because Job.Output read buffers the wait goroutine
+// filled only once the job had ended — so the one tool an agent has for looking
+// at a stalled job showed it nothing.
+func TestReadJobReturnsOutputOfRunningJob(t *testing.T) {
+	r := testRuntime(t)
+	script := "echo live-marker; sleep 30"
+	if runtime.GOOS == "windows" {
+		script = "echo live-marker & ping 127.0.0.1 -n 30 > nul"
+	}
+	// An hour of warn_after keeps the warning timer out of this test; the
+	// warning is a separate mechanism with its own tests.
+	jobArgs, err := json.Marshal(map[string]any{"script": script, "warn_after_seconds": 3600})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID, err := r.ExecuteTool(r.Seat().ID, "long_job", string(jobArgs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, ok := r.Jobs().Get(jobID)
+	if !ok {
+		t.Fatalf("long_job %q was not registered", jobID)
+	}
+	readArgs, err := json.Marshal(map[string]string{"job_id": jobID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Stdout string `json:"stdout"`
+		Stderr string `json:"stderr"`
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		raw, err := r.ExecuteTool(r.Seat().ID, "read_job", string(readArgs))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+			t.Fatalf("read_job returned %q: %v", raw, err)
+		}
+		if strings.Contains(payload.Stdout, "live-marker") {
+			break
+		}
+		select {
+		case <-job.Done():
+			t.Fatal("job finished before read_job could see it running")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if !strings.Contains(payload.Stdout, "live-marker") {
+		t.Fatalf("read_job on a running job returned stdout=%q stderr=%q", payload.Stdout, payload.Stderr)
+	}
+	select {
+	case <-job.Done():
+		t.Fatal("job was no longer running when read_job answered")
+	default:
+	}
+	if _, err := r.ExecuteTool(r.Seat().ID, "kill_job", string(readArgs)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-job.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("killed job did not finish")
+	}
+}
+
 func TestProviderToolCallsExecuteAndContinue(t *testing.T) {
 	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return toolProvider{}, nil }})
 	if err != nil {

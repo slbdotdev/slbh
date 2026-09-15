@@ -541,10 +541,10 @@ func (a *Agent) receiveJobResult(snapshot job.Snapshot, stdout, stderr string) e
 // who could act on it.
 //
 // The message is a decision point and says so. It names the three things the
-// agent can do about the job, and promises nothing about output: a running
-// job's capture buffers are not readable, so the text tells the agent output
-// arrives when the job finishes rather than inviting a read_job call that
-// would come back empty.
+// agent can do about the job and points at read_job, which since 2026-09-15
+// answers a running job with what it has captured so far — the evidence the
+// decision wants. Until then the text said the opposite, because the buffers
+// really were unreadable mid-run and the call would have come back empty.
 func (a *Agent) receiveJobWarning(snapshot job.Snapshot) error {
 	toolName := snapshot.ToolName
 	if toolName == "" {
@@ -572,7 +572,7 @@ func formatJobWarning(snapshot job.Snapshot, toolName string) string {
 	if len(script) > maxJobWarningScript {
 		script = script[:maxJobWarningScript] + "\n[script truncated]"
 	}
-	return fmt.Sprintf("%s %s is still running after %s.\nscript:\n%s\n\nThat is its state as of when this warning was raised; if the job's result has already reached you, the result is the truth and this warning is stale. This is the only warning you get for this job: nothing will send it again and nothing will act for you. Decide now, and you may decide to do nothing. Kill it with kill_job if it is stuck or no longer worth waiting for; otherwise leave it and its captured output will be delivered to you automatically when it finishes, or carry on with other work in the meantime. Its output cannot be read while it is running.",
+	return fmt.Sprintf("%s %s is still running after %s.\nscript:\n%s\n\nThat is its state as of when this warning was raised; if the job's result has already reached you, the result is the truth and this warning is stale. This is the only warning you get for this job: nothing will send it again and nothing will act for you. Decide now, and you may decide to do nothing. read_job returns what this job has captured so far, so you can look at its output before deciding. Kill it with kill_job if it is stuck or no longer worth waiting for; otherwise leave it and its captured output will be delivered to you automatically when it finishes, or carry on with other work in the meantime.",
 		toolName, snapshot.ID, snapshot.WarnAfter, script)
 }
 

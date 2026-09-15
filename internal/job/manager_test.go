@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,104 @@ func TestManagerRunsAndCapturesOutput(t *testing.T) {
 		t.Fatalf("status=%s", job.Snapshot().Status)
 	}
 	_ = runtime.GOOS // document that the manager uses a platform shell.
+}
+
+// TestJobOutputIsReadableWhileRunning is the regression test for the defect
+// read_job carried until 2026-09-15: Job.Output read buffers that the wait
+// goroutine filled only after cmd.Wait returned, so an agent reading a live job
+// got {"stdout":"","stderr":""} and decided on nothing. The test reads the job
+// mid-run on purpose — any test that reads after Done() passes against the
+// broken code — and the suite is run under -race because the capture buffers
+// are being written by the exec copy goroutine at the same instant.
+func TestJobOutputIsReadableWhileRunning(t *testing.T) {
+	m := NewManager(nil)
+	defer m.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	script := "echo live-stdout; echo live-stderr 1>&2; sleep 30"
+	if runtime.GOOS == "windows" {
+		script = "echo live-stdout & echo live-stderr 1>&2 & ping 127.0.0.1 -n 30 > nul"
+	}
+	job, err := m.Start(ctx, Spec{Author: "agent-test", Script: script})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr string
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		stdout, stderr = job.Output()
+		if strings.Contains(stdout, "live-stdout") && strings.Contains(stderr, "live-stderr") {
+			break
+		}
+		select {
+		case <-job.Done():
+			t.Fatal("job finished before its output could be read mid-run")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if !strings.Contains(stdout, "live-stdout") || !strings.Contains(stderr, "live-stderr") {
+		t.Fatalf("live job output not readable: stdout=%q stderr=%q", stdout, stderr)
+	}
+	snapshot := job.Snapshot()
+	if snapshot.Status != Running {
+		t.Fatalf("status=%s, want %s", snapshot.Status, Running)
+	}
+	if snapshot.StdoutBytes == 0 || snapshot.StderrBytes == 0 {
+		t.Fatalf("snapshot counted stdout=%d stderr=%d bytes for a job with output", snapshot.StdoutBytes, snapshot.StderrBytes)
+	}
+	if err := job.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-job.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("killed job did not finish")
+	}
+}
+
+// TestJobOutputRacesTheWriter points the race detector at the access the fix
+// introduces: many readers calling Output and Snapshot while the exec copy
+// goroutine is still writing both capture buffers. Without the buffers' own
+// mutex this reports a data race; the assertions alone would not.
+func TestJobOutputRacesTheWriter(t *testing.T) {
+	m := NewManager(nil)
+	defer m.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	script := "i=1; while [ $i -le 400 ]; do echo line-$i; echo err-$i 1>&2; i=$((i+1)); done"
+	if runtime.GOOS == "windows" {
+		script = "for /l %i in (1,1,400) do @(echo line-%i & echo err-%i 1>&2)"
+	}
+	job, err := m.Start(ctx, Spec{Author: "agent-test", Script: script})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var readers sync.WaitGroup
+	for range 4 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-job.Done():
+					return
+				default:
+				}
+				job.Output()
+				job.Snapshot()
+			}
+		}()
+	}
+	select {
+	case <-job.Done():
+	case <-time.After(30 * time.Second):
+		t.Fatal("job did not finish")
+	}
+	readers.Wait()
+	stdout, stderr := job.Output()
+	if !strings.Contains(stdout, "line-400") || !strings.Contains(stderr, "err-400") {
+		t.Fatalf("final output truncated: stdout=%d bytes stderr=%d bytes", len(stdout), len(stderr))
+	}
 }
 
 func TestManagerCompletionHandlerReceivesFinishedOutput(t *testing.T) {

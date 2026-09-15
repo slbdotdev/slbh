@@ -357,10 +357,12 @@ and never sees the ones a subagent runs, so telling a person is the control
 agent's duty rather than the harness's. The TUI still shows a `job_warning`
 event, as a record of the firing and not as the delivery.
 
-A running job's output is not readable today: the capture buffers are copied in
-when the process exits, so `read_job` answers a finished job and nothing else.
-That is a known limitation, recorded separately; the warning message says so
-rather than sending an agent after output it cannot have.
+A running job's output is readable. `read_job` returns whatever the job has
+captured on each stream at the instant it is asked, finished or not, so a warned
+agent can look at the job before deciding what to do about it. The capture
+buffers are the command's own sinks and carry their own mutex; until
+2026-09-15 they were filled only after the process exited, and `read_job`
+answered a live job with two empty strings.
 
 ## Headless
 
