@@ -571,7 +571,7 @@ func formatJobWarning(snapshot job.Snapshot, toolName string) string {
 	if len(script) > maxJobWarningScript {
 		script = script[:maxJobWarningScript] + "\n[script truncated]"
 	}
-	return fmt.Sprintf("%s %s is still running after %s.\nscript:\n%s\n\nThis is the only warning you get for this job: nothing will send it again and nothing will act for you. Decide now, and you may decide to do nothing. Kill it with kill_job if it is stuck or no longer worth waiting for; otherwise leave it and its captured output will be delivered to you automatically when it finishes, or carry on with other work in the meantime. Its output cannot be read while it is running.",
+	return fmt.Sprintf("%s %s is still running after %s.\nscript:\n%s\n\nThat is its state as of when this warning was raised; if the job's result has already reached you, the result is the truth and this warning is stale. This is the only warning you get for this job: nothing will send it again and nothing will act for you. Decide now, and you may decide to do nothing. Kill it with kill_job if it is stuck or no longer worth waiting for; otherwise leave it and its captured output will be delivered to you automatically when it finishes, or carry on with other work in the meantime. Its output cannot be read while it is running.",
 		toolName, snapshot.ID, snapshot.WarnAfter, script)
 }
 

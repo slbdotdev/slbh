@@ -700,3 +700,40 @@ func TestLongJobWarningWakesIdleAuthoringAgent(t *testing.T) {
 	case <-time.After(time.Second):
 	}
 }
+
+// TestJobWarningNamesTheToolThatStartedTheJob covers long_py.
+//
+// long_py and long_job share the whole warning path. The specs differ only in
+// the command the job runs and the ToolName they carry (jobSpec vs
+// pythonJobSpec), and the warning reads ToolName and nothing else, so this
+// drives the routing with a long_py snapshot rather than spawning a Python
+// interpreter that a development checkout may not have.
+func TestJobWarningNamesTheToolThatStartedTheJob(t *testing.T) {
+	r, p := messagingRuntime(t)
+	a := r.Seat()
+	a.SetModel("active")
+	r.deliverJobWarning(job.Snapshot{
+		ID:        "job-long-py",
+		Author:    a.ID,
+		Script:    "print('work')",
+		ToolName:  "long_py",
+		Status:    job.Running,
+		WarnAfter: 3 * time.Second,
+	})
+	call := p.next(t)
+	warning := ""
+	for _, message := range call.request.Messages {
+		if message.Role == "user" && strings.Contains(message.Content, "[warning from long_py job-long-py]") {
+			warning = message.Content
+			break
+		}
+	}
+	if warning == "" {
+		t.Fatalf("a long_py warning did not reach the agent's context: %#v", call.request.Messages)
+	}
+	if !strings.Contains(warning, "long_py job-long-py is still running after 3s") {
+		t.Fatalf("warning does not name the tool, the job and the interval: %q", warning)
+	}
+	call.finish(t, textEvent("noted"))
+	waitAgentTurn(t, r, a.ID)
+}
