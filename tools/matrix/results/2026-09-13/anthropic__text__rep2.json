@@ -1,0 +1,130 @@
+{
+  "probe": "text",
+  "endpoint": "anthropic",
+  "wire": "anthropic",
+  "model": "glm-5.3-flash",
+  "repetition": 2,
+  "started_utc": "2026-09-13T22:04:40Z",
+  "calls": [
+    {
+      "label": "plain text",
+      "method": "POST",
+      "url": "https://api.z.ai/api/anthropic/v1/messages",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Anthropic-Version": "2023-06-01",
+        "Content-Type": "application/json",
+        "X-Api-Key": "REDACTED"
+      },
+      "request_body": {
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "Reply with exactly these five words and nothing else: the quick brown fox jumps",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash",
+        "stream": true,
+        "system": [
+          {
+            "text": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "type": "text"
+          }
+        ],
+        "temperature": 0
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 1323,
+      "raw_sse_events": [
+        "event: message_start",
+        "data: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_202609140604403ccd067d0eb64c8d\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"glm-5.3-flash\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 0, \"output_tokens\": 0}}}",
+        "event: ping",
+        "data: {\"type\": \"ping\"}",
+        "event: content_block_start",
+        "data: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"thinking\", \"thinking\": \"\", \"signature\": \"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"The\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" user\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" wants\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" exactly\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" those\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" five\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" words\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \":\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" \\\"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"the\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" quick\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" brown\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" fox\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \" jumps\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"\\\"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"signature_delta\", \"signature\": \"fca4bfb73df54619b0ff52a7\"}}",
+        "event: content_block_stop",
+        "data: {\"type\": \"content_block_stop\", \"index\": 0}",
+        "event: content_block_start",
+        "data: {\"type\": \"content_block_start\", \"index\": 1, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"the quick brown fox jumps\"}}",
+        "event: content_block_stop",
+        "data: {\"type\": \"content_block_stop\", \"index\": 1}",
+        "event: message_delta",
+        "data: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"input_tokens\": 51, \"output_tokens\": 22, \"cache_read_input_tokens\": 0, \"server_tool_use\": {\"web_search_requests\": 0}, \"service_tier\": \"standard\"}}",
+        "event: message_stop",
+        "data: {\"type\": \"message_stop\"}"
+      ],
+      "observations": {
+        "event_types": {
+          "content_block_delta": 17,
+          "content_block_start": 2,
+          "content_block_stop": 2,
+          "message_delta": 1,
+          "message_start": 1,
+          "message_stop": 1,
+          "ping": 1
+        },
+        "text_chars": 25,
+        "text_sample": "the quick brown fox jumps",
+        "reasoning_chars": 68,
+        "reasoning_sample": "The user wants exactly those five words: \"the quick brown fox jumps\"",
+        "usage": {
+          "cache_read_input_tokens": 0,
+          "input_tokens": 51,
+          "output_tokens": 22,
+          "server_tool_use": {
+            "web_search_requests": 0
+          },
+          "service_tier": "standard"
+        },
+        "stop_reason": "end_turn",
+        "terminal": "message_stop"
+      }
+    }
+  ],
+  "verdict": "pass",
+  "notes": [
+    "terminal=message_stop stop_reason=end_turn text_chars=25 reasoning_chars=68",
+    "text: \"the quick brown fox jumps\""
+  ]
+}

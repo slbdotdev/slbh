@@ -1,0 +1,29 @@
+{
+  "probe": "catalog",
+  "endpoint": "anthropic",
+  "wire": "anthropic",
+  "model": "glm-5.3-flash",
+  "repetition": 1,
+  "started_utc": "2026-09-13T22:04:34Z",
+  "calls": [
+    {
+      "label": "GET models",
+      "method": "GET",
+      "url": "https://api.z.ai/api/anthropic/v1/models",
+      "headers_redacted": {
+        "Accept": "application/json",
+        "Anthropic-Version": "2023-06-01",
+        "X-Api-Key": "REDACTED"
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 224,
+      "raw_body": "{\"data\":[{\"created_at\":\"2025-07-28T00:00:00Z\",\"display_name\":\"GLM-4.5\",\"id\":\"glm-4.5\",\"type\":\"model\"},{\"created_at\":\"2025-07-28T00:00:00Z\",\"display_name\":\"GLM-4.5-Air\",\"id\":\"glm-4.5-air\",\"type\":\"model\"},{\"created_at\":\"2025-10-01T08:00:00Z\",\"display_name\":\"GLM-4.6\",\"id\":\"glm-4.6\",\"type\":\"model\"},{\"created_at\":\"2025-12-22T00:00:00Z\",\"display_name\":\"GLM-4.7\",\"id\":\"glm-4.7\",\"type\":\"model\"},{\"created_at\":\"2026-02-11T00:00:00Z\",\"display_name\":\"GLM-5\",\"id\":\"glm-5\",\"type\":\"model\"},{\"created_at\":\"2026-03-15T00:00:00Z\",\"display_name\":\"GLM-5-Turbo\",\"id\":\"glm-5-turbo\",\"type\":\"model\"},{\"created_at\":\"2026-03-27T22:00:00Z\",\"display_name\":\"GLM-5.1\",\"id\":\"glm-5.1\",\"type\":\"model\"},{\"created_at\":\"2026-06-17T00:00:00Z\",\"display_name\":\"GLM-5.2\",\"id\":\"glm-5.2\",\"type\":\"model\"},{\"created_at\":\"2026-08-14T00:00:00Z\",\"display_name\":\"GLM-5.3\",\"id\":\"glm-5.3\",\"type\":\"model\"},{\"created_at\":\"2026-08-14T00:00:00Z\",\"display_name\":\"GLM-5.3-Flash\",\"id\":\"glm-5.3-flash\",\"type\":\"model\"}],\"firstId\":\"glm-4.5\",\"hasMore\":false,\"lastId\":\"glm-5.3-flash\"}"
+    }
+  ],
+  "verdict": "pass",
+  "notes": [
+    "https://api.z.ai/api/anthropic/v1/models -\u003e HTTP 200",
+    "catalog body: {\"data\":[{\"created_at\":\"2025-07-28T00:00:00Z\",\"display_name\":\"GLM-4.5\",\"id\":\"glm-4.5\",\"type\":\"model\"},{\"created_at\":\"2025-07-28T00:00:00Z\",\"display_name\":\"GLM-4.5-Air\",\"id\":\"glm-4.5-air\",\"type\":\"model\"},{\"created_at\":\"2025-10-01T08:00:00Z\",\"display_name\":\"GLM-4.6\",\"id\":\"glm-4.6\",\"type\":\"model\"},{\"created_at\":\"2025-12-22T00:00:00Z\",\"display_name\":\"GLM-4.7\",\"id\":\"glm-4.7\",\"type\":\"model\"},{\"created_at\":\"2026-02-11T00:00:00Z\",\"display_name\":\"GLM-5\",\"id\":\"glm-5\",\"type\":\"model\"},{\"created_at\":\"2026-03-15T00:00:00Z\",\"display_name\":\"GLM-5-Turbo\",\"id\":\"glm-5-turbo\",\"type\":\"model\"},{\"created_at\":\"2026-03-27T22:00:00Z\",\"display_name\":\"GLM-5.1\",\"id\":\"glm-5.1\",\"type\":\"model\"},{\"created_at\":\"2026-06-17T00:00:00Z\",\"display_name\":\"GLM-5.2\",\"id\":\"glm-5.2\",\"type\":\"model\"},{\"created_at\":\"2026-08-14T00:00:00Z\",\"display_name\":\"GLM-5.3\",\"id\":\"glm-5.3\",\"type\":\"model\"},{\"created_at\":\"2026-08-14T00:00:00Z\",\"display_name\":\"GLM-5.3-Flash\",\"id\":\"glm-5.3-flash\",\"type\":\"model\"}],\"firstId\":\"glm-4.5\",\"hasMore\":false,\"lastId\":\"glm-5.3-flash\"}"
+  ]
+}

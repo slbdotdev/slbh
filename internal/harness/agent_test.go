@@ -1,6 +1,10 @@
 package harness
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -85,4 +89,146 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// windowProvider is a ContextWindowProvider that reports a discoverable window
+// and no route policy, so a pin can be proved to beat discovery and not merely
+// the fallback. discovery records whether the catalog was consulted at all.
+type windowProvider struct {
+	window    int
+	discovery *bool
+}
+
+func (windowProvider) Stream(context.Context, provider.Request, provider.StreamSink) error {
+	return nil
+}
+
+func (p windowProvider) ContextWindow(context.Context, string) (int, error) {
+	if p.discovery != nil {
+		*p.discovery = true
+	}
+	return p.window, nil
+}
+
+// plainProvider implements neither capability, which is the case
+// FallbackContextWindow exists for.
+type plainProvider struct{}
+
+func (plainProvider) Stream(context.Context, provider.Request, provider.StreamSink) error {
+	return nil
+}
+
+// pinnedProvider carries a route policy and a discoverable window at once, so
+// the two can be told apart by which one wins.
+type pinnedProvider struct {
+	windowProvider
+	pin int
+}
+
+func (p pinnedProvider) PinnedContextWindow() (int, bool) {
+	if p.pin > 0 {
+		return p.pin, true
+	}
+	return 0, false
+}
+
+// planPolicy loads the committed local-policy artifact rather than writing a
+// policy inline, so the pin these tests assert is the one a real document
+// carries and not one the test invented. It is the /models-authored example,
+// which puts the plan route on the coding wire — the wire this build speaks.
+func planPolicy(t *testing.T) provider.Policy {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "config", "testdata", "config-with-local-policy.json"))
+	if err != nil {
+		t.Fatalf("read local policy artifact: %v", err)
+	}
+	var doc struct {
+		LocalPolicy provider.Policy `json:"local_policy"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("decode local policy artifact: %v", err)
+	}
+	if err := doc.LocalPolicy.Validate(); err != nil {
+		t.Fatalf("committed local policy artifact is invalid: %v", err)
+	}
+	return doc.LocalPolicy
+}
+
+// zaiRouteProvider builds the real route-resolved provider for the plan model,
+// which is what carries the pin in production. The key is a dummy: the route is
+// resolved and inspected, never dialled.
+func zaiRouteProvider(t *testing.T) provider.Provider {
+	t.Helper()
+	t.Setenv("ZAI_API_KEY", "test-key-not-a-credential")
+	p, err := provider.ForModel("zai/glm-5.3-flash", provider.OpenRouterEndpoint, false, planPolicy(t))
+	if err != nil {
+		t.Fatalf("resolve plan route: %v", err)
+	}
+	return p
+}
+
+func TestResolveContextWindowPrefersPinOverDiscoveryAndFallback(t *testing.T) {
+	// The pin beats discovery. A route is pinned because its catalog cannot
+	// answer, so a catalog that answers anyway must not win: asserting only
+	// against the fallback would pass even if the pin were consulted last.
+	discovered := false
+	agent := &Agent{Model: "zai/glm-5.3-flash"}
+	got := agent.resolveContextWindow(context.Background(), pinnedProvider{
+		windowProvider: windowProvider{window: 200000, discovery: &discovered},
+		pin:            1000000,
+	})
+	if got != 1000000 {
+		t.Fatalf("pinned window = %d, want 1000000", got)
+	}
+	if discovered {
+		t.Fatal("catalog discovery was consulted for a pinned route")
+	}
+
+	// The real route-resolved provider carries the pin, so the production path
+	// and not only the fake reports 1,000,000.
+	agent = &Agent{Model: "zai/glm-5.3-flash"}
+	if got := agent.resolveContextWindow(context.Background(), zaiRouteProvider(t)); got != 1000000 {
+		t.Fatalf("plan route window = %d, want 1000000", got)
+	}
+}
+
+func TestResolveContextWindowFallsBackForUnpinnedRoutes(t *testing.T) {
+	// An unpinned route with no discovery falls back to 128,000.
+	agent := &Agent{Model: "deepseek-v4-flash"}
+	if got := agent.resolveContextWindow(context.Background(), plainProvider{}); got != provider.FallbackContextWindow {
+		t.Fatalf("unpinned window = %d, want %d", got, provider.FallbackContextWindow)
+	}
+
+	// An unpinned route with discovery still uses the discovered figure: the
+	// pin path must not suppress the one that already worked.
+	agent = &Agent{Model: "vendor/model"}
+	if got := agent.resolveContextWindow(context.Background(), windowProvider{window: 262144}); got != 262144 {
+		t.Fatalf("discovered window = %d, want 262144", got)
+	}
+
+	// A provider that carries a route but no pin falls back rather than
+	// reporting a zero window as if it were authoritative.
+	agent = &Agent{Model: "vendor/model"}
+	if got := agent.resolveContextWindow(context.Background(), pinnedProvider{pin: 0}); got != provider.FallbackContextWindow {
+		t.Fatalf("unpinned route window = %d, want %d", got, provider.FallbackContextWindow)
+	}
+}
+
+func TestCompactionFiresAtSeventyPercentOfThePinnedWindow(t *testing.T) {
+	agent := &Agent{Model: "zai/glm-5.3-flash"}
+	window := agent.resolveContextWindow(context.Background(), zaiRouteProvider(t))
+
+	// Roughly 120k estimated tokens: over the 89,600-token fallback budget
+	// that governs this route today, and well under the pinned 700,000 one.
+	// That gap is the whole point of the pin, so both budgets are asserted.
+	history := make([]provider.Message, 96)
+	for i := range history {
+		history[i] = provider.Message{Role: "user", Content: strings.Repeat("x", 5000)}
+	}
+	if !contextLimitReached(provider.FallbackContextWindow, "system", history, nil) {
+		t.Fatal("history did not reach the fallback budget, so the pin is not what this test measures")
+	}
+	if contextLimitReached(window, "system", history, nil) {
+		t.Fatalf("compaction fired below 70%% of the pinned %d-token window", window)
+	}
 }

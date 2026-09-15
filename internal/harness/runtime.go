@@ -61,18 +61,23 @@ type agentSession struct {
 }
 
 type Runtime struct {
-	mu           sync.RWMutex
-	id           string
-	runtimeDir   string
-	workDir      string
-	config       config.Config
-	ctx          context.Context
-	cancel       context.CancelFunc
-	jobs         *job.Manager
-	agents       map[string]*Agent
-	seatID       string
-	current      map[string]*agentSession
+	mu         sync.RWMutex
+	id         string
+	runtimeDir string
+	workDir    string
+	config     config.Config
+	ctx        context.Context
+	cancel     context.CancelFunc
+	jobs       *job.Manager
+	agents     map[string]*Agent
+	seatID     string
+	current    map[string]*agentSession
+	// pending holds a session opened by Clear while the agent was still
+	// mid-turn. It becomes current at that turn's end, so the turn that issued
+	// a request keeps its own transcript through its last event.
+	pending      map[string]*agentSession
 	sessions     []*agentSession
+	redactor     *secretRedactor
 	events       chan Event
 	eventMu      sync.Mutex
 	eventQueue   []Event
@@ -101,19 +106,25 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), events: options.Events, eventWake: make(chan struct{}, 1), provider: options.Provider, codexCommand: options.CodexCommand}
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), events: options.Events, eventWake: make(chan struct{}, 1), provider: options.Provider, codexCommand: options.CodexCommand}
 	if r.events == nil {
 		r.events = make(chan Event, 1024)
 	}
 	go r.dispatchEvents()
 	if r.provider == nil {
+		// The current config is read per call rather than captured, so a policy
+		// authored from /models on an unmanaged host takes effect on the next
+		// request instead of at the next launch. That is the whole point of the
+		// escape hatch: a refusal the user cannot clear without restarting is
+		// still a brick.
 		r.provider = func(model string) (provider.Provider, error) {
-			return provider.ForModel(model, cfg.Endpoint)
+			current := r.Config()
+			return provider.ForModel(model, current.Endpoint, current.EndpointExplicit, current.Policy)
 		}
 	}
 	r.jobs = job.NewManagerWithLogger(r.sessionLogger)
 	r.jobs.SetWarningHandler(func(snapshot job.Snapshot) {
-		r.emit(Event{AgentID: snapshot.Author, Kind: "job_warning", Text: "job is still running", Metadata: map[string]any{"job": snapshot.ID, "warn_after": snapshot.WarnAfter.String()}})
+		r.deliverJobWarning(snapshot)
 	})
 	r.jobs.SetCompletionHandler(func(snapshot job.Snapshot, stdout, stderr string) {
 		r.deliverJobResult(snapshot, stdout, stderr)
@@ -169,6 +180,44 @@ func (r *Runtime) ModelCatalog() []provider.Catalog {
 	return append([]provider.Catalog(nil), r.catalog...)
 }
 
+// PolicySource reports which routing policy is in force and where it came
+// from, so the TUI can say so rather than leaving a user to guess why a local
+// edit changed nothing.
+func (r *Runtime) PolicySource() config.PolicySource {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.config.PolicySource
+}
+
+// AuthorLocalPolicy writes a local routing policy into the app-owned
+// config.json and re-resolves which policy is in force.
+//
+// On a managed host the managed file still wins, and the returned source says
+// so: the write is honest but inert, which is exactly what the precedence rule
+// promises and what the user must be told. On an unmanaged host this is what
+// turns the fail-closed refusal back into a working harness.
+func (r *Runtime) AuthorLocalPolicy(policy provider.Policy) (config.PolicySource, error) {
+	// Resolution re-reads the managed file, so it happens on a copy with no
+	// lock held: a request resolving its own route takes the same lock, and
+	// blocking it behind a file read for a menu keypress would be a poor
+	// trade. Only the three policy fields are then written back, so a model
+	// change made in between is not clobbered by this copy.
+	cfg := r.Config()
+	if err := cfg.ApplyLocalPolicy(policy); err != nil {
+		return config.PolicySource{}, err
+	}
+	r.mu.Lock()
+	r.config.LocalPolicy = cfg.LocalPolicy
+	r.config.Policy = cfg.Policy
+	r.config.PolicySource = cfg.PolicySource
+	saved := r.config
+	r.mu.Unlock()
+	if err := saved.Save(); err != nil {
+		return saved.PolicySource, err
+	}
+	return saved.PolicySource, nil
+}
+
 // ConfigureModels preserves the older two-slot API while keeping the leaf
 // default aligned with the level-one subagent model.
 func (r *Runtime) ConfigureModels(seatModel, subagentModel string, approved []string) error {
@@ -199,6 +248,25 @@ func (r *Runtime) ConfigureModelSlots(seatModel, subagentModel, leafModel string
 		seat.SetModel(model)
 	}
 	return nil
+}
+
+// LayerInstructions returns the managed role document for an agent at the
+// given depth, or the empty string when that layer has no deployed document.
+//
+// It is read through the runtime rather than from the agent's own state
+// because the documents are org policy: one copy, resolved once at startup,
+// shared by every agent the runtime owns.
+func (r *Runtime) LayerInstructions(depth int) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.config.Instructions.For(depth)
+}
+
+// InstructionSource reports where the layer documents came from, for the TUI.
+func (r *Runtime) InstructionSource() config.InstructionSource {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.config.Instructions.Source
 }
 
 func (r *Runtime) ModelGuidance() string {
@@ -433,13 +501,64 @@ func (r *Runtime) Clear(agentID string) error {
 	if err != nil {
 		return err
 	}
+	// ClearHistory deliberately lets an in-flight provider request run to
+	// completion, and emit resolves the session per event, so swapping the log
+	// target here would write the tail of the old turn — its deltas, its usage,
+	// its turn_done — into a transcript that never issued the request. The new
+	// file would open mid-answer to a question it does not contain. The swap
+	// therefore waits for the turn boundary; an idle agent has no turn in
+	// flight, so for it the boundary is now.
+	// Both backends defer. An earlier version excepted Codex on the grounds
+	// that its clear interrupts the turn, but clear() only sets `resetting` and
+	// signals `wake`: the turn/interrupt RPC happens later, in reset(), when
+	// the leaf's run loop next services that signal. In the gap the
+	// app-server's already-queued deltas still pass the threadID guard and
+	// would land in the new transcript — the very defect this defers to avoid.
+	// reset() promotes explicitly once the interrupt has returned.
+	idle := agent.codexBackend() == nil && agent.Snapshot().Status != "thinking"
 	r.mu.Lock()
-	r.current[agentID] = session
+	if superseded, ok := r.pending[agentID]; ok {
+		_ = superseded.log.Close()
+	}
+	r.pending[agentID] = session
 	r.sessions = append(r.sessions, session)
 	r.mu.Unlock()
 	agent.ClearHistory()
+	if idle {
+		r.promotePending(agentID)
+	}
 	return nil
 }
+
+// redactSecrets strips credential values from text that is about to enter
+// durable state or the conversation. Redacting at emit alone was not enough:
+// the raw tool result also entered `history`, so the next round marshalled the
+// credential into the request payload — storing it *and sending it to the
+// provider*. Capture-time redaction closes both, and is the only one of the
+// two that prevents transmission.
+func (r *Runtime) redactSecrets(text string) string {
+	r.mu.RLock()
+	redactor := r.redactor
+	r.mu.RUnlock()
+	return redactor.redact(text)
+}
+
+// promotePending makes a session opened by Clear the log target. It runs at a
+// turn boundary, the first moment at which no earlier turn can still be
+// streaming into the transcript it was issued against.
+func (r *Runtime) promotePending(agentID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if session, ok := r.pending[agentID]; ok {
+		r.current[agentID] = session
+		delete(r.pending, agentID)
+	}
+}
+
+// Done closes when the runtime is shutting down. A headless run selects on it
+// so that a signal arriving during an in-flight turn ends the run, instead of
+// blocking forever on an events channel that Close never closes.
+func (r *Runtime) Done() <-chan struct{} { return r.ctx.Done() }
 
 func (r *Runtime) emit(event Event) {
 	if event.Time.IsZero() {
@@ -452,9 +571,24 @@ func (r *Runtime) emit(event Event) {
 		agentID = r.seatID
 	}
 	session := r.current[agentID]
+	redactor := r.redactor
 	r.mu.RUnlock()
+	// The tools hand a child the parent environment on purpose, so an agent
+	// that runs `env`, or a prompt-injected call that names one variable, would
+	// otherwise put a vaulted credential into durable JSONL and onto the
+	// screen. Redacting here covers every producer at once, and covers the
+	// stored copy and the rendered one identically.
+	event.Text = redactor.redact(event.Text)
+	event.Metadata = redactor.redactMetadata(event.Metadata)
 	if session != nil {
 		_ = session.log.Append(logx.Entry{Time: event.Time, Agent: event.AgentID, Session: session.id, Kind: event.Kind, Text: event.Text, Metadata: event.Metadata})
+	}
+	// A session Clear opened mid-turn becomes the log target only now, at the
+	// end of the turn that was in flight. "error" ends a turn too: fail() emits
+	// it with no turn_done to follow, so promoting on turn_done alone would
+	// strand the new session forever behind a turn that ended badly.
+	if event.Kind == "turn_done" || event.Kind == "error" {
+		r.promotePending(agentID)
 	}
 	r.eventMu.Lock()
 	r.eventQueue = append(r.eventQueue, event)
@@ -520,6 +654,35 @@ func (r *Runtime) recordInferenceRequest(agent *Agent, round int, req provider.R
 // fabricating a provider turn.
 func (r *Runtime) EmitStatus(kind, text string) {
 	r.emit(Event{Kind: kind, Text: text})
+}
+
+// deliverJobWarning routes a job's single warn_after_seconds warning.
+//
+// The audience is the agent that started the job and nobody else. The human
+// operator does not create these jobs, never sees the ones a subagent runs,
+// and telling the human is the control agent's duty rather than the job
+// manager's — so the warning goes into the authoring agent's inbox by the same
+// path a completion takes, and wakes it if it has gone idle. It used to reach
+// the TUI event stream alone, which meant the one party the timer exists to
+// inform was the one party that never heard it.
+//
+// The TUI event is still emitted, and first, so the firing is on the record and
+// on screen without that depending on delivery succeeding — in particular when
+// the agent has since been stopped. It is a record, not the delivery. Nothing
+// is built on it.
+//
+// The snapshot arrives captured under the job's own lock and is passed through
+// unchanged: what the agent is told and what the manager observed are the same
+// reading.
+func (r *Runtime) deliverJobWarning(snapshot job.Snapshot) {
+	r.emit(Event{AgentID: snapshot.Author, Kind: "job_warning", Text: "job is still running", Metadata: map[string]any{"job": snapshot.ID, "warn_after": snapshot.WarnAfter.String()}})
+	agent, ok := r.Agent(snapshot.Author)
+	if !ok {
+		return
+	}
+	if err := agent.receiveJobWarning(snapshot); err != nil {
+		r.emit(Event{AgentID: snapshot.Author, AgentTitle: agent.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"job": snapshot.ID}})
+	}
 }
 
 func (r *Runtime) deliverJobResult(snapshot job.Snapshot, stdout, stderr string) {

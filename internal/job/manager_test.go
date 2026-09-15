@@ -2,10 +2,13 @@ package job
 
 import (
 	"context"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/slbdotdev/slbh/internal/logx"
 )
 
 func TestManagerRunsAndCapturesOutput(t *testing.T) {
@@ -52,10 +55,14 @@ func TestManagerCompletionHandlerReceivesFinishedOutput(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("completion handler was not called")
 	}
+	// done closes last, so it means finished *and* recorded *and* delivered.
+	// It used to close first, which let Manager.Close return — and Runtime.Close
+	// shut the session loggers — while this goroutine still had its job_end
+	// Append and this handler to run.
 	select {
 	case <-job.Done():
-	default:
-		t.Fatal("completion handler ran before Done was closed")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Done did not close after the completion handler ran")
 	}
 	if got.ID != job.Snapshot().ID || got.Status != Complete || got.ToolName != "long_py" {
 		t.Fatalf("snapshot=%#v job=%#v", got, job.Snapshot())
@@ -109,8 +116,180 @@ func TestManagerWarning(t *testing.T) {
 		if warning.ID != j.Snapshot().ID {
 			t.Fatalf("warning for %q, want %q", warning.ID, j.Snapshot().ID)
 		}
+		// The delivered snapshot is captured in the same critical section that
+		// decides the job is still running, so a warning can never describe a
+		// job that had already finished when it was taken.
+		if warning.Status != Running {
+			t.Fatalf("warning snapshot status = %q, want %q", warning.Status, Running)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("warning was not emitted")
 	}
 	_ = j.Kill()
+}
+
+func TestJobDoneMeansTheEndRecordIsAlreadyWritten(t *testing.T) {
+	// Manager.Close waits on done and nothing else, so if done can close before
+	// the job_end Append, Runtime.Close is free to shut the logger underneath
+	// it. The Append then fails with "log is closed", the job goroutine ignores
+	// the error, and the transcript silently loses the job's terminal record.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+	log, err := logx.OpenSession(path, "run-test", "session-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(log)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	job, err := m.Start(ctx, Spec{Author: "agent-test", Script: "echo done-ordering", ToolName: "long_py"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-job.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("job never finished")
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := logx.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Kind == "job_end" {
+			return
+		}
+	}
+	t.Fatalf("no job_end record was written before Done closed: %#v", entries)
+}
+
+// TestManagerCloseJoinsAWarningAlreadyInFlight is the shutdown proof.
+//
+// Once the timer has been selected the goroutine is committed to calling the
+// handler: no channel can call it back, so the job's context arm — cancelled
+// by Runtime.Close and by the kill in Close below — is unreachable from there.
+// Runtime.Close calls Manager.Close and only then closes the session logs the
+// handler writes into, so if Close does not join the goroutine, the warning
+// can resume after shutdown, append into a closed log, have the error
+// discarded, and be lost.
+//
+// The handler blocks here to hold the goroutine in exactly that state while
+// Close runs. Before the join, Close returned immediately and this failed. The
+// hold is well inside Close's two-second cap, so what this exercises is the
+// join and not the cap.
+func TestManagerCloseJoinsAWarningAlreadyInFlight(t *testing.T) {
+	m := NewManager(nil)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	delivered := make(chan struct{})
+	m.SetWarningHandler(func(Snapshot) {
+		close(entered)
+		<-release
+		close(delivered)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	script := "sleep 5"
+	if runtime.GOOS == "windows" {
+		script = "ping 127.0.0.1 -n 6 > nul"
+	}
+	if _, err := m.Start(ctx, Spec{Author: "agent-test", Script: script, WarnAfter: 10 * time.Millisecond}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the warning handler was never entered")
+	}
+	closed := make(chan struct{})
+	go func() {
+		m.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a warning was still being delivered; the handler can still write into a session log the runtime has since closed")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return once the warning had been delivered")
+	}
+	select {
+	case <-delivered:
+	default:
+		t.Fatal("Close returned without the warning having been delivered")
+	}
+}
+
+// The join must not turn shutdown into a wait for a timer that has not fired.
+// Close kills every job first, which cancels each job's context and so releases
+// the pre-fire arm of every warning select; an hour-long warning must therefore
+// cost shutdown nothing.
+func TestManagerCloseDoesNotWaitForAnUnfiredWarning(t *testing.T) {
+	m := NewManager(nil)
+	m.SetWarningHandler(func(Snapshot) { t.Error("an unfired warning was delivered at shutdown") })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	script := "sleep 30"
+	if runtime.GOOS == "windows" {
+		script = "ping 127.0.0.1 -n 30 > nul"
+	}
+	if _, err := m.Start(ctx, Spec{Author: "agent-test", Script: script, WarnAfter: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan struct{})
+	go func() {
+		m.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close blocked on a warning timer that had not fired")
+	}
+}
+
+// TestStartAfterCloseIsRefusedAndArmsNoWarning is item 1's proof.
+//
+// Nothing serialised Start against Close before this: a Start landing after
+// Close had begun waiting could Add to a WaitGroup already at zero — misuse —
+// and arm a timer that fires into session logs Runtime.Close has since closed.
+// The closed flag is read in the same acquisition that registers the job and
+// counts its timer, so there is no window between the check and the Add.
+func TestStartAfterCloseIsRefusedAndArmsNoWarning(t *testing.T) {
+	m := NewManager(nil)
+	m.SetWarningHandler(func(Snapshot) { t.Error("a warning was armed after Close") })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Close()
+	j, err := m.Start(ctx, Spec{Author: "agent-test", Script: "echo late", WarnAfter: 10 * time.Millisecond})
+	if err == nil {
+		_ = j.Kill()
+		t.Fatal("Start was accepted after Close")
+	}
+	if j != nil {
+		t.Fatalf("refused Start returned a job: %#v", j.Snapshot())
+	}
+	if !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Start after Close failed with %q, which does not name the closed manager", err)
+	}
+	// Past the interval the refused job asked for: nothing may fire, and the
+	// manager must still shut down.
+	time.Sleep(50 * time.Millisecond)
+	closed := make(chan struct{})
+	go func() {
+		m.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return after a refused Start")
+	}
 }

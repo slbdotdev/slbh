@@ -1,0 +1,450 @@
+[
+  {
+    "probe": "auth-headers",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "anthropic__auth-headers__rep1.json"
+  },
+  {
+    "probe": "cache",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "anthropic__cache__rep1.json"
+  },
+  {
+    "probe": "cache",
+    "endpoint": "anthropic",
+    "repetition": 2,
+    "verdict": "pass",
+    "file": "anthropic__cache__rep2.json"
+  },
+  {
+    "probe": "catalog",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "anthropic__catalog__rep1.json"
+  },
+  {
+    "probe": "context-ceiling",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "anthropic__context-ceiling__rep1.json"
+  },
+  {
+    "probe": "context-limit",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "anthropic__context-limit__rep1.json"
+  },
+  {
+    "probe": "effort-high",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "anthropic__effort-high__rep1.json"
+  },
+  {
+    "probe": "effort-high",
+    "endpoint": "anthropic",
+    "repetition": 2,
+    "verdict": "recorded",
+    "file": "anthropic__effort-high__rep2.json"
+  },
+  {
+    "probe": "effort-high",
+    "endpoint": "anthropic",
+    "repetition": 3,
+    "verdict": "recorded",
+    "file": "anthropic__effort-high__rep3.json"
+  },
+  {
+    "probe": "effort-low",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "anthropic__effort-low__rep1.json"
+  },
+  {
+    "probe": "effort-low",
+    "endpoint": "anthropic",
+    "repetition": 2,
+    "verdict": "recorded",
+    "file": "anthropic__effort-low__rep2.json"
+  },
+  {
+    "probe": "effort-low",
+    "endpoint": "anthropic",
+    "repetition": 3,
+    "verdict": "recorded",
+    "file": "anthropic__effort-low__rep3.json"
+  },
+  {
+    "probe": "effort-max",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "anthropic__effort-max__rep1.json"
+  },
+  {
+    "probe": "effort-max",
+    "endpoint": "anthropic",
+    "repetition": 2,
+    "verdict": "recorded",
+    "file": "anthropic__effort-max__rep2.json"
+  },
+  {
+    "probe": "effort-max",
+    "endpoint": "anthropic",
+    "repetition": 3,
+    "verdict": "recorded",
+    "file": "anthropic__effort-max__rep3.json"
+  },
+  {
+    "probe": "effort-medium",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "anthropic__effort-medium__rep1.json"
+  },
+  {
+    "probe": "effort-medium",
+    "endpoint": "anthropic",
+    "repetition": 2,
+    "verdict": "recorded",
+    "file": "anthropic__effort-medium__rep2.json"
+  },
+  {
+    "probe": "effort-medium",
+    "endpoint": "anthropic",
+    "repetition": 3,
+    "verdict": "recorded",
+    "file": "anthropic__effort-medium__rep3.json"
+  },
+  {
+    "probe": "effort-xhigh",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "anthropic__effort-xhigh__rep1.json"
+  },
+  {
+    "probe": "effort-xhigh",
+    "endpoint": "anthropic",
+    "repetition": 2,
+    "verdict": "recorded",
+    "file": "anthropic__effort-xhigh__rep2.json"
+  },
+  {
+    "probe": "effort-xhigh",
+    "endpoint": "anthropic",
+    "repetition": 3,
+    "verdict": "recorded",
+    "file": "anthropic__effort-xhigh__rep3.json"
+  },
+  {
+    "probe": "error-events",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "partial",
+    "file": "anthropic__error-events__rep1.json"
+  },
+  {
+    "probe": "model-slugs",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "anthropic__model-slugs__rep1.json"
+  },
+  {
+    "probe": "output-config-effort",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "anthropic__output-config-effort__rep1.json"
+  },
+  {
+    "probe": "text",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "anthropic__text__rep1.json"
+  },
+  {
+    "probe": "text",
+    "endpoint": "anthropic",
+    "repetition": 2,
+    "verdict": "pass",
+    "file": "anthropic__text__rep2.json"
+  },
+  {
+    "probe": "tool-parallel",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "anthropic__tool-parallel__rep1.json"
+  },
+  {
+    "probe": "tool-parallel",
+    "endpoint": "anthropic",
+    "repetition": 2,
+    "verdict": "pass",
+    "file": "anthropic__tool-parallel__rep2.json"
+  },
+  {
+    "probe": "tool-single",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "anthropic__tool-single__rep1.json"
+  },
+  {
+    "probe": "tool-single",
+    "endpoint": "anthropic",
+    "repetition": 2,
+    "verdict": "pass",
+    "file": "anthropic__tool-single__rep2.json"
+  },
+  {
+    "probe": "usage",
+    "endpoint": "anthropic",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "anthropic__usage__rep1.json"
+  },
+  {
+    "probe": "usage",
+    "endpoint": "anthropic",
+    "repetition": 2,
+    "verdict": "pass",
+    "file": "anthropic__usage__rep2.json"
+  },
+  {
+    "probe": "auth-headers",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "openai-coding__auth-headers__rep1.json"
+  },
+  {
+    "probe": "cache",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "openai-coding__cache__rep1.json"
+  },
+  {
+    "probe": "cache",
+    "endpoint": "openai-coding",
+    "repetition": 2,
+    "verdict": "pass",
+    "file": "openai-coding__cache__rep2.json"
+  },
+  {
+    "probe": "catalog",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "openai-coding__catalog__rep1.json"
+  },
+  {
+    "probe": "context-ceiling",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "openai-coding__context-ceiling__rep1.json"
+  },
+  {
+    "probe": "context-limit",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "openai-coding__context-limit__rep1.json"
+  },
+  {
+    "probe": "effort-high",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-high__rep1.json"
+  },
+  {
+    "probe": "effort-high",
+    "endpoint": "openai-coding",
+    "repetition": 2,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-high__rep2.json"
+  },
+  {
+    "probe": "effort-high",
+    "endpoint": "openai-coding",
+    "repetition": 3,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-high__rep3.json"
+  },
+  {
+    "probe": "effort-low",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-low__rep1.json"
+  },
+  {
+    "probe": "effort-low",
+    "endpoint": "openai-coding",
+    "repetition": 2,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-low__rep2.json"
+  },
+  {
+    "probe": "effort-low",
+    "endpoint": "openai-coding",
+    "repetition": 3,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-low__rep3.json"
+  },
+  {
+    "probe": "effort-max",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-max__rep1.json"
+  },
+  {
+    "probe": "effort-max",
+    "endpoint": "openai-coding",
+    "repetition": 2,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-max__rep2.json"
+  },
+  {
+    "probe": "effort-max",
+    "endpoint": "openai-coding",
+    "repetition": 3,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-max__rep3.json"
+  },
+  {
+    "probe": "effort-medium",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-medium__rep1.json"
+  },
+  {
+    "probe": "effort-medium",
+    "endpoint": "openai-coding",
+    "repetition": 2,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-medium__rep2.json"
+  },
+  {
+    "probe": "effort-medium",
+    "endpoint": "openai-coding",
+    "repetition": 3,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-medium__rep3.json"
+  },
+  {
+    "probe": "effort-xhigh",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-xhigh__rep1.json"
+  },
+  {
+    "probe": "effort-xhigh",
+    "endpoint": "openai-coding",
+    "repetition": 2,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-xhigh__rep2.json"
+  },
+  {
+    "probe": "effort-xhigh",
+    "endpoint": "openai-coding",
+    "repetition": 3,
+    "verdict": "recorded",
+    "file": "openai-coding__effort-xhigh__rep3.json"
+  },
+  {
+    "probe": "error-events",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "partial",
+    "file": "openai-coding__error-events__rep1.json"
+  },
+  {
+    "probe": "model-slugs",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "openai-coding__model-slugs__rep1.json"
+  },
+  {
+    "probe": "output-config-effort",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "n/a",
+    "file": "openai-coding__output-config-effort__rep1.json"
+  },
+  {
+    "probe": "text",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "openai-coding__text__rep1.json"
+  },
+  {
+    "probe": "text",
+    "endpoint": "openai-coding",
+    "repetition": 2,
+    "verdict": "pass",
+    "file": "openai-coding__text__rep2.json"
+  },
+  {
+    "probe": "tool-parallel",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "openai-coding__tool-parallel__rep1.json"
+  },
+  {
+    "probe": "tool-parallel",
+    "endpoint": "openai-coding",
+    "repetition": 2,
+    "verdict": "pass",
+    "file": "openai-coding__tool-parallel__rep2.json"
+  },
+  {
+    "probe": "tool-single",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "openai-coding__tool-single__rep1.json"
+  },
+  {
+    "probe": "tool-single",
+    "endpoint": "openai-coding",
+    "repetition": 2,
+    "verdict": "pass",
+    "file": "openai-coding__tool-single__rep2.json"
+  },
+  {
+    "probe": "usage",
+    "endpoint": "openai-coding",
+    "repetition": 1,
+    "verdict": "pass",
+    "file": "openai-coding__usage__rep1.json"
+  },
+  {
+    "probe": "usage",
+    "endpoint": "openai-coding",
+    "repetition": 2,
+    "verdict": "pass",
+    "file": "openai-coding__usage__rep2.json"
+  }
+]

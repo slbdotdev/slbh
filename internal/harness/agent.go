@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/provider"
 )
@@ -419,6 +420,12 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			if toolErr != nil {
 				result = toolFailure(toolErr, result)
 			}
+			// Before it is emitted and before it enters history. A tool runs
+			// with the parent environment by design, so `env` — or any script
+			// with `set -x` — puts a provider key on stdout; from history it
+			// would be marshalled into the next request, reaching both the
+			// transcript and the provider itself.
+			result = a.runtime.redactSecrets(result)
 			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool_result", Text: result, Metadata: map[string]any{"name": call.Function.Name, "call_id": call.ID}})
 			history = append(history, provider.Message{Role: "tool", ToolCallID: call.ID, Name: call.Function.Name, Content: result})
 			history = a.appendMessages(history, a.takeMessages())
@@ -510,7 +517,9 @@ func (a *Agent) receiveChildResult(child *Agent, text string) error {
 }
 
 func (a *Agent) receiveJobResult(snapshot job.Snapshot, stdout, stderr string) error {
-	text := formatJobResult(snapshot, stdout, stderr)
+	// Same reason as the foreground tools: a job's captured output reaches
+	// history through deliver(), and from there the next request payload.
+	text := a.runtime.redactSecrets(formatJobResult(snapshot, stdout, stderr))
 	toolName := snapshot.ToolName
 	if toolName == "" {
 		toolName = "long_job"
@@ -521,6 +530,50 @@ func (a *Agent) receiveJobResult(snapshot job.Snapshot, stdout, stderr string) e
 		text:     text,
 		metadata: map[string]any{"job": snapshot.ID, "tool": toolName, "status": string(snapshot.Status), "exit_code": snapshot.ExitCode},
 	})
+}
+
+// receiveJobWarning puts a job's one warning into the agent's own context.
+//
+// It is deliberately the same mechanism as receiveJobResult: deliver() appends
+// under the agent mutex and pokes the buffered wake channel, so the message is
+// consumed at the next API/tool call boundary of a busy agent and wakes an idle
+// one immediately. A warning that only reached the event stream reached nobody
+// who could act on it.
+//
+// The message is a decision point and says so. It names the three things the
+// agent can do about the job, and promises nothing about output: a running
+// job's capture buffers are not readable, so the text tells the agent output
+// arrives when the job finishes rather than inviting a read_job call that
+// would come back empty.
+func (a *Agent) receiveJobWarning(snapshot job.Snapshot) error {
+	toolName := snapshot.ToolName
+	if toolName == "" {
+		toolName = "long_job"
+	}
+	// Same reason as a job result: the script is the agent's own text and can
+	// name a credential, and from history it would be marshalled into the next
+	// request payload.
+	text := a.runtime.redactSecrets(formatJobWarning(snapshot, toolName))
+	return a.deliver(agentMessage{
+		prompt:   fmt.Sprintf("[warning from %s %s]\n%s", toolName, snapshot.ID, text),
+		kind:     "job_warning",
+		text:     text,
+		metadata: map[string]any{"job": snapshot.ID, "tool": toolName, "status": string(snapshot.Status), "warn_after": snapshot.WarnAfter.String()},
+	})
+}
+
+// maxJobWarningScript bounds the script echoed back in a warning. It is there
+// to identify which job this is, not to reproduce the job; an agent that wrote
+// a long here-doc does not need it quoted back at the cost of its context.
+const maxJobWarningScript = 400
+
+func formatJobWarning(snapshot job.Snapshot, toolName string) string {
+	script := snapshot.Script
+	if len(script) > maxJobWarningScript {
+		script = script[:maxJobWarningScript] + "\n[script truncated]"
+	}
+	return fmt.Sprintf("%s %s is still running after %s.\nscript:\n%s\n\nThat is its state as of when this warning was raised; if the job's result has already reached you, the result is the truth and this warning is stale. This is the only warning you get for this job: nothing will send it again and nothing will act for you. Decide now, and you may decide to do nothing. Kill it with kill_job if it is stuck or no longer worth waiting for; otherwise leave it and its captured output will be delivered to you automatically when it finishes, or carry on with other work in the meantime. Its output cannot be read while it is running.",
+		toolName, snapshot.ID, snapshot.WarnAfter, script)
 }
 
 func formatJobResult(snapshot job.Snapshot, stdout, stderr string) string {
@@ -607,13 +660,32 @@ func (a *Agent) resolveContextWindow(ctx context.Context, p provider.Provider) i
 	}
 	a.mu.RUnlock()
 
-	window := provider.FallbackContextWindow
-	if metadata, ok := p.(provider.ContextWindowProvider); ok {
-		metadataCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		if discovered, err := metadata.ContextWindow(metadataCtx, model); err == nil && discovered > 0 {
-			window = discovered
+	// A pinned route window is consulted first and wins outright. It beats
+	// discovery as well as the fallback: a route carries a pin precisely
+	// because its catalog cannot answer, so asking the catalog first would
+	// either fail and waste a round trip or return a figure the pin exists to
+	// override. A pin that nothing consults changes nothing, which is why this
+	// resolution path is the substance of the change and the table is not.
+	//
+	// The pin comes from the provider instance, which carries its own route's
+	// policy, and never from a lookup by model name here. Only the instance
+	// knows the endpoint the request will really reach: under an explicit
+	// endpoint override the same model name goes to OpenRouter instead of the
+	// plan, and a name-keyed pin would size the window for a route this
+	// request is not taking.
+	window, pinned := 0, false
+	if routed, ok := p.(provider.RoutePolicyProvider); ok {
+		window, pinned = routed.PinnedContextWindow()
+	}
+	if !pinned {
+		window = provider.FallbackContextWindow
+		if metadata, ok := p.(provider.ContextWindowProvider); ok {
+			metadataCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			if discovered, err := metadata.ContextWindow(metadataCtx, model); err == nil && discovered > 0 {
+				window = discovered
+			}
+			cancel()
 		}
-		cancel()
 	}
 	a.mu.Lock()
 	a.contextModel = model
@@ -644,14 +716,39 @@ func compactMessages(history []provider.Message, keep int) ([]provider.Message, 
 	return append([]provider.Message{marker}, recent...), start
 }
 
+// systemPrompt assembles an agent's system prompt from its two layers.
+//
+// The split is by what owns the truth. Everything bakedSystemPrompt returns is
+// harness mechanics — how *this build* behaves — and only the binary knows it,
+// so a managed file that disagreed would simply be wrong. Everything the
+// managed layer document adds is org policy about what an agent at this layer
+// may do, and it has to be able to change without a rebuild.
+//
+// slbh can do this structurally because it owns the agent tree and knows each
+// agent's Depth at the moment it builds a prompt. The other harnesses can only
+// approximate per-layer delivery by convention.
 func systemPrompt(a *Agent) string {
-	prompt := systemPromptLegacy(a)
-	prompt = strings.Replace(prompt, "Do not use quick_bash, long_job, sleep,", "Do not use quick_bash, long_job, quick_py, long_py, sleep,", 1)
-	return strings.Replace(prompt, "completed long_job output", "completed long_job/long_py output", 1)
+	prompt := bakedSystemPrompt(a)
+	layer := a.runtime.LayerInstructions(a.Depth)
+	if strings.TrimSpace(layer) == "" {
+		// No document for this layer: run on baked mechanics alone. Absence is
+		// deliberately not a refusal here, unlike a missing routing policy,
+		// which is a security posture. Degrade, never brick.
+		return prompt
+	}
+	return prompt + fmt.Sprintf("\n\nOrg instructions for your layer (%s). These are managed by the fleet and define what an agent at this layer may and may not do. Where they appear to contradict the runtime mechanics above, the mechanics are facts about this build and stand; the role policy governs everything else.\n\n%s", config.LayerForDepth(a.Depth), layer)
 }
 
-func systemPromptLegacy(a *Agent) string {
-	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message and completed long_job output, is a mandatory mid-turn steer: read and act on it during your current work. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
+// bakedSystemPrompt is the harness-mechanics half, authored as one string.
+//
+// It used to be a legacy literal patched by two strings.Replace calls to
+// insert quick_py and long_py. The patches are folded in here: a prompt
+// assembled by search-and-replace has no single readable source, and layering
+// a managed tier on top of a patched string would have made that permanent.
+// The fold was verified byte-identical to the patched output before the
+// legacy form was removed.
+func bakedSystemPrompt(a *Agent) string {
+	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message and completed long_job/long_py output, is a mandatory mid-turn steer: read and act on it during your current work. A [warning from long_job ...] or [warning from long_py ...] message means a background job you started has passed its warn_after_seconds and is still running; it is a decision point for you alone. Kill it with kill_job, leave it running and take its result when it finishes, or carry on with other work. It is the only warning that job will send, nothing escalates it, and deciding to keep waiting is a valid decision. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
 }
 
 // maxToolErrorOutput bounds the output carried back with a failing tool call. A five-second

@@ -12,7 +12,7 @@ import (
 func TestSaveAndLoadModelPolicy(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("SLBH_HOME", home)
-	for _, name := range []string{"SLBH_MODEL", "SLBH_EFFORT", "SLBH_SUBAGENT_MODEL", "SLBH_LEAF_MODEL", "SLBH_SUBAGENT_EFFORT", "SLBH_PROVIDER", "SLBH_ENDPOINT"} {
+	for _, name := range []string{"SLBH_MODEL", "SLBH_EFFORT", "SLBH_SUBAGENT_MODEL", "SLBH_LEAF_MODEL", "SLBH_SUBAGENT_EFFORT", "SLBH_ENDPOINT"} {
 		t.Setenv(name, "")
 	}
 	want := Config{

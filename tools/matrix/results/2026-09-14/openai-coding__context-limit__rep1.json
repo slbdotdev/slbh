@@ -1,0 +1,155 @@
+{
+  "probe": "context-limit",
+  "endpoint": "openai-coding",
+  "wire": "openai",
+  "model": "glm-5.3-flash",
+  "repetition": 1,
+  "started_utc": "2026-09-14T03:53:04Z",
+  "calls": [
+    {
+      "label": "150000 padding words",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "_elided": "body omitted; user turn is 150000 filler words plus the instruction",
+        "max_tokens": 32,
+        "model": "glm-5.3-flash"
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 14330,
+      "raw_sse_events": [
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"The\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" user\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" wants\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" me\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" to\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" reply\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" with\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" the\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" single\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" word\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \\\"\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"ok\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"\\\".\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}",
+        "data: {\"id\":\"20260914115305088ebd9df64f4b73\",\"created\":1789357986,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":225287,\"completion_tokens\":16,\"total_tokens\":225303,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"reasoning_tokens\":13}}}",
+        "data: [DONE]"
+      ],
+      "observations": {
+        "event_types": {
+          "[DONE]": 1,
+          "data": 15
+        },
+        "text_chars": 2,
+        "text_sample": "ok",
+        "reasoning_chars": 53,
+        "reasoning_sample": "The user wants me to reply with the single word \"ok\".",
+        "usage": {
+          "completion_tokens": 16,
+          "completion_tokens_details": {
+            "reasoning_tokens": 13
+          },
+          "prompt_tokens": 225287,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 225303
+        },
+        "stop_reason": "stop",
+        "terminal": "[DONE]"
+      }
+    },
+    {
+      "label": "220000 padding words",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "_elided": "body omitted; user turn is 220000 filler words plus the instruction",
+        "max_tokens": 32,
+        "model": "glm-5.3-flash"
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 23714,
+      "raw_sse_events": [
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"The\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" user\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" wants\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" me\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" to\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" respond\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" with\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" exactly\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" \\\"\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"ok\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"\\\"\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" -\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" nothing\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" else\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}",
+        "data: {\"id\":\"202609141153191ca7cf7e9c7448f5\",\"created\":1789358000,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":330086,\"completion_tokens\":18,\"total_tokens\":330104,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"reasoning_tokens\":15}}}",
+        "data: [DONE]"
+      ],
+      "observations": {
+        "event_types": {
+          "[DONE]": 1,
+          "data": 17
+        },
+        "text_chars": 2,
+        "text_sample": "ok",
+        "reasoning_chars": 62,
+        "reasoning_sample": "The user wants me to respond with exactly \"ok\" - nothing else.",
+        "usage": {
+          "completion_tokens": 18,
+          "completion_tokens_details": {
+            "reasoning_tokens": 15
+          },
+          "prompt_tokens": 330086,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 330104
+        },
+        "stop_reason": "stop",
+        "terminal": "[DONE]"
+      }
+    },
+    {
+      "label": "1100000 padding words",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "_elided": "body omitted; user turn is 1100000 filler words plus the instruction",
+        "max_tokens": 32,
+        "model": "glm-5.3-flash"
+      },
+      "http_status": 400,
+      "http_status_text": "400 Bad Request",
+      "duration_ms": 11272,
+      "raw_body": "{\"error\":{\"code\":\"1261\",\"message\":\"Prompt exceeds max length\"}}"
+    }
+  ],
+  "verdict": "recorded",
+  "notes": [
+    "150000 padding words -\u003e HTTP 200 usage={\"completion_tokens\":16,\"completion_tokens_details\":{\"reasoning_tokens\":13},\"prompt_tokens\":225287,\"prompt_tokens_details\":{\"cached_tokens\":0},\"total_tokens\":225303} body=",
+    "220000 padding words -\u003e HTTP 200 usage={\"completion_tokens\":18,\"completion_tokens_details\":{\"reasoning_tokens\":15},\"prompt_tokens\":330086,\"prompt_tokens_details\":{\"cached_tokens\":0},\"total_tokens\":330104} body=",
+    "1100000 padding words -\u003e HTTP 400 usage= body={\"error\":{\"code\":\"1261\",\"message\":\"Prompt exceeds max length\"}}"
+  ]
+}

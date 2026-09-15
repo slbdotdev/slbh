@@ -1,0 +1,165 @@
+{
+  "probe": "tool-single",
+  "endpoint": "anthropic",
+  "wire": "anthropic",
+  "model": "glm-5.3-flash",
+  "repetition": 1,
+  "started_utc": "2026-09-14T04:10:17Z",
+  "calls": [
+    {
+      "label": "single tool call",
+      "method": "POST",
+      "url": "https://api.z.ai/api/anthropic/v1/messages",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Anthropic-Version": "2023-06-01",
+        "Content-Type": "application/json",
+        "X-Api-Key": "REDACTED"
+      },
+      "request_body": {
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "content": [
+              {
+                "text": "What is the weather in Denver in celsius? Call the tool; do not answer in prose.",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash",
+        "stream": true,
+        "system": [
+          {
+            "text": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "type": "text"
+          }
+        ],
+        "temperature": 0,
+        "tools": [
+          {
+            "description": "Return the current weather for one city. Call once per city.",
+            "input_schema": {
+              "additionalProperties": false,
+              "properties": {
+                "city": {
+                  "description": "City name",
+                  "type": "string"
+                },
+                "unit": {
+                  "enum": [
+                    "c",
+                    "f"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city",
+                "unit"
+              ],
+              "type": "object"
+            },
+            "name": "get_weather"
+          },
+          {
+            "description": "Return the local time for one city.",
+            "input_schema": {
+              "additionalProperties": false,
+              "properties": {
+                "city": {
+                  "description": "City name",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ],
+              "type": "object"
+            },
+            "name": "get_time"
+          }
+        ]
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 5094,
+      "raw_sse_events": [
+        "event: message_start",
+        "data: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_20260914121017df7da17ab3dc4977\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"glm-5.3-flash\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 0, \"output_tokens\": 0}}}",
+        "event: ping",
+        "data: {\"type\": \"ping\"}",
+        "event: content_block_start",
+        "data: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"tool_use\", \"id\": \"call_231f14c4fe2341bb9686da27\", \"name\": \"get_weather\", \"input\": {}}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"{\\\"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"city\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"\\\":\\\"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"Denver\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"\\\"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \",\\\"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"unit\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"\\\":\\\"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"c\\\"\"}}",
+        "event: content_block_delta",
+        "data: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"}\"}}",
+        "event: content_block_stop",
+        "data: {\"type\": \"content_block_stop\", \"index\": 0}",
+        "event: message_delta",
+        "data: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"tool_use\", \"stop_sequence\": null}, \"usage\": {\"input_tokens\": 298, \"output_tokens\": 18, \"cache_read_input_tokens\": 0, \"server_tool_use\": {\"web_search_requests\": 0}, \"service_tier\": \"standard\"}}",
+        "event: message_stop",
+        "data: {\"type\": \"message_stop\"}"
+      ],
+      "observations": {
+        "event_types": {
+          "content_block_delta": 10,
+          "content_block_start": 1,
+          "content_block_stop": 1,
+          "message_delta": 1,
+          "message_start": 1,
+          "message_stop": 1,
+          "ping": 1
+        },
+        "text_chars": 0,
+        "text_sample": "",
+        "reasoning_chars": 0,
+        "reasoning_sample": "",
+        "tool_calls": [
+          {
+            "index": 0,
+            "id": "call_231f14c4fe2341bb9686da27",
+            "name": "get_weather",
+            "accumulated_arguments": "{\"city\":\"Denver\",\"unit\":\"c\"}",
+            "arguments_parse_ok": true
+          }
+        ],
+        "usage": {
+          "cache_read_input_tokens": 0,
+          "input_tokens": 298,
+          "output_tokens": 18,
+          "server_tool_use": {
+            "web_search_requests": 0
+          },
+          "service_tier": "standard"
+        },
+        "stop_reason": "tool_use",
+        "terminal": "message_stop"
+      }
+    }
+  ],
+  "verdict": "pass",
+  "notes": [
+    "stop_reason=tool_use tool_calls=1",
+    "index=0 id=\"call_231f14c4fe2341bb9686da27\" name=\"get_weather\" args={\"city\":\"Denver\",\"unit\":\"c\"} parse_ok=true"
+  ]
+}

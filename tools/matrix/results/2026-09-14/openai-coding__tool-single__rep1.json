@@ -1,0 +1,164 @@
+{
+  "probe": "tool-single",
+  "endpoint": "openai-coding",
+  "wire": "openai",
+  "model": "glm-5.3-flash",
+  "repetition": 1,
+  "started_utc": "2026-09-14T03:51:13Z",
+  "calls": [
+    {
+      "label": "single tool call",
+      "method": "POST",
+      "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "headers_redacted": {
+        "Accept": "text/event-stream",
+        "Authorization": "REDACTED",
+        "Content-Type": "application/json"
+      },
+      "request_body": {
+        "max_tokens": 2048,
+        "messages": [
+          {
+            "content": "You are a terse capability-probe target. Answer exactly what is asked, with no preamble and no closing remarks.",
+            "role": "system"
+          },
+          {
+            "content": "What is the weather in Denver in celsius? Call the tool; do not answer in prose.",
+            "role": "user"
+          }
+        ],
+        "model": "glm-5.3-flash",
+        "prompt_cache_key": "slbh-matrix-tools",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "temperature": 0,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Return the current weather for one city. Call once per city.",
+              "name": "get_weather",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {
+                  "city": {
+                    "description": "City name",
+                    "type": "string"
+                  },
+                  "unit": {
+                    "enum": [
+                      "c",
+                      "f"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city",
+                  "unit"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          },
+          {
+            "function": {
+              "description": "Return the local time for one city.",
+              "name": "get_time",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {
+                  "city": {
+                    "description": "City name",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "http_status": 200,
+      "http_status_text": "200 OK",
+      "duration_ms": 5068,
+      "raw_sse_events": [
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"The\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" user\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" asks\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" for\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" weather\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" in\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" Denver\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" in\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" Celsius\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" Call\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" the\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" tool\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" The\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" instructions\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" say\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" don\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"'t\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" answer\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" in\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" prose\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\",\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" just\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" call\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" the\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" tool\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\".\"}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"call_dcf655f8362e4db5a5415884\",\"index\":0,\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Denver\\\",\\\"unit\\\":\\\"c\\\"}\"}}]}}]}",
+        "data: {\"id\":\"20260914115113ee0e8e89ef374e07\",\"created\":1789357873,\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"tool_calls\",\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":298,\"completion_tokens\":46,\"total_tokens\":344,\"prompt_tokens_details\":{\"cached_tokens\":256},\"completion_tokens_details\":{\"reasoning_tokens\":28}}}",
+        "data: [DONE]"
+      ],
+      "observations": {
+        "event_types": {
+          "[DONE]": 1,
+          "data": 30
+        },
+        "text_chars": 0,
+        "text_sample": "",
+        "reasoning_chars": 126,
+        "reasoning_sample": "The user asks for weather in Denver in Celsius. Call the tool. The instructions say don't answer in prose, just call the tool.",
+        "tool_calls": [
+          {
+            "index": 0,
+            "id": "call_dcf655f8362e4db5a5415884",
+            "name": "get_weather",
+            "accumulated_arguments": "{\"city\":\"Denver\",\"unit\":\"c\"}",
+            "arguments_parse_ok": true
+          }
+        ],
+        "usage": {
+          "completion_tokens": 46,
+          "completion_tokens_details": {
+            "reasoning_tokens": 28
+          },
+          "prompt_tokens": 298,
+          "prompt_tokens_details": {
+            "cached_tokens": 256
+          },
+          "total_tokens": 344
+        },
+        "stop_reason": "tool_calls",
+        "terminal": "[DONE]"
+      }
+    }
+  ],
+  "verdict": "pass",
+  "notes": [
+    "stop_reason=tool_calls tool_calls=1",
+    "index=0 id=\"call_dcf655f8362e4db5a5415884\" name=\"get_weather\" args={\"city\":\"Denver\",\"unit\":\"c\"} parse_ok=true"
+  ]
+}

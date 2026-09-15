@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/slbdotdev/slbh/internal/config"
+	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/logx"
 	"github.com/slbdotdev/slbh/internal/provider"
 )
@@ -598,4 +599,137 @@ func TestHTTPMessageWaitsForResponseCompletionWithinSameTurn(t *testing.T) {
 	if completed != 1 {
 		t.Fatalf("steering crossed a turn boundary: %d completed turns", completed)
 	}
+}
+
+// TestLongJobWarningWakesIdleAuthoringAgent is the routing contract for
+// warn_after_seconds.
+//
+// The timer exists for exactly one party: the agent that started the job. That
+// agent is usually idle when it fires, because starting a long job and ending
+// the turn is the documented way to use one — the alternative, blocking the
+// turn on the job, is what long_job exists to avoid. So the warning has to
+// reach the agent's inbox and wake it, by the same path a completion takes.
+//
+// Before the fix the timer's handler only emitted a job_warning event to the
+// TUI, so the one party the timer exists to inform never heard it, and this
+// test failed at the third boundary wait below: nothing ever woke the agent.
+func TestLongJobWarningWakesIdleAuthoringAgent(t *testing.T) {
+	r, p := messagingRuntime(t)
+	a := r.Seat()
+	a.SetModel("active")
+	a.WorkDir = t.TempDir()
+	if err := a.Send("start background work"); err != nil {
+		t.Fatal(err)
+	}
+	first := p.next(t)
+	// The job must outlive the whole test: what is under test is the warning
+	// for a job that has NOT finished, so its completion must never be the
+	// thing that wakes the agent.
+	script := "sleep 30"
+	if runtime.GOOS == "windows" {
+		script = "ping 127.0.0.1 -n 30 > nul"
+	}
+	args, err := json.Marshal(map[string]any{"script": script, "warn_after_seconds": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.finish(t, toolEvent(0, "job-call", "long_job", string(args)))
+	second := p.next(t)
+	jobID := ""
+	for _, message := range second.request.Messages {
+		if message.Role == "tool" && message.Name == "long_job" {
+			jobID = message.Content
+			break
+		}
+	}
+	if jobID == "" {
+		t.Fatalf("continuation did not retain the long_job id: %#v", second.request.Messages)
+	}
+	started, ok := r.Jobs().Get(jobID)
+	if !ok {
+		t.Fatalf("long_job %q was not registered", jobID)
+	}
+	t.Cleanup(func() { _ = started.Kill() })
+
+	// End the turn while the job runs. The agent goes idle, which is precisely
+	// the state the warning has to break.
+	second.finish(t, textEvent("job started; ending the turn"))
+	waitAgentTurn(t, r, a.ID)
+	if status := a.Snapshot().Status; status != "idle" {
+		t.Fatalf("agent status = %q, want idle before the warning fires", status)
+	}
+	if status := started.Snapshot().Status; status != job.Running {
+		t.Fatalf("job status = %q, want the job still running", status)
+	}
+
+	// The warning wakes the idle agent: a new inference, carrying the warning
+	// as a user message in the agent's own context.
+	third := p.next(t)
+	warning := ""
+	for _, message := range third.request.Messages {
+		if message.Role == "user" && strings.Contains(message.Content, "[warning from long_job "+jobID+"]") {
+			warning = message.Content
+			break
+		}
+	}
+	if warning == "" {
+		t.Fatalf("the warning never reached the agent's context: %#v", third.request.Messages)
+	}
+	if !strings.Contains(warning, "still running") {
+		t.Fatalf("warning does not say the job is still running: %q", warning)
+	}
+	if !strings.Contains(warning, "kill_job") {
+		t.Fatalf("warning does not name the agent's options: %q", warning)
+	}
+	if status := started.Snapshot().Status; status != job.Running {
+		t.Fatalf("job status = %q; the warning must describe a job that is still running", status)
+	}
+
+	third.finish(t, textEvent("noted; leaving the job to run"))
+	waitAgentTurn(t, r, a.ID)
+
+	// One warning, the agent's call, done. Nothing reminds it again and nothing
+	// escalates, so no further inference may start on the job's account.
+	select {
+	case again := <-p.calls:
+		t.Fatalf("the warning recurred or escalated: %#v", again.request.Messages)
+	case <-time.After(time.Second):
+	}
+}
+
+// TestJobWarningNamesTheToolThatStartedTheJob covers long_py.
+//
+// long_py and long_job share the whole warning path. The specs differ only in
+// the command the job runs and the ToolName they carry (jobSpec vs
+// pythonJobSpec), and the warning reads ToolName and nothing else, so this
+// drives the routing with a long_py snapshot rather than spawning a Python
+// interpreter that a development checkout may not have.
+func TestJobWarningNamesTheToolThatStartedTheJob(t *testing.T) {
+	r, p := messagingRuntime(t)
+	a := r.Seat()
+	a.SetModel("active")
+	r.deliverJobWarning(job.Snapshot{
+		ID:        "job-long-py",
+		Author:    a.ID,
+		Script:    "print('work')",
+		ToolName:  "long_py",
+		Status:    job.Running,
+		WarnAfter: 3 * time.Second,
+	})
+	call := p.next(t)
+	warning := ""
+	for _, message := range call.request.Messages {
+		if message.Role == "user" && strings.Contains(message.Content, "[warning from long_py job-long-py]") {
+			warning = message.Content
+			break
+		}
+	}
+	if warning == "" {
+		t.Fatalf("a long_py warning did not reach the agent's context: %#v", call.request.Messages)
+	}
+	if !strings.Contains(warning, "long_py job-long-py is still running after 3s") {
+		t.Fatalf("warning does not name the tool, the job and the interval: %q", warning)
+	}
+	call.finish(t, textEvent("noted"))
+	waitAgentTurn(t, r, a.ID)
 }

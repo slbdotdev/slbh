@@ -64,6 +64,29 @@ func (l *JSONL) Append(entry Entry) error {
 	if err != nil {
 		return err
 	}
+	// Read caps one line at maxRecordBytes, and a producer is not bound by
+	// that: a job retains 4 MiB of stdout and 4 MiB of stderr and both go into
+	// a single job_result, which JSON escaping can grow further. Trimming here
+	// rather than writing an oversized line keeps the invariant that anything
+	// Append writes, Read can read — a record that is durable but unreadable is
+	// the one outcome this format exists to prevent.
+	if len(b) > maxRecordBytes {
+		entry.Text = truncateText(entry.Text, len(b)-maxRecordBytes)
+		if b, err = json.Marshal(entry); err != nil {
+			return err
+		}
+	}
+	// Trimming Text does nothing when the bulk is in Metadata, and an
+	// inference_request carries the whole marshalled conversation there with
+	// Text empty. Without this second pass the record still went over the cap
+	// and made the entire file unreadable — the same "durable but unopenable"
+	// outcome the trim above exists to prevent, through the neighbouring field.
+	if len(b) > maxRecordBytes {
+		entry.Metadata = elideLargeMetadata(entry.Metadata)
+		if b, err = json.Marshal(entry); err != nil {
+			return err
+		}
+	}
 	if _, err = l.file.Write(append(b, '\n')); err != nil {
 		return err
 	}
@@ -96,14 +119,66 @@ func Read(path string) ([]Entry, error) {
 	}
 	defer f.Close()
 	s := bufio.NewScanner(f)
-	s.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	s.Buffer(make([]byte, 64*1024), maxRecordBytes)
 	var out []Entry
 	for s.Scan() {
 		var e Entry
 		if err := json.Unmarshal(s.Bytes(), &e); err != nil {
+			// A crash or a power loss between write and flush leaves a partial
+			// final line. Discarding every valid record before it would lose a
+			// whole history to the one failure this format exists to survive,
+			// so a torn tail costs its own record and nothing else. A malformed
+			// line with anything after it is real corruption and still fails.
+			if !s.Scan() {
+				if scanErr := s.Err(); scanErr != nil {
+					return nil, scanErr
+				}
+				return out, nil
+			}
 			return nil, fmt.Errorf("decode transcript: %w", err)
 		}
 		out = append(out, e)
 	}
 	return out, s.Err()
+}
+
+// maxRecordBytes bounds one JSONL line. Append's trim and Read's scanner use
+// the same figure, so neither can produce a record the other refuses.
+const maxRecordBytes = 16 * 1024 * 1024
+
+// elideLargeMetadata replaces the values that can actually blow a record —
+// marshalled payloads — with a marker, keeping the small scalars beside them
+// (round, the sha256 digests) that say what the record was. It is deliberately
+// not a trim: metadata is structured, and half a JSON document is not more
+// useful than a note saying how much was dropped.
+func elideLargeMetadata(meta map[string]any) map[string]any {
+	if len(meta) == 0 {
+		return meta
+	}
+	const keep = 4096
+	out := make(map[string]any, len(meta))
+	for key, value := range meta {
+		encoded, err := json.Marshal(value)
+		if err != nil || len(encoded) <= keep {
+			out[key] = value
+			continue
+		}
+		out[key] = fmt.Sprintf("[%d bytes elided to fit one transcript record]", len(encoded))
+	}
+	return out
+}
+
+// truncateText removes at least overflow bytes from the middle of text and says
+// so in place of what it removed, keeping the head and the tail — the two parts
+// that identify what the record was.
+func truncateText(text string, overflow int) string {
+	cut := overflow + 256
+	if cut >= len(text) {
+		cut = len(text)
+	}
+	keep := len(text) - cut
+	head := keep / 2
+	return text[:head] +
+		fmt.Sprintf("\n... [%d bytes elided to fit one transcript record] ...\n", cut) +
+		text[len(text)-(keep-head):]
 }

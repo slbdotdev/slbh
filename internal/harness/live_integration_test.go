@@ -57,18 +57,41 @@ func (t *capturedTransport) posts() [][]byte {
 	return posts
 }
 
+// liveProvider wraps the resolved provider by interface rather than by
+// concrete type. ForModel returns provider.Provider since phase 2, and the
+// three capabilities forwarded below are each an optional interface, so each
+// forwarder asserts the one it needs.
 type liveProvider struct {
-	inner *provider.HTTPProvider
+	inner provider.Provider
 	mu    sync.Mutex
 	usage []map[string]any
 }
 
 func (p *liveProvider) ContextWindow(ctx context.Context, model string) (int, error) {
-	return p.inner.ContextWindow(ctx, model)
+	discoverer, ok := p.inner.(provider.ContextWindowProvider)
+	if !ok {
+		return 0, fmt.Errorf("wrapped provider does not discover context windows")
+	}
+	return discoverer.ContextWindow(ctx, model)
+}
+
+// PinnedContextWindow forwards the wrapped route's policy. A wrapper that
+// swallowed it would silently put the live test back on the 128,000-token
+// fallback while the real path used the pin.
+func (p *liveProvider) PinnedContextWindow() (int, bool) {
+	routed, ok := p.inner.(provider.RoutePolicyProvider)
+	if !ok {
+		return 0, false
+	}
+	return routed.PinnedContextWindow()
 }
 
 func (p *liveProvider) RequestPayload(request provider.Request) ([]byte, error) {
-	return p.inner.RequestPayload(request)
+	encoder, ok := p.inner.(provider.RequestPayloadProvider)
+	if !ok {
+		return nil, fmt.Errorf("wrapped provider does not expose its request payload")
+	}
+	return encoder.RequestPayload(request)
 }
 
 func (p *liveProvider) Stream(ctx context.Context, request provider.Request, sink provider.StreamSink) error {
@@ -111,12 +134,25 @@ func TestLiveTranscriptReplayAndCache(t *testing.T) {
 	if effort := os.Getenv("SLBH_LIVE_TEST_EFFORT"); effort != "" {
 		cfg.SeatEffort = effort
 	}
-	inner, err := provider.ForModel(cfg.SeatModel, cfg.Endpoint)
+	// The live test routes through the real policy, because routing through
+	// anything else would not be testing the production path. On a host with
+	// no policy every route refuses, so say that plainly rather than letting
+	// it surface as an opaque routing error.
+	if cfg.PolicySource.Kind == config.PolicyNone {
+		t.Fatalf("no routing policy is in force (%s); this test routes through the real policy", cfg.PolicySource.Describe())
+	}
+	inner, err := provider.ForModel(cfg.SeatModel, cfg.Endpoint, cfg.EndpointExplicit, cfg.Policy)
 	if err != nil {
 		t.Fatal(err)
 	}
 	capture := &capturedTransport{base: http.DefaultTransport}
-	inner.Client = &http.Client{Transport: capture}
+	// The transport is replaced through the exported override rather than by
+	// reaching a field: ForModel hands back the interface now.
+	override, ok := inner.(provider.TransportOverride)
+	if !ok {
+		t.Fatalf("resolved provider %T cannot have its transport replaced", inner)
+	}
+	override.SetHTTPClient(&http.Client{Transport: capture})
 	live := &liveProvider{inner: inner}
 	runtime, err := New(cfg, Options{Provider: func(string) (provider.Provider, error) { return live, nil }})
 	if err != nil {

@@ -60,6 +60,134 @@ including when the same model is also listed by OpenRouter. A custom
 OpenAI-compatible endpoint uses `OPENROUTER_API_KEY` unless a native route
 wins.
 
+**Routing fails closed.** A model that belongs to a native route whose key is
+absent is refused, naming the missing variable; it is not quietly redirected to
+OpenRouter, because a model reachable on a plan never runs through OpenRouter.
+Setting `SLBH_ENDPOINT` yourself is the deliberate override and is honoured even
+for a native model — the endpoint's provenance is what routing consults, so the
+same URL arriving as the built-in default overrides nothing. A model with no
+native route and no `OPENROUTER_API_KEY` is refused when the route is resolved
+rather than at its first request. The local route needs no credential and keeps
+working with every provider key unset.
+
+Every spelling that addresses one route resolves to a single authoritative route
+key, so the routing table, the context pin and the per-route policy cannot
+disagree about which route a request took. The `[1m]` model spellings are not
+aliases of the plain slug and are never folded into it.
+
+## Routing policy
+
+Routing is governed by a policy document, and **a route with no policy entry
+refuses**. What is compiled into the binary is the requirement that a policy
+exist, and the mapping from a route to the environment variable holding its
+credential — never the policy itself, which has to change without a rebuild.
+
+The policy resolves in a fixed order:
+
+1. `$SLBH_HOME/policy.json`, if present and valid. This file is wholly managed
+   — on the fleet, Ansible deploys it — and slbh only ever reads it.
+2. otherwise a `local_policy` block in the app-owned `$SLBH_HOME/config.json`,
+   which `/models` can author.
+3. otherwise slbh refuses to route.
+
+Provenance is the filename, which is what lets a managed value beat a local one
+without the application ever opening the managed file. On a host nobody manages,
+open `/models` and press `p`: slbh authors a working policy for the models you
+have selected, writes it into `config.json`, and routes on it from the next
+request. On a managed host that write still happens and is still inert, because
+the managed file wins — `/models` says so rather than leaving you to wonder why
+an edit changed nothing.
+
+Per route the policy carries the endpoint, the wire protocol, a separate
+catalog endpoint where one cannot be derived from the other, a context window
+where the provider's catalog cannot report one, an effort descriptor, and — for
+an OpenRouter route — the routing posture (`zdr`, `data_collection`, `sort`,
+`ignore`, `max_price`). No credential appears in either file.
+
+That posture is sent as OpenRouter's `provider` routing object on the
+OpenRouter route and on no other, because `zdr` and `data_collection` are
+OpenRouter concepts that say nothing about a plan endpoint or a server on your
+own network. **An OpenRouter route whose policy states no posture refuses**:
+routing there without it would pick an upstream on price and availability
+alone, and a request carrying no `provider` object looks exactly like a normal
+one, so nothing downstream would ever report the absence. `zdr` is required to
+be *stated* rather than required to be true — a deliberate `false` is
+expressible, an omission is not, because the two are indistinguishable once
+decoded.
+
+The one exception is an explicit `SLBH_ENDPOINT` override of a native route.
+That route's policy entry describes its own endpoint and says nothing about
+wherever you have pointed it, so no posture is demanded and none is invented.
+An override is stepping outside the managed path deliberately, and it is the
+one hole in this guarantee that you sign for by hand.
+
+### Wires
+
+A route names the protocol it speaks, and slbh implements two.
+
+- `openai-chat` — the OpenAI-shaped chat-completions protocol: OpenRouter,
+  DeepSeek, the local Ollama server, and Z.ai's coding endpoint. Effort is
+  `reasoning_effort`.
+- `anthropic-messages` — the Anthropic-shaped Messages protocol, which the
+  Z.ai coding plan also exposes. Effort is `output_config.effort`, sent with
+  `x-api-key` and `anthropic-version`.
+
+The plan route runs on `anthropic-messages` because that is the only route on
+which an effort setting is honoured. On the coding endpoint the effort enum is
+applied but is not monotone at the top — `xhigh` and `max` both produce less
+deliberation than `high` — while `output_config.effort` produces an ordered
+ladder. On that same Anthropic endpoint `thinking.budget_tokens` and a bare
+`reasoning_effort` are both accepted with HTTP 200 and then discarded, so
+neither is representable in the policy schema at all.
+
+Everything a wire changes is normalized before it leaves the provider package,
+so nothing downstream knows or cares which one served a request. Three of those
+normalizations are worth naming because the naive version of each is silently
+wrong:
+
+- **Usage.** `input_tokens` on the Messages wire is net of cache where
+  `prompt_tokens` is gross, so `prompt_tokens` is reported as
+  `input_tokens + cache_read_input_tokens`. Mapping it straight across would
+  have told the harness a 5,550-token context was 46 tokens, and automatic
+  compaction would never have fired on a cached conversation while everything
+  still appeared to run. `reasoning_tokens` is *absent* on that wire rather
+  than zero, because the wire reports no equivalent and a synthesized zero
+  would hide exactly what the record exists to reveal.
+- **Tool indexes.** The Messages wire's index is a content-block ordinal, so
+  tools begin at 1 behind the thinking block. They are renumbered to a dense
+  ordinal from 0, and nothing downstream may treat the wire index as an array
+  position.
+- **Tool arguments** arrive fragmented on one wire and whole on the other.
+  Both are handled by accumulation, so no test asserts one chunk per call.
+
+Errors are classified by status class over three envelopes — the coding wire's
+`{"error":{...}}`, the Messages wire's `{"type":"error",...,"request_id"}`, and
+an HTTP 422 FastAPI `{"detail":[...]}` for a schema violation on that same
+wire. A 4xx is not retried and a 5xx is. A 429 is inside the 4xx rule
+deliberately: a quota refusal should surface at once rather than be spent three
+times over. `request_id` is preserved in the error text, since it is the only
+handle the provider gives for a support question.
+
+An in-stream `error` frame is classified the same way. The Messages dialect can
+raise one after the stream has already opened — observed live under overload on
+2026-09-14 — and such a frame carries no status of its own, so its `type` is
+mapped onto the status the same condition carries as a pre-stream refusal:
+`overloaded_error` and `api_error` are retried, `rate_limit_error` is not, and
+an unrecognised type defaults to the retryable side, which is what an error
+carrying no classification at all already gets.
+
+Two refusals are deliberate and worth knowing about:
+
+- **An effort level the route cannot express refuses the request**, naming the
+  route, the level asked for and what the route supports. It is never dropped
+  and never walked down to the nearest supported level, because either would
+  let a benchmark record results at an effort nobody configured.
+- **A route configured for a wire this build does not implement refuses**,
+  naming the wire. A policy is deployed by one mechanism and a binary by
+  another, so the two can arrive in either order; refusing is the only safe
+  reading, since sending one wire's conversation down another's encoder is
+  something these endpoints will answer 200 to.
+
 These environment variables are read at startup:
 
 | Variable | Default | Purpose |
@@ -81,8 +209,17 @@ within the last year. Model and effort settings from the environment take
 precedence over their persisted counterparts.
 
 For native provider agents, the harness estimates context usage before a
-request and compacts history at 70% of the active model's discovered context
-window. If model metadata is unavailable, it uses a 128,000-token fallback.
+request and compacts history at 70% of the active model's context window. That
+window is resolved in three steps: a pinned window for the route if it has one,
+otherwise the model's discovered context length, otherwise a 128,000-token
+fallback. A route is pinned when its provider catalog cannot report a length —
+`zai/glm-5.3-flash` is pinned at 1,000,000 tokens, measured, because neither
+Z.ai catalog publishes one and the fallback understates it eightfold. A pin
+therefore beats discovery as well as the fallback. The pin comes from the
+routing policy above, and from the resolved provider instance rather than from
+a lookup by model name: only the instance knows which endpoint the request will
+really reach, so a name-keyed pin could size the window for a route this
+request is not taking.
 Automatic compaction keeps the most recent 24 messages and writes a durable
 marker; `/compact` does the same on demand. Requests stream responses and
 include tool definitions, reasoning options where supported, usage, and a
@@ -119,7 +256,7 @@ Input history is stored as JSON lines in `$SLBH_HOME/history`, normally
 | --- | --- |
 | `/exit`, `/quit`, `/q` | Stop agents and jobs, close transcripts, and exit. |
 | `/clear` | Clear the selected agent and start a new session. |
-| `/models` | Refresh provider catalogs and open the model menu. |
+| `/models` | Refresh provider catalogs and open the model menu. Shows which routing policy is in force and from where; `p` authors a local one. |
 | `/model NAME` | Approve and select a model for the seat agent. |
 | `/effort LEVEL` | Change the seat agent's effort. |
 | `/agents` | Record the current agent tree as a status event. |
@@ -207,6 +344,23 @@ and `long_py` provide the same two shapes through the Ansible-managed
 scientific Python environment, with the system Python fallback retained for
 unmanaged development checkouts. Jobs and agent activity are recorded in the
 active session transcript.
+
+A background job has exactly one timer, `warn_after_seconds`, and it warns
+exactly one party: the agent that started the job. When it elapses with the job
+still running, that agent receives a message by the same mandatory mid-turn
+path as every other message, which wakes it if it has gone idle. The agent then
+decides — kill the job, keep waiting for its result, or get on with other work
+— and there is deliberately no fallback behind that decision. The warning is
+never repeated, nothing escalates it, and no turn blocks on an outstanding job.
+The human operator is not the audience: the operator does not create these jobs
+and never sees the ones a subagent runs, so telling a person is the control
+agent's duty rather than the harness's. The TUI still shows a `job_warning`
+event, as a record of the firing and not as the delivery.
+
+A running job's output is not readable today: the capture buffers are copied in
+when the process exits, so `read_job` answers a finished job and nothing else.
+That is a known limitation, recorded separately; the warning message says so
+rather than sending an agent after output it cannot have.
 
 ## Headless
 
