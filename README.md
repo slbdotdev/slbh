@@ -345,6 +345,23 @@ scientific Python environment, with the system Python fallback retained for
 unmanaged development checkouts. Jobs and agent activity are recorded in the
 active session transcript.
 
+A background job has exactly one timer, `warn_after_seconds`, and it warns
+exactly one party: the agent that started the job. When it elapses with the job
+still running, that agent receives a message by the same mandatory mid-turn
+path as every other message, which wakes it if it has gone idle. The agent then
+decides — kill the job, keep waiting for its result, or get on with other work
+— and there is deliberately no fallback behind that decision. The warning is
+never repeated, nothing escalates it, and no turn blocks on an outstanding job.
+The human operator is not the audience: the operator does not create these jobs
+and never sees the ones a subagent runs, so telling a person is the control
+agent's duty rather than the harness's. The TUI still shows a `job_warning`
+event, as a record of the firing and not as the delivery.
+
+A running job's output is not readable today: the capture buffers are copied in
+when the process exits, so `read_job` answers a finished job and nothing else.
+That is a known limitation, recorded separately; the warning message says so
+rather than sending an agent after output it cannot have.
+
 ## Headless
 
 `slbh` with a prompt runs one turn without the TUI and exits. It is the same runtime, the

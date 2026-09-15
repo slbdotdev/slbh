@@ -124,7 +124,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	r.jobs = job.NewManagerWithLogger(r.sessionLogger)
 	r.jobs.SetWarningHandler(func(snapshot job.Snapshot) {
-		r.emit(Event{AgentID: snapshot.Author, Kind: "job_warning", Text: "job is still running", Metadata: map[string]any{"job": snapshot.ID, "warn_after": snapshot.WarnAfter.String()}})
+		r.deliverJobWarning(snapshot)
 	})
 	r.jobs.SetCompletionHandler(func(snapshot job.Snapshot, stdout, stderr string) {
 		r.deliverJobResult(snapshot, stdout, stderr)
@@ -654,6 +654,34 @@ func (r *Runtime) recordInferenceRequest(agent *Agent, round int, req provider.R
 // fabricating a provider turn.
 func (r *Runtime) EmitStatus(kind, text string) {
 	r.emit(Event{Kind: kind, Text: text})
+}
+
+// deliverJobWarning routes a job's single warn_after_seconds warning.
+//
+// The audience is the agent that started the job and nobody else. The human
+// operator does not create these jobs, never sees the ones a subagent runs,
+// and telling the human is the control agent's duty rather than the job
+// manager's — so the warning goes into the authoring agent's inbox by the same
+// path a completion takes, and wakes it if it has gone idle. It used to reach
+// the TUI event stream alone, which meant the one party the timer exists to
+// inform was the one party that never heard it.
+//
+// The TUI event is still emitted, and first, so the warning is recorded in the
+// transcript and shown even when the agent has since been stopped. It is a
+// record, not the delivery. Nothing is built on it.
+//
+// The snapshot arrives captured under the job's own lock and is passed through
+// unchanged: what the agent is told and what the manager observed are the same
+// reading.
+func (r *Runtime) deliverJobWarning(snapshot job.Snapshot) {
+	r.emit(Event{AgentID: snapshot.Author, Kind: "job_warning", Text: "job is still running", Metadata: map[string]any{"job": snapshot.ID, "warn_after": snapshot.WarnAfter.String()}})
+	agent, ok := r.Agent(snapshot.Author)
+	if !ok {
+		return
+	}
+	if err := agent.receiveJobWarning(snapshot); err != nil {
+		r.emit(Event{AgentID: snapshot.Author, AgentTitle: agent.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"job": snapshot.ID}})
+	}
 }
 
 func (r *Runtime) deliverJobResult(snapshot job.Snapshot, stdout, stderr string) {

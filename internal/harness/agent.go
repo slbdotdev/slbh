@@ -532,6 +532,49 @@ func (a *Agent) receiveJobResult(snapshot job.Snapshot, stdout, stderr string) e
 	})
 }
 
+// receiveJobWarning puts a job's one warning into the agent's own context.
+//
+// It is deliberately the same mechanism as receiveJobResult: deliver() appends
+// under the agent mutex and pokes the buffered wake channel, so the message is
+// consumed at the next API/tool call boundary of a busy agent and wakes an idle
+// one immediately. A warning that only reached the event stream reached nobody
+// who could act on it.
+//
+// The message is a decision point and says so. It names the only three things
+// the agent can do, and promises nothing about output: a running job's capture
+// buffers are not readable, so the text tells the agent output arrives when the
+// job finishes rather than inviting a read_job call that would come back empty.
+func (a *Agent) receiveJobWarning(snapshot job.Snapshot) error {
+	toolName := snapshot.ToolName
+	if toolName == "" {
+		toolName = "long_job"
+	}
+	// Same reason as a job result: the script is the agent's own text and can
+	// name a credential, and from history it would be marshalled into the next
+	// request payload.
+	text := a.runtime.redactSecrets(formatJobWarning(snapshot, toolName))
+	return a.deliver(agentMessage{
+		prompt:   fmt.Sprintf("[warning from %s %s]\n%s", toolName, snapshot.ID, text),
+		kind:     "job_warning",
+		text:     text,
+		metadata: map[string]any{"job": snapshot.ID, "tool": toolName, "status": string(snapshot.Status), "warn_after": snapshot.WarnAfter.String()},
+	})
+}
+
+// maxJobWarningScript bounds the script echoed back in a warning. It is there
+// to identify which job this is, not to reproduce the job; an agent that wrote
+// a long here-doc does not need it quoted back at the cost of its context.
+const maxJobWarningScript = 400
+
+func formatJobWarning(snapshot job.Snapshot, toolName string) string {
+	script := snapshot.Script
+	if len(script) > maxJobWarningScript {
+		script = script[:maxJobWarningScript] + "\n[script truncated]"
+	}
+	return fmt.Sprintf("%s %s is still running after %s.\nscript:\n%s\n\nThis is the only warning you get for this job: nothing will send it again and nothing will act for you. Decide now, and you may decide to do nothing. Kill it with kill_job if it is stuck or no longer worth waiting for; otherwise leave it and its captured output will be delivered to you automatically when it finishes, or carry on with other work in the meantime. Its output cannot be read while it is running.",
+		toolName, snapshot.ID, snapshot.WarnAfter, script)
+}
+
 func formatJobResult(snapshot job.Snapshot, stdout, stderr string) string {
 	return fmt.Sprintf("status: %s\nexit_code: %d\nstdout:\n%s\nstderr:\n%s", snapshot.Status, snapshot.ExitCode, stdout, stderr)
 }
@@ -704,7 +747,7 @@ func systemPrompt(a *Agent) string {
 // The fold was verified byte-identical to the patched output before the
 // legacy form was removed.
 func bakedSystemPrompt(a *Agent) string {
-	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message and completed long_job/long_py output, is a mandatory mid-turn steer: read and act on it during your current work. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
+	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message and completed long_job/long_py output, is a mandatory mid-turn steer: read and act on it during your current work. A [warning from long_job ...] or [warning from long_py ...] message means a background job you started has passed its warn_after_seconds and is still running; it is a decision point for you alone. Kill it with kill_job, leave it running and take its result when it finishes, or carry on with other work. It is the only warning that job will send, nothing escalates it, and deciding to keep waiting is a valid decision. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
 }
 
 // maxToolErrorOutput bounds the output carried back with a failing tool call. A five-second

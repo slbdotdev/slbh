@@ -22,11 +22,22 @@ const (
 )
 
 type Spec struct {
-	Author      string
-	Script      string
-	Command     []string
-	ToolName    string
-	Dir         string
+	Author   string
+	Script   string
+	Command  []string
+	ToolName string
+	Dir      string
+	// WarnAfter is the one timer a job has, and it warns exactly one party:
+	// the agent named in Author, the agent that started the job. When it
+	// elapses with the job still running, the manager hands the warning
+	// handler a snapshot taken while the job was running, and the runtime
+	// delivers it into that agent's inbox, waking it if it has gone idle.
+	//
+	// What the agent does then is the agent's own decision: kill the job, keep
+	// waiting for its result, or get on with other work. There is deliberately
+	// no fallback behind that decision. The warning fires once and is never
+	// repeated, nothing escalates it, no second timer follows it, and nothing
+	// the job manager owns blocks on the outcome. Zero disables the timer.
 	WarnAfter   time.Duration
 	Environment []string
 }
@@ -42,7 +53,9 @@ type Snapshot struct {
 	ExitCode    int
 	StdoutBytes int
 	StderrBytes int
-	WarnAfter   time.Duration
+	// WarnAfter is the interval the warning was armed for, carried so the
+	// message delivered to the authoring agent can name it.
+	WarnAfter time.Duration
 }
 
 type Job struct {
@@ -67,6 +80,28 @@ type Job struct {
 func (j *Job) Snapshot() Snapshot {
 	j.mu.RLock()
 	defer j.mu.RUnlock()
+	return j.snapshotLocked()
+}
+
+// runningSnapshot reports whether the job is still running and, if it is, the
+// snapshot describing it — both read in one critical section.
+//
+// The two have to be sampled together. Testing the status and then taking a
+// second snapshot lets the job finish in the gap, so the warning handler would
+// be handed a finished job's snapshot under a message whose text says the job
+// is still running: a message contradicting the state it carries. The snapshot
+// this returns is the state the warning describes, and what is delivered is
+// exactly what was captured here.
+func (j *Job) runningSnapshot() (Snapshot, bool) {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	if j.status != Running {
+		return Snapshot{}, false
+	}
+	return j.snapshotLocked(), true
+}
+
+func (j *Job) snapshotLocked() Snapshot {
 	return Snapshot{ID: j.id, Author: j.author, Script: j.script, ToolName: j.toolName, Status: j.status, Started: j.started, Finished: j.finished, ExitCode: j.exitCode, StdoutBytes: j.stdout.Len(), StderrBytes: j.stderr.Len(), WarnAfter: j.warnAfter}
 }
 
@@ -116,6 +151,11 @@ func NewManagerWithLogger(logger func(string) *logx.JSONL) *Manager {
 	return &Manager{jobs: make(map[string]*Job), logger: logger}
 }
 
+// SetWarningHandler registers the callback that routes a long-running job's
+// single warning to the agent that started it. The snapshot it receives was
+// taken while the job was still running; the callback runs on the timer
+// goroutine, which is bound to the job's context, so it cannot be entered once
+// the job has ended or the runtime has begun shutting down.
 func (m *Manager) SetWarningHandler(handler func(Snapshot)) {
 	m.mu.Lock()
 	m.onWarning = handler
@@ -181,16 +221,26 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 			defer timer.Stop()
 			select {
 			case <-timer.C:
-				if job.Snapshot().Status != Running {
+				snapshot, running := job.runningSnapshot()
+				if !running {
 					return
 				}
 				m.mu.RLock()
 				handler := m.onWarning
 				m.mu.RUnlock()
 				if handler != nil {
-					handler(job.Snapshot())
+					handler(snapshot)
 				}
 			case <-job.done:
+			case <-ctx.Done():
+				// ctx is this job's own context: cancelled when the job ends
+				// and when the runtime that owns the manager shuts down. This
+				// goroutine therefore cannot outlive either, and cannot still
+				// be delivering a warning — into an agent that is stopping, or
+				// into a session log Runtime.Close has already closed — after
+				// shutdown has begun. A job that is killed at shutdown gets no
+				// warning, which is right: there is no longer anyone to act on
+				// one.
 			}
 		}()
 	}

@@ -116,6 +116,12 @@ func TestManagerWarning(t *testing.T) {
 		if warning.ID != j.Snapshot().ID {
 			t.Fatalf("warning for %q, want %q", warning.ID, j.Snapshot().ID)
 		}
+		// The delivered snapshot is captured in the same critical section that
+		// decides the job is still running, so a warning can never describe a
+		// job that had already finished when it was taken.
+		if warning.Status != Running {
+			t.Fatalf("warning snapshot status = %q, want %q", warning.Status, Running)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("warning was not emitted")
 	}
