@@ -540,10 +540,11 @@ func (a *Agent) receiveJobResult(snapshot job.Snapshot, stdout, stderr string) e
 // one immediately. A warning that only reached the event stream reached nobody
 // who could act on it.
 //
-// The message is a decision point and says so. It names the only three things
-// the agent can do, and promises nothing about output: a running job's capture
-// buffers are not readable, so the text tells the agent output arrives when the
-// job finishes rather than inviting a read_job call that would come back empty.
+// The message is a decision point and says so. It names the three things the
+// agent can do about the job, and promises nothing about output: a running
+// job's capture buffers are not readable, so the text tells the agent output
+// arrives when the job finishes rather than inviting a read_job call that
+// would come back empty.
 func (a *Agent) receiveJobWarning(snapshot job.Snapshot) error {
 	toolName := snapshot.ToolName
 	if toolName == "" {

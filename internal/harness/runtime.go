@@ -666,9 +666,10 @@ func (r *Runtime) EmitStatus(kind, text string) {
 // the TUI event stream alone, which meant the one party the timer exists to
 // inform was the one party that never heard it.
 //
-// The TUI event is still emitted, and first, so the warning is recorded in the
-// transcript and shown even when the agent has since been stopped. It is a
-// record, not the delivery. Nothing is built on it.
+// The TUI event is still emitted, and first, so the firing is on the record and
+// on screen without that depending on delivery succeeding — in particular when
+// the agent has since been stopped. It is a record, not the delivery. Nothing
+// is built on it.
 //
 // The snapshot arrives captured under the job's own lock and is passed through
 // unchanged: what the agent is told and what the manager observed are the same

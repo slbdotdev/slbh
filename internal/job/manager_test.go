@@ -177,7 +177,9 @@ func TestJobDoneMeansTheEndRecordIsAlreadyWritten(t *testing.T) {
 // discarded, and be lost.
 //
 // The handler blocks here to hold the goroutine in exactly that state while
-// Close runs. Before the join, Close returned immediately and this failed.
+// Close runs. Before the join, Close returned immediately and this failed. The
+// hold is well inside Close's two-second cap, so what this exercises is the
+// join and not the cap.
 func TestManagerCloseJoinsAWarningAlreadyInFlight(t *testing.T) {
 	m := NewManager(nil)
 	entered := make(chan struct{})
@@ -250,5 +252,44 @@ func TestManagerCloseDoesNotWaitForAnUnfiredWarning(t *testing.T) {
 	case <-closed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close blocked on a warning timer that had not fired")
+	}
+}
+
+// TestStartAfterCloseIsRefusedAndArmsNoWarning is item 1's proof.
+//
+// Nothing serialised Start against Close before this: a Start landing after
+// Close had begun waiting could Add to a WaitGroup already at zero — misuse —
+// and arm a timer that fires into session logs Runtime.Close has since closed.
+// The closed flag is read in the same acquisition that registers the job and
+// counts its timer, so there is no window between the check and the Add.
+func TestStartAfterCloseIsRefusedAndArmsNoWarning(t *testing.T) {
+	m := NewManager(nil)
+	m.SetWarningHandler(func(Snapshot) { t.Error("a warning was armed after Close") })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Close()
+	j, err := m.Start(ctx, Spec{Author: "agent-test", Script: "echo late", WarnAfter: 10 * time.Millisecond})
+	if err == nil {
+		_ = j.Kill()
+		t.Fatal("Start was accepted after Close")
+	}
+	if j != nil {
+		t.Fatalf("refused Start returned a job: %#v", j.Snapshot())
+	}
+	if !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("Start after Close failed with %q, which does not name the closed manager", err)
+	}
+	// Past the interval the refused job asked for: nothing may fire, and the
+	// manager must still shut down.
+	time.Sleep(50 * time.Millisecond)
+	closed := make(chan struct{})
+	go func() {
+		m.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return after a refused Start")
 	}
 }
