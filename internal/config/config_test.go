@@ -86,3 +86,24 @@ func TestDefaultLeafModelIsLocalWorkhorse(t *testing.T) {
 		t.Fatalf("leaf model = %q, want %q", got.LeafModel, provider.LocalModelID)
 	}
 }
+
+// TestDefaultSeatEffortIsServableLocally pins the built-in seat effort. The
+// default has to be a level every route slbh ships with can actually serve,
+// and the local Ollama route is the narrow one: Ollama rewrites `xhigh` to
+// `max` before the model's chat template runs, and the template raises on
+// `max`, so a seat defaulting to `xhigh` fails its first local request with a
+// 500. `high` is the top level that route serves.
+func TestDefaultSeatEffortIsServableLocally(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SLBH_HOME", home)
+	for _, name := range []string{"SLBH_MODEL", "SLBH_EFFORT", "SLBH_SUBAGENT_MODEL", "SLBH_LEAF_MODEL", "SLBH_SUBAGENT_EFFORT", "SLBH_ENDPOINT"} {
+		t.Setenv(name, "")
+	}
+	got := Load()
+	if got.SeatEffort != "high" {
+		t.Fatalf("default seat effort = %q, want high", got.SeatEffort)
+	}
+	if got.SeatEffort == "xhigh" || got.SeatEffort == "max" {
+		t.Fatalf("default seat effort %q cannot be served by the local route", got.SeatEffort)
+	}
+}

@@ -95,9 +95,26 @@ func Load() Config {
 		}
 	}
 	cfg := Config{
-		Home:           home,
+		Home: home,
+		// The seat default is `high`, and deliberately not `xhigh`. Two
+		// separate reasons, either of which is enough.
+		//
+		// It is the top level the local Ollama route can actually serve.
+		// Ollama's OpenAI-compatible layer rewrites the level before the
+		// model's chat template runs: `high` becomes the template's top rung,
+		// `xhigh` becomes `max`, and the template raises on `max` because it
+		// has no such rung. A seat on a `local/` model at `xhigh` therefore
+		// fails its first request with a 500 out of the template, which is
+		// what a default must never do. Measured 2026-09-12 and again
+		// 2026-09-17 against the deployed tags: low, medium and high return
+		// 200; xhigh and max return 500.
+		//
+		// And on the plan routes, where both levels work, `xhigh` was not
+		// worth its cost: pooled across the two live output_config.effort
+		// ladders, its median is +16.1% over `high` but it wins only 67% of
+		// turn-pairs and costs about 48% more wall clock.
 		SeatModel:      getenv("SLBH_MODEL", "deepseek-v4-flash"),
-		SeatEffort:     getenv("SLBH_EFFORT", "xhigh"),
+		SeatEffort:     getenv("SLBH_EFFORT", "high"),
 		SubagentModel:  getenv("SLBH_SUBAGENT_MODEL", "zai/glm-5.3-flash"),
 		LeafModel:      getenv("SLBH_LEAF_MODEL", provider.LocalModelID),
 		SubagentEffort: getenv("SLBH_SUBAGENT_EFFORT", "high"),

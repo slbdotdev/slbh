@@ -30,7 +30,7 @@ go build -o slbh ./cmd/slbh
 ./slbh
 ```
 
-The defaults are a `deepseek-v4-flash` seat agent at `xhigh` effort,
+The defaults are a `deepseek-v4-flash` seat agent at `high` effort,
 `zai/glm-5.3-flash` child agents at `high` effort, and the local 5080
 workhorse `local/q27-IQ2_M-96k` for leaf agents. A new configuration has no
 approved models, so the default native seat model stays disabled until models
@@ -140,6 +140,14 @@ ladder. On that same Anthropic endpoint `thinking.budget_tokens` and a bare
 `reasoning_effort` are both accepted with HTTP 200 and then discarded, so
 neither is representable in the policy schema at all.
 
+The local Ollama route reaches only the bottom three of slbh's five levels.
+Ollama's OpenAI-compatible layer rewrites `reasoning_effort` before the model's
+chat template sees it: `high` arrives as the template's top rung, and `xhigh`
+arrives as `max`, which the template has no rung for and raises on. So `low`,
+`medium` and `high` return 200 there, and `xhigh` and `max` both come back as a
+500 out of the template — not a routing fault, and not something slbh clamps.
+That is why the seat default is `high`.
+
 Everything a wire changes is normalized before it leaves the provider package,
 so nothing downstream knows or cares which one served a request. Three of those
 normalizations are worth naming because the naive version of each is silently
@@ -194,7 +202,7 @@ These environment variables are read at startup:
 | --- | --- | --- |
 | `SLBH_HOME` | `$HOME/.slbh` | Base directory for configuration, history, and runtime records. |
 | `SLBH_MODEL` | `deepseek-v4-flash` | Seat agent model. |
-| `SLBH_EFFORT` | `xhigh` | Seat reasoning effort. |
+| `SLBH_EFFORT` | `high` | Seat reasoning effort. |
 | `SLBH_SUBAGENT_MODEL` | `zai/glm-5.3-flash` | Default child-agent model. |
 | `SLBH_LEAF_MODEL` | `local/q27-IQ2_M-96k` | Default depth-two child model. |
 | `SLBH_SUBAGENT_EFFORT` | `high` | Default child-agent effort. |
