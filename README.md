@@ -100,9 +100,24 @@ an edit changed nothing.
 
 Per route the policy carries the endpoint, the wire protocol, a separate
 catalog endpoint where one cannot be derived from the other, a context window
-where the provider's catalog cannot report one, an effort descriptor, and — for
+where the provider's catalog cannot report one, an optional `maxOutputTokens`
+bound on one generation, an effort descriptor, and — for
 an OpenRouter route — the routing posture (`zdr`, `data_collection`, `sort`,
 `ignore`, `max_price`). No credential appears in either file.
+
+`maxOutputTokens` is per route rather than global because the routes differ by
+more than an order of magnitude in what an unbounded generation costs: a cloud
+route runs away in seconds, while a local 27B decoding at about 76 tokens per
+second against a 196,608-token window is some forty minutes of held GPU before
+anything stops it. Unset, a route takes its wire's default —
+`DefaultMaxOutputTokens` on the OpenAI-shaped wire, and on the Messages wire
+the larger ceiling that exists only because that API requires the field. A
+request may override both.
+
+Bounding is also what makes the terminal telemetry mean anything. An unbounded
+request can only ever come back `stop`, so `finish_reason` carries no signal at
+all; with a bound, a generation that will not end reports `length` and is
+visible as what it is rather than as a hang.
 
 That posture is sent as OpenRouter's `provider` routing object on the
 OpenRouter route and on no other, because `zdr` and `data_collection` are
