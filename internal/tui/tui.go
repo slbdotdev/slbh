@@ -5,13 +5,18 @@ import (
 	"fmt"
 	"image/color"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
+	"charm.land/glamour/v2/ansi"
+	"charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/harness"
 	"github.com/slbdotdev/slbh/internal/provider"
@@ -30,6 +35,11 @@ var (
 )
 
 const nonChatBlockHeight = 10
+
+const markdownRenderCacheLimit = 512
+
+// markdownThrottle bounds how often a streamed message is re-rendered.
+const markdownThrottle = 100 * time.Millisecond
 
 const scrollStep = 5
 
@@ -53,6 +63,9 @@ var slashCommands = []string{
 
 type eventMsg harness.Event
 
+// markdownTickMsg catches up a block the render throttle held back.
+type markdownTickMsg time.Time
+
 type modelCatalogMsg struct {
 	catalog []provider.Catalog
 	err     error
@@ -65,38 +78,59 @@ type modelTreeNode struct {
 	save     bool
 }
 
+type markdownCacheKey struct {
+	source string
+	width  int
+}
+
+// markdownRecentRender is the last render of one block, kept so a throttled
+// refresh has something to show. The source is kept with it: a block is only
+// allowed to reuse a render whose source its own source extends, which is what
+// a growing stream does and what a different block never does.
+type markdownRecentRender struct {
+	source   string
+	rendered string
+}
+
 type Model struct {
-	runtime        *harness.Runtime
-	viewport       viewport.Model
-	input          textarea.Model
-	events         []harness.Event
-	agents         []harness.AgentSnapshot
-	viewAgentID    string
-	selected       int
-	focusAgents    bool
-	userScrolled   bool
-	width          int
-	height         int
-	quitting       bool
-	commandLine    string
-	history        []string
-	historyPath    string
-	historyIndex   int
-	historyDraft   string
-	modelsOpen     bool
-	modelsLoading  bool
-	modelCatalog   []provider.Catalog
-	modelExpanded  map[string]bool
-	modelCursor    int
-	modelNotice    string
-	modelSubmenu   bool
-	modelSubnode   modelTreeNode
-	modelSubcursor int
-	modelSeat      string
-	modelSubagent  string
-	modelLeaf      string
-	modelNoticeErr bool
-	modelNoticeOK  bool
+	runtime            *harness.Runtime
+	viewport           viewport.Model
+	input              textarea.Model
+	events             []harness.Event
+	agents             []harness.AgentSnapshot
+	viewAgentID        string
+	selected           int
+	focusAgents        bool
+	userScrolled       bool
+	width              int
+	height             int
+	quitting           bool
+	commandLine        string
+	history            []string
+	historyPath        string
+	historyIndex       int
+	historyDraft       string
+	modelsOpen         bool
+	modelsLoading      bool
+	modelCatalog       []provider.Catalog
+	modelExpanded      map[string]bool
+	modelCursor        int
+	modelNotice        string
+	modelSubmenu       bool
+	modelSubnode       modelTreeNode
+	modelSubcursor     int
+	modelSeat          string
+	modelSubagent      string
+	modelLeaf          string
+	modelNoticeErr     bool
+	modelNoticeOK      bool
+	markdownWidth      int
+	markdownRender     *glamour.TermRenderer
+	markdownCache      map[markdownCacheKey]string
+	markdownRecent     map[string]markdownRecentRender
+	markdownRenderedAt time.Time
+	markdownStale      bool
+	markdownTicking    bool
 	// mouseCapture is off by default so the terminal keeps its own click and
 	// drag, which is what selecting and copying text needs. Turning it on
 	// trades that away for wheel scrolling.
@@ -124,7 +158,7 @@ func New(runtime *harness.Runtime) Model {
 		historyPath = filepath.Join(runtime.Home(), historyFileName)
 		history, _ = loadHistory(historyPath)
 	}
-	return Model{runtime: runtime, viewport: view, input: input, viewAgentID: viewID, agents: activeAgents(runtime.Agents()), history: history, historyPath: historyPath, historyIndex: -1, modelCatalog: runtime.ModelCatalog(), modelExpanded: make(map[string]bool)}
+	return Model{runtime: runtime, viewport: view, input: input, viewAgentID: viewID, agents: activeAgents(runtime.Agents()), history: history, historyPath: historyPath, historyIndex: -1, modelCatalog: runtime.ModelCatalog(), modelExpanded: make(map[string]bool), markdownCache: make(map[markdownCacheKey]string), markdownRecent: make(map[string]markdownRecentRender)}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -141,7 +175,30 @@ func waitEvent(runtime *harness.Runtime) tea.Cmd {
 	}
 }
 
+// Update schedules the markdown catch-up tick centrally. Any path that
+// refreshes the view can leave a block holding a throttled, stale render —
+// switching the viewed agent is one — and a path that returned no command of
+// its own would otherwise strand that block until the next keystroke.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	updated, cmd := m.update(msg)
+	// The model-menu paths have a pointer receiver and return *Model, so both
+	// forms have to be handled or those paths skip scheduling entirely.
+	var next *Model
+	switch typed := updated.(type) {
+	case Model:
+		next = &typed
+	case *Model:
+		next = typed
+	default:
+		return updated, cmd
+	}
+	if tick := next.markdownTickCmd(); tick != nil {
+		return *next, tea.Batch(cmd, tick)
+	}
+	return *next, cmd
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case modelCatalogMsg:
 		m.modelsLoading = false
@@ -160,6 +217,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.resize()
+		return m, nil
+	case markdownTickMsg:
+		m.markdownTicking = false
+		m.refreshView()
 		return m, nil
 	case eventMsg:
 		m.events = append(m.events, harness.Event(msg))
@@ -939,6 +1000,8 @@ func (m *Model) refreshView() {
 	if m.width > 0 {
 		m.viewport.SetWidth(m.chatWidth())
 	}
+	width := max(1, m.chatWidth())
+	m.markdownRendererForWidth(width)
 	var visible []harness.Event
 	userSeen := false
 	for _, event := range m.events {
@@ -982,13 +1045,12 @@ func (m *Model) refreshView() {
 		visible = append(visible, event)
 	}
 	lines := make([]string, 0, len(visible))
-	width := max(1, m.chatWidth())
 	for i := 0; i < len(visible); {
 		if !isMessage(visible[i]) {
 			end := i
 			parts := make([]string, 0, 1)
 			for end < len(visible) && !isMessage(visible[end]) {
-				parts = append(parts, renderEvent(visible[end], width))
+				parts = append(parts, m.renderEvent(visible[end], width))
 				end++
 			}
 			if len(lines) > 0 {
@@ -1001,7 +1063,7 @@ func (m *Model) refreshView() {
 		if len(lines) > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, renderEvent(visible[i], width))
+		lines = append(lines, m.renderEvent(visible[i], width))
 		i++
 	}
 	m.viewport.SetContent(strings.Join(lines, "\n"))
@@ -1019,26 +1081,28 @@ func (m *Model) clearCurrentView() {
 	}
 	m.events = retained
 	m.userScrolled = false
+	clear(m.markdownCache)
+	clear(m.markdownRecent)
 	m.refreshView()
 }
 
-func renderEvent(event harness.Event, width int) string {
+func (m *Model) renderEvent(event harness.Event, width int) string {
 	switch event.Kind {
 	case "assistant":
-		return renderChatBlock(agentTitle(event, "agent"), event.Text, width, assistantBubble)
+		return renderChatBlock(agentTitle(event, "agent"), m.renderMarkdown(markdownBlockKey(event), event.Text, width), width, assistantBubble)
 	case "user":
 		return renderChatBlock("user", event.Text, width, userBubble)
 	case "child_result":
-		return renderChatBlock(agentTitle(event, "subagent"), event.Text, width, subagentBubble)
+		return renderChatBlock(agentTitle(event, "subagent"), m.renderMarkdown(markdownBlockKey(event), event.Text, width), width, subagentBubble)
 	case "job_result":
 		label := "job"
 		if name := metadataString(event, "tool"); name != "" {
 			label = name
 		}
-		return renderChatBlock(label, event.Text, width, subagentBubble)
+		return renderChatBlock(label, m.renderMarkdown(markdownBlockKey(event), event.Text, width), width, subagentBubble)
 	case "steer":
 		if isForwardedAgentMessage(event) {
-			return renderChatBlock(agentTitle(event, "subagent"), event.Text, width, subagentBubble)
+			return renderChatBlock(agentTitle(event, "subagent"), m.renderMarkdown(markdownBlockKey(event), event.Text, width), width, subagentBubble)
 		}
 		return rollingBlock(event.Text, width)
 	case "usage":
@@ -1049,6 +1113,159 @@ func renderEvent(event harness.Event, width int) string {
 		return rollingBlock(event.Text, width)
 	default:
 		return rollingBlock(event.Text, width)
+	}
+}
+
+func markdownBlockKey(event harness.Event) string {
+	return event.AgentID + "\x00" + event.Kind
+}
+
+// renderMarkdown styles agent-authored markdown for a chat block. A streamed
+// message grows by one chunk per event and refreshView re-renders it every
+// time, so an unthrottled render is quadratic in the length of the response.
+// Between renders this returns the block's most recent rendered copy and marks
+// the view stale; Update then schedules a catch-up tick so the final chunk is
+// never left unrendered.
+func (m *Model) renderMarkdown(key, source string, width int) string {
+	if width < 1 || strings.TrimSpace(source) == "" {
+		return source
+	}
+	renderer := m.markdownRendererForWidth(width)
+	if renderer == nil {
+		return source
+	}
+	cacheKey := markdownCacheKey{source: source, width: width}
+	if rendered, ok := m.markdownCache[cacheKey]; ok {
+		return rendered
+	}
+	if previous, ok := m.markdownRecent[key]; ok && strings.HasPrefix(source, previous.source) && time.Since(m.markdownRenderedAt) < markdownThrottle {
+		m.markdownStale = true
+		return previous.rendered
+	}
+	rendered, err := renderer.Render(source)
+	if err != nil {
+		// A markdown failure must never blank a message. The TUI owns the
+		// terminal, so there is nowhere to report this but the block itself.
+		return source
+	}
+	rendered = trimBlankEdges(rendered)
+	m.markdownRenderedAt = time.Now()
+	m.cacheRenderedMarkdown(cacheKey, rendered)
+	if m.markdownRecent == nil {
+		m.markdownRecent = make(map[string]markdownRecentRender)
+	}
+	m.markdownRecent[key] = markdownRecentRender{source: source, rendered: rendered}
+	return rendered
+}
+
+// markdownTickCmd schedules one catch-up render when the throttle held a
+// stale block back. It is a no-op when nothing is stale or a tick is already
+// in flight, so a quiet stream cannot accumulate timers.
+func (m *Model) markdownTickCmd() tea.Cmd {
+	if !m.markdownStale || m.markdownTicking {
+		return nil
+	}
+	m.markdownStale = false
+	m.markdownTicking = true
+	return tea.Tick(markdownThrottle, func(at time.Time) tea.Msg { return markdownTickMsg(at) })
+}
+
+// trimBlankEdges drops the padding glamour puts above and below a document,
+// which would otherwise show as empty painted rows inside the block. That
+// padding is bare newlines, so trimming those alone cannot reach a blank line
+// that belongs to the content: a blank line inside a fenced code block is
+// rendered padded to the block width, not as an empty string. The one
+// exception is the indented row glamour closes a code block with, which is
+// dropped when it lands last so a message ending in code does not end on a
+// near-empty row.
+func trimBlankEdges(text string) string {
+	text = strings.Trim(text, "\n")
+	lines := strings.Split(text, "\n")
+	if len(lines) > 1 && strings.TrimSpace(xansi.Strip(lines[len(lines)-1])) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) cacheRenderedMarkdown(key markdownCacheKey, rendered string) {
+	if m.markdownCache == nil {
+		m.markdownCache = make(map[markdownCacheKey]string)
+	}
+	if len(m.markdownCache) >= markdownRenderCacheLimit {
+		clear(m.markdownCache)
+		clear(m.markdownRecent)
+	}
+	m.markdownCache[key] = rendered
+}
+
+// markdownRendererForWidth keeps one renderer per width. A renderer is bound
+// to its word-wrap width, so a resize rebuilds it and drops the output cached
+// at the old width.
+func (m *Model) markdownRendererForWidth(width int) *glamour.TermRenderer {
+	if width < 1 {
+		return nil
+	}
+	if m.markdownWidth == width {
+		return m.markdownRender
+	}
+	m.markdownWidth = width
+	m.markdownRender = nil
+	m.markdownCache = make(map[markdownCacheKey]string)
+	m.markdownRecent = make(map[string]markdownRecentRender)
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithStyles(backgroundFreeMarkdownStyle()),
+		glamour.WithWordWrap(width),
+	)
+	if err == nil {
+		m.markdownRender = renderer
+	}
+	return m.markdownRender
+}
+
+func backgroundFreeMarkdownStyle() ansi.StyleConfig {
+	// StyleConfig is all value fields, so this copies the dark style, but
+	// Chroma is reached through a pointer shared with glamour's own
+	// package-level variable. Copy it before editing so clearing backgrounds
+	// below cannot reach back into the library's configuration.
+	style := styles.DarkStyleConfig
+	if style.CodeBlock.Chroma != nil {
+		chroma := *style.CodeBlock.Chroma
+		style.CodeBlock.Chroma = &chroma
+		clearMarkdownBackgrounds(reflect.ValueOf(style.CodeBlock.Chroma).Elem())
+	}
+	zero := uint(0)
+	style.Document.Margin = &zero
+	style.Document.Indent = &zero
+	// Inline code keeps its color but loses glamour's padding, which is a pair
+	// of non-breaking spaces and copies out of the terminal as U+00A0.
+	style.Code.Prefix = ""
+	style.Code.Suffix = ""
+	style.Code.BlockPrefix = ""
+	style.Code.BlockSuffix = ""
+	clearMarkdownBackgrounds(reflect.ValueOf(&style).Elem())
+	return style
+}
+
+// clearMarkdownBackgrounds nils every BackgroundColor in a style value.
+// messageBlock keeps its painted background continuous by rewriting SGR resets
+// in the content to foreground-only resets, so a background set inside the
+// content is never reset and smears down the rest of the block. It does not
+// follow pointers: the one struct pointer in a StyleConfig is Chroma, which is
+// shared with glamour's package-level style and is copied and swept by its
+// caller instead.
+func clearMarkdownBackgrounds(value reflect.Value) {
+	if value.Kind() != reflect.Struct {
+		return
+	}
+	for i := 0; i < value.NumField(); i++ {
+		field := value.Field(i)
+		if value.Type().Field(i).Name == "BackgroundColor" {
+			if field.CanSet() {
+				field.SetZero()
+			}
+			continue
+		}
+		clearMarkdownBackgrounds(field)
 	}
 }
 

@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"charm.land/glamour/v2/styles"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -225,19 +228,20 @@ func TestMessageBlocksAreSpacedAndColored(t *testing.T) {
 	defer runtime.Close()
 
 	width := 40
+	renderModel := Model{}
 	user := harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "seat", Kind: "user", Text: "hello"}
 	thinking := harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "seat", Kind: "thinking", Text: "working"}
 	assistant := harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "seat-agent", Kind: "assistant", Text: "done"}
 
-	if got := lipgloss.Width(renderEvent(user, width)); got != width {
+	if got := lipgloss.Width(renderModel.renderEvent(user, width)); got != width {
 		t.Fatalf("user block width=%d, want %d", got, width)
 	}
-	if got := lipgloss.Width(renderEvent(assistant, width)); got != width {
+	if got := lipgloss.Width(renderModel.renderEvent(assistant, width)); got != width {
 		t.Fatalf("assistant block width=%d, want %d", got, width)
 	}
 
-	userBlock := renderEvent(user, width)
-	assistantBlock := renderEvent(assistant, width)
+	userBlock := renderModel.renderEvent(user, width)
+	assistantBlock := renderModel.renderEvent(assistant, width)
 	if !strings.Contains(userBlock, "48;5;22") {
 		t.Fatalf("user block has no colored background: %q", userBlock)
 	}
@@ -291,6 +295,114 @@ func TestMessageBlocksAreSpacedAndColored(t *testing.T) {
 	}
 }
 
+func TestAgentChatBlocksRenderMarkdownWithoutBackgroundSGR(t *testing.T) {
+	m := Model{}
+	source := "# Rendered heading\n\nThis is **bold**.\n\n- first\n- second\n\n```go\nfmt.Println(\"hello\")\n```"
+	event := harness.Event{Kind: "assistant", AgentTitle: "seat", Text: source}
+	block := m.renderEvent(event, 60)
+	plain := ansi.Strip(block)
+	if strings.Contains(plain, "**") {
+		t.Fatalf("bold markdown markers survived rendering: %q", plain)
+	}
+	if !strings.Contains(plain, "Rendered heading") {
+		t.Fatalf("rendered heading is missing: %q", plain)
+	}
+	if strings.Contains(plain, "```") || !strings.Contains(plain, "fmt.Println") {
+		t.Fatalf("fenced code block was not rendered: %q", plain)
+	}
+
+	markdown := m.renderMarkdown(markdownBlockKey(event), source, 60)
+	backgroundSGR := regexp.MustCompile("\\x1b\\[(4[0-7]|10[0-7]|48;5;[0-9]+|48;2;[0-9]+;[0-9]+;[0-9]+)m")
+	if match := backgroundSGR.FindString(markdown); match != "" {
+		t.Fatalf("markdown renderer emitted background-setting SGR %q in %q", match, markdown)
+	}
+}
+
+func TestLiteralEventKindsDoNotRenderMarkdown(t *testing.T) {
+	m := Model{}
+	source := "# literal **markdown** `source`"
+	for _, event := range []harness.Event{
+		{Kind: "user", Text: source},
+		{Kind: "tool_result", Text: source},
+	} {
+		rendered := ansi.Strip(m.renderEvent(event, 80))
+		if !strings.Contains(rendered, source) {
+			t.Fatalf("%s event changed markdown-looking source: %q", event.Kind, rendered)
+		}
+	}
+}
+
+func TestMarkdownRenderingCachesBySourceAndWidth(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	m := New(runtime)
+	m.width, m.height = 60, 24
+	assistantText := "A **formatted** response with enough words to wrap differently at a much narrower terminal width."
+	m.events = []harness.Event{
+		{AgentID: runtime.Seat().ID, Kind: "user", Text: "show me"},
+		{AgentID: runtime.Seat().ID, Kind: "assistant", Text: assistantText},
+	}
+	m.refreshView()
+	wide := m.viewport.View()
+	wideMarkdown := m.markdownCache[markdownCacheKey{source: assistantText, width: 60}]
+	wideRenderer := m.markdownRender
+	if len(m.markdownCache) != 1 {
+		t.Fatalf("markdown cache has %d entries, want 1", len(m.markdownCache))
+	}
+	m.refreshView()
+	if repeated := m.viewport.View(); repeated != wide {
+		t.Fatalf("repeated refresh changed output:\nfirst: %q\nagain: %q", wide, repeated)
+	}
+	if m.markdownRender != wideRenderer || len(m.markdownCache) != 1 {
+		t.Fatal("repeated refresh rebuilt the renderer or missed the cached output")
+	}
+
+	m.width = 24
+	m.refreshView()
+	narrow := m.viewport.View()
+	narrowMarkdown := m.markdownCache[markdownCacheKey{source: assistantText, width: 24}]
+	if narrow == wide {
+		t.Fatalf("width change reused stale rendered output: %q", narrow)
+	}
+	if narrowMarkdown == wideMarkdown || lipgloss.Height(ansi.Strip(narrowMarkdown)) <= lipgloss.Height(ansi.Strip(wideMarkdown)) {
+		t.Fatalf("markdown was not newly wrapped for width 24:\nwide: %q\nnarrow: %q", wideMarkdown, narrowMarkdown)
+	}
+	if m.markdownRender == wideRenderer || m.markdownWidth != 24 {
+		t.Fatal("width change did not rebuild the width-bound renderer")
+	}
+	for key := range m.markdownCache {
+		if key.width != 24 {
+			t.Fatalf("cache retained stale width %d after resize", key.width)
+		}
+	}
+
+	m.clearCurrentView()
+	if len(m.markdownCache) != 0 {
+		t.Fatalf("clear retained %d cached markdown entries", len(m.markdownCache))
+	}
+}
+
+func TestMarkdownRenderingFallsBackAtNonPositiveWidths(t *testing.T) {
+	m := Model{}
+	event := harness.Event{Kind: "assistant", Text: "**literal fallback**"}
+	for _, width := range []int{0, -1} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					t.Fatalf("rendering width %d panicked: %v", width, recovered)
+				}
+			}()
+			if rendered := ansi.Strip(m.renderEvent(event, width)); !strings.Contains(rendered, event.Text) {
+				t.Fatalf("width %d did not use literal fallback: %q", width, rendered)
+			}
+		})
+	}
+}
+
 func TestChildResultsRenderAsNamedPinkMessageBlocks(t *testing.T) {
 	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
 	if err != nil {
@@ -298,8 +410,9 @@ func TestChildResultsRenderAsNamedPinkMessageBlocks(t *testing.T) {
 	}
 	defer runtime.Close()
 
+	renderModel := Model{}
 	childResult := harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "researcher", Kind: "child_result", Text: "findings"}
-	block := renderEvent(childResult, 40)
+	block := renderModel.renderEvent(childResult, 40)
 	if !strings.Contains(block, "48;5;132") {
 		t.Fatalf("child result has no pink background: %q", block)
 	}
@@ -319,7 +432,7 @@ func TestChildResultsRenderAsNamedPinkMessageBlocks(t *testing.T) {
 	}
 
 	forwarded := harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "researcher", Kind: "steer", Text: "progress update", Metadata: map[string]any{"sender": "child-id"}}
-	forwardedBlock := renderEvent(forwarded, 40)
+	forwardedBlock := renderModel.renderEvent(forwarded, 40)
 	if !strings.Contains(forwardedBlock, "48;5;132") || !strings.Contains(ansi.Strip(strings.Split(forwardedBlock, "\n")[0]), "• researcher") {
 		t.Fatalf("forwarded child message is not a named pink block: %q", forwardedBlock)
 	}
@@ -444,8 +557,9 @@ func TestNonChatBlocksRollAtTenLines(t *testing.T) {
 		lines[i] = fmt.Sprintf("line %02d", i+1)
 	}
 	text := strings.Join(lines, "\n")
+	renderModel := Model{}
 
-	thinking := ansi.Strip(renderEvent(harness.Event{Kind: "thinking", Text: text}, 40))
+	thinking := ansi.Strip(renderModel.renderEvent(harness.Event{Kind: "thinking", Text: text}, 40))
 	if got := lipgloss.Height(thinking); got != nonChatBlockHeight {
 		t.Fatalf("thinking block height=%d, want %d", got, nonChatBlockHeight)
 	}
@@ -453,7 +567,7 @@ func TestNonChatBlocksRollAtTenLines(t *testing.T) {
 		t.Fatalf("thinking block did not keep the newest lines: %q", thinking)
 	}
 
-	toolResult := ansi.Strip(renderEvent(harness.Event{Kind: "tool_result", Text: text}, 40))
+	toolResult := ansi.Strip(renderModel.renderEvent(harness.Event{Kind: "tool_result", Text: text}, 40))
 	if got := lipgloss.Height(toolResult); got != nonChatBlockHeight {
 		t.Fatalf("tool result block height=%d, want %d", got, nonChatBlockHeight)
 	}
@@ -461,12 +575,12 @@ func TestNonChatBlocksRollAtTenLines(t *testing.T) {
 		t.Fatalf("tool result block did not keep the newest lines: %q", toolResult)
 	}
 
-	short := renderEvent(harness.Event{Kind: "thinking", Text: "working"}, 40)
+	short := renderModel.renderEvent(harness.Event{Kind: "thinking", Text: "working"}, 40)
 	if got := lipgloss.Height(short); got != 1 {
 		t.Fatalf("short thinking block height=%d, want 1", got)
 	}
 
-	nonChat := renderEvent(harness.Event{Kind: "thinking", Text: "working"}, 40)
+	nonChat := renderModel.renderEvent(harness.Event{Kind: "thinking", Text: "working"}, 40)
 	if !strings.Contains(nonChat, "48;5;236") {
 		t.Fatalf("non-chat block has no gray background: %q", nonChat)
 	}
@@ -756,5 +870,232 @@ func TestMouseCaptureIsOffUntilToggled(t *testing.T) {
 	}
 	if status := ansi.Strip(m.statusLine()); strings.Contains(status, "mouse") {
 		t.Fatalf("status line=%q, want no mouse indicator while capture is off", status)
+	}
+}
+
+func TestChatBlocksOpenOnTheirFirstLineOfText(t *testing.T) {
+	m := Model{}
+	event := harness.Event{Kind: "assistant", AgentTitle: "seat", Text: "first line of the answer"}
+	body := strings.Split(m.renderEvent(event, 40), "\n")
+	if len(body) < 2 {
+		t.Fatalf("block has no body: %q", body)
+	}
+	if got := strings.TrimSpace(ansi.Strip(body[1])); got != "first line of the answer" {
+		t.Fatalf("block opens with %q, want the first line of text and no blank painted row", got)
+	}
+
+	// Glamour pads a document with styled blank lines at both ends. They carry
+	// escape sequences, so emptiness has to be judged on the stripped text.
+	fenced := harness.Event{Kind: "assistant", Text: "text\n\n```go\nfunc main() {}\n```\n"}
+	lines := strings.Split(m.renderEvent(fenced, 40), "\n")
+	if last := strings.TrimSpace(ansi.Strip(lines[len(lines)-1])); last == "" {
+		t.Fatalf("block ends on a blank painted row: %q", lines[len(lines)-1])
+	}
+}
+
+func TestInlineCodeKeepsTextSelectable(t *testing.T) {
+	m := Model{}
+	event := harness.Event{Kind: "assistant", Text: "call `fmt.Println` to print"}
+	rendered := ansi.Strip(m.renderEvent(event, 60))
+	if strings.ContainsRune(rendered, '\u00a0') {
+		t.Fatalf("inline code padded with non-breaking spaces, which copy as U+00A0: %q", rendered)
+	}
+	if !strings.Contains(rendered, "call fmt.Println to print") {
+		t.Fatalf("inline code did not render as plain adjacent text: %q", rendered)
+	}
+}
+
+func TestStreamedMarkdownRendersAreThrottled(t *testing.T) {
+	m := Model{markdownCache: map[markdownCacheKey]string{}, markdownRecent: map[string]markdownRecentRender{}}
+	event := harness.Event{AgentID: "seat", Kind: "assistant"}
+	key := markdownBlockKey(event)
+
+	full := strings.Repeat("A paragraph with **bold** text that wraps across the block. ", 10)
+	for i := 1; i <= len(full); i += 8 {
+		m.renderMarkdown(key, full[:i], 60)
+	}
+	chunks := len(full)/8 + 1
+	if len(m.markdownCache) >= chunks {
+		t.Fatalf("throttle did not bound rendering: %d renders for %d chunks", len(m.markdownCache), chunks)
+	}
+	if !m.markdownStale {
+		t.Fatal("skipped renders did not mark the view stale")
+	}
+
+	// A stale view schedules exactly one catch-up tick, never a backlog.
+	if cmd := m.markdownTickCmd(); cmd == nil {
+		t.Fatal("stale view scheduled no catch-up tick")
+	}
+	if cmd := m.markdownTickCmd(); cmd != nil {
+		t.Fatal("a second tick was scheduled while one was already in flight")
+	}
+
+	// Once the throttle window passes, the newest text renders in full.
+	m.markdownTicking = false
+	m.markdownRenderedAt = time.Now().Add(-2 * markdownThrottle)
+	rendered := ansi.Strip(m.renderMarkdown(key, full, 60))
+	if strings.Contains(rendered, "**") {
+		t.Fatalf("catch-up render left raw markdown: %q", rendered)
+	}
+}
+
+func TestMarkdownStyleClearsEveryBackgroundTheDarkStyleSets(t *testing.T) {
+	// These are the four BackgroundColor fields the stock dark style actually
+	// populates. Asserting on a field that is already nil upstream would pass
+	// against a sweep that did nothing at all.
+	dark := styles.DarkStyleConfig
+	upstream := map[string]*string{
+		"H1":                dark.H1.BackgroundColor,
+		"Code":              dark.Code.BackgroundColor,
+		"Chroma.Error":      dark.CodeBlock.Chroma.Error.BackgroundColor,
+		"Chroma.Background": dark.CodeBlock.Chroma.Background.BackgroundColor,
+	}
+	for name, field := range upstream {
+		if field == nil {
+			t.Fatalf("%s has no background upstream, so this test proves nothing", name)
+		}
+	}
+
+	before := *dark.CodeBlock.Chroma.Background.BackgroundColor
+	style := backgroundFreeMarkdownStyle()
+	swept := map[string]*string{
+		"H1":                style.H1.BackgroundColor,
+		"Code":              style.Code.BackgroundColor,
+		"Chroma.Error":      style.CodeBlock.Chroma.Error.BackgroundColor,
+		"Chroma.Background": style.CodeBlock.Chroma.Background.BackgroundColor,
+	}
+	for name, field := range swept {
+		if field != nil {
+			t.Fatalf("%s kept background %q", name, *field)
+		}
+	}
+	if got := *styles.DarkStyleConfig.CodeBlock.Chroma.Background.BackgroundColor; got != before {
+		t.Fatalf("building the style mutated glamour's package-level dark style: %q -> %q", before, got)
+	}
+}
+
+// A throttled block must never be stranded. Switching the viewed agent
+// refreshes the view without producing a command of its own, so the catch-up
+// tick has to be scheduled centrally by Update rather than per call site.
+func TestThrottledBlocksAreNeverStrandedByCommandlessUpdates(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	seat := runtime.Seat().ID
+	m := New(runtime)
+	m.width, m.height = 60, 24
+	m.events = []harness.Event{
+		{AgentID: seat, Kind: "user", Text: "go"},
+		{AgentID: seat, Kind: "assistant", Text: "a **partial** answer"},
+	}
+	m.refreshView()
+
+	// Grow the message and refresh inside the throttle window, as a stream
+	// does. The newest text cannot have been rendered yet.
+	m.events[1].Text = "a **partial** answer that has since grown considerably longer"
+	m.markdownRenderedAt = time.Now()
+	m.refreshView()
+	if !m.markdownStale {
+		t.Fatal("throttled render did not mark the view stale")
+	}
+
+	// Esc returns the view to the seat and returns no command of its own.
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	next, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("Update returned %T, want Model", updated)
+	}
+	if cmd == nil {
+		t.Fatal("a commandless path stranded a stale block with no catch-up tick")
+	}
+	if !next.markdownTicking {
+		t.Fatal("catch-up tick was not recorded as in flight")
+	}
+
+	// Delivering the tick renders the newest text in full.
+	next.markdownRenderedAt = time.Now().Add(-2 * markdownThrottle)
+	caught, _ := next.Update(markdownTickMsg(time.Now()))
+	view := ansi.Strip(caught.(Model).viewport.View())
+	if strings.Contains(view, "**") || !strings.Contains(view, "grown considerably longer") {
+		t.Fatalf("catch-up tick did not render the newest text: %q", view)
+	}
+}
+
+// The commandless-path test above exercises Esc with the model menu closed,
+// which returns a Model. The model-menu paths have a pointer receiver and
+// return *Model, so they need their own coverage.
+func TestModelMenuPathsAlsoScheduleTheCatchUpTick(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	seat := runtime.Seat().ID
+	m := New(runtime)
+	m.width, m.height = 60, 24
+	m.events = []harness.Event{
+		{AgentID: seat, Kind: "user", Text: "go"},
+		{AgentID: seat, Kind: "assistant", Text: "a **partial** answer"},
+	}
+	m.refreshView()
+	m.events[1].Text = "a **partial** answer that has since grown considerably longer"
+	m.markdownRenderedAt = time.Now()
+	m.refreshView()
+	if !m.markdownStale {
+		t.Fatal("throttled render did not mark the view stale")
+	}
+
+	m.modelsOpen = true
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if _, ok := updated.(Model); !ok {
+		t.Fatalf("Update returned %T, want a normalized Model", updated)
+	}
+	if cmd == nil {
+		t.Fatal("the model-menu path stranded a stale block with no catch-up tick")
+	}
+}
+
+func TestSeparateBlocksFromOneAgentDoNotBorrowEachOthersRenders(t *testing.T) {
+	m := Model{markdownCache: map[markdownCacheKey]string{}, markdownRecent: map[string]markdownRecentRender{}}
+	key := markdownBlockKey(harness.Event{AgentID: "seat", Kind: "assistant"})
+
+	first := "the **first** answer, which is a good deal longer than the second"
+	m.renderMarkdown(key, first, 60)
+
+	// A later block of the same kind from the same agent shares the key. Inside
+	// the throttle window it must not be served the earlier block's text.
+	m.markdownRenderedAt = time.Now()
+	second := ansi.Strip(m.renderMarkdown(key, "the s", 60))
+	if strings.Contains(second, "first") {
+		t.Fatalf("a new block was served the previous block's render: %q", second)
+	}
+	if !strings.Contains(second, "the s") {
+		t.Fatalf("a new block did not render its own text: %q", second)
+	}
+
+	// A growing stream does extend its own source, so it may reuse.
+	m.markdownRenderedAt = time.Now()
+	grown := ansi.Strip(m.renderMarkdown(key, "the second one", 60))
+	if !strings.Contains(grown, "the s") {
+		t.Fatalf("a streaming block did not reuse its own previous render: %q", grown)
+	}
+}
+
+func TestFencedCodeKeepsItsOwnBlankLines(t *testing.T) {
+	m := Model{}
+	// The blank lines here belong to the code block, not to glamour's document
+	// padding, and a greedy edge trim silently eats them.
+	event := harness.Event{Kind: "assistant", Text: "```go\n\nfunc main() {}\n\n```"}
+	rendered := m.renderEvent(event, 40)
+	if !strings.Contains(ansi.Strip(rendered), "func main() {}") {
+		t.Fatalf("code content was lost: %q", rendered)
+	}
+	body := strings.Split(rendered, "\n")[1:]
+	if len(body) < 3 {
+		t.Fatalf("code block collapsed to %d lines, losing its blank lines: %q", len(body), body)
 	}
 }

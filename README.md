@@ -242,6 +242,11 @@ stream and transcript and is omitted from the normal message viewport; other
 non-chat activity renders in compact blocks. Thinking blocks show elapsed
 seconds, and tool blocks show per-tool call tallies. Completed background jobs
 arrive automatically at the next API boundary with their captured output.
+Agent output in chat blocks renders as markdown; the owner's own input and
+non-chat blocks stay literal, because tool results and payloads are not
+markdown. A streamed message re-renders at most once every 100ms, so a long
+response styles itself as it arrives without the render cost growing with its
+length.
 
 | Key | Action |
 | --- | --- |
