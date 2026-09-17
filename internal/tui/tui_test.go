@@ -727,3 +727,34 @@ func TestSlashCommandTabCompletion(t *testing.T) {
 		t.Fatalf("ambiguous command changed to %q", got)
 	}
 }
+
+func TestMouseCaptureIsOffUntilToggled(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	m := New(runtime)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	m = updated.(Model)
+	if got := m.View().MouseMode; got != tea.MouseModeNone {
+		t.Fatalf("default MouseMode=%v, want MouseModeNone so the terminal can select text", got)
+	}
+
+	m.handleCommand("/mouse")
+	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
+		t.Fatalf("MouseMode after /mouse=%v, want MouseModeCellMotion", got)
+	}
+	if status := ansi.Strip(m.statusLine()); !strings.Contains(status, "mouse") {
+		t.Fatalf("status line=%q, want a mouse indicator while capture is on", status)
+	}
+
+	m.handleCommand("/mouse")
+	if got := m.View().MouseMode; got != tea.MouseModeNone {
+		t.Fatalf("MouseMode after second /mouse=%v, want MouseModeNone", got)
+	}
+	if status := ansi.Strip(m.statusLine()); strings.Contains(status, "mouse") {
+		t.Fatalf("status line=%q, want no mouse indicator while capture is off", status)
+	}
+}

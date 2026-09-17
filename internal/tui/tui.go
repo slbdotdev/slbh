@@ -48,6 +48,7 @@ var slashCommands = []string{
 	"/agents",
 	"/jobs",
 	"/compact",
+	"/mouse",
 }
 
 type eventMsg harness.Event
@@ -96,6 +97,10 @@ type Model struct {
 	modelLeaf      string
 	modelNoticeErr bool
 	modelNoticeOK  bool
+	// mouseCapture is off by default so the terminal keeps its own click and
+	// drag, which is what selecting and copying text needs. Turning it on
+	// trades that away for wheel scrolling.
+	mouseCapture bool
 }
 
 func New(runtime *harness.Runtime) Model {
@@ -484,6 +489,13 @@ func (m *Model) handleCommand(command string) tea.Cmd {
 		m.addLocal("status", formatAgents(m.agents))
 	case "/jobs":
 		m.addLocal("status", fmt.Sprintf("%v", m.runtime.Jobs().List()))
+	case "/mouse":
+		m.mouseCapture = !m.mouseCapture
+		if m.mouseCapture {
+			m.addLocal("status", "mouse capture on: wheel scrolls the viewport; terminal text selection needs Shift-drag")
+		} else {
+			m.addLocal("status", "mouse capture off: drag to select text; PgUp/PgDn and Ctrl-U/Ctrl-D scroll")
+		}
 	case "/compact":
 		if dropped, err := m.runtime.Compact(m.viewAgentID, 24); err != nil {
 			m.addLocal("error", err.Error())
@@ -1116,7 +1128,10 @@ func (m Model) View() tea.View {
 	}
 	view := tea.NewView(content)
 	view.AltScreen = true
-	view.MouseMode = tea.MouseModeCellMotion
+	view.MouseMode = tea.MouseModeNone
+	if m.mouseCapture {
+		view.MouseMode = tea.MouseModeCellMotion
+	}
 	return view
 }
 
@@ -1387,6 +1402,9 @@ func (m Model) statusLine() string {
 	}
 	if agents := len(m.agents); agents > 1 {
 		parts = append(parts, fmt.Sprintf("agents %d", agents))
+	}
+	if m.mouseCapture {
+		parts = append(parts, "mouse")
 	}
 	return wrapToWidth(dim.Render(strings.Join(parts, " · ")), width)
 }

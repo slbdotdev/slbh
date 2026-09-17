@@ -247,6 +247,11 @@ arrive automatically at the next API boundary with their captured output.
 | `Ctrl-U` / `Ctrl-D` | Scroll the viewport up or down. |
 | `Ctrl-C` / `Ctrl-Q` | Shut down and exit. |
 
+Mouse reporting is off, so the terminal keeps click and drag and text in the
+TUI can be selected and copied the usual way. `/mouse` turns capture on when
+wheel scrolling is wanted; the status line then shows `mouse`, and selecting
+text takes Shift-drag until it is turned back off.
+
 Input history is stored as JSON lines in `$SLBH_HOME/history`, normally
 `~/.slbh/history`, and is shared by launches using the same home directory.
 
@@ -262,6 +267,7 @@ Input history is stored as JSON lines in `$SLBH_HOME/history`, normally
 | `/agents` | Record the current agent tree as a status event. |
 | `/jobs` | Record current jobs as a status event. |
 | `/compact` | Compact the selected agent's history. |
+| `/mouse` | Toggle mouse capture: off leaves text selectable, on adds wheel scrolling. |
 
 When a child agent is selected, submitted text is sent to that child as a
 steering message. It does not create a new seat turn.

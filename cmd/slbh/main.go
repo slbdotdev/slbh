@@ -201,8 +201,8 @@ func runTUI() {
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	// Enable cell-motion mouse reporting so the TUI receives wheel events and
-	// can scroll the message viewport while the app is in the alternate screen.
+	// The TUI leaves mouse reporting off so the terminal keeps click and drag
+	// for selecting text; /mouse turns it on when wheel scrolling is wanted.
 	program := tea.NewProgram(tui.New(runtime))
 	go func() {
 		<-signals
