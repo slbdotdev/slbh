@@ -55,15 +55,7 @@ type catalogSpec struct {
 // catalog — `zai/glm-5.3-flash` and `zai/glm-5.3` are two routes and one
 // endpoint — and fetching it twice would be two round trips for one answer.
 func DiscoverCatalog(ctx context.Context, policy Policy) ([]Catalog, error) {
-	catalogs := []Catalog{{
-		Name:     LocalProviderName,
-		Endpoint: localEndpoint(),
-		Models: []ModelInfo{{
-			ID:            LocalModelID,
-			ContextWindow: LocalContextWindow,
-			Preferred:     true,
-		}},
-	}}
+	catalogs := []Catalog{localCatalog(policy)}
 
 	var firstErr error
 	for _, spec := range catalogSpecsFor(policy) {
@@ -79,6 +71,37 @@ func DiscoverCatalog(ctx context.Context, policy Policy) ([]Catalog, error) {
 	markPreferred(catalogs)
 	sort.Slice(catalogs, func(i, j int) bool { return catalogs[i].Name < catalogs[j].Name })
 	return catalogs, firstErr
+}
+
+// localCatalog is the one branch that is listed rather than fetched. Ollama's
+// OpenAI-compatible catalog publishes no context length and the local route
+// carries no credential, so a fetch would return ids with no window behind
+// them; the policy already states both, and it is the same document the
+// request will be routed by.
+//
+// It is derived from the policy rather than compiled in because the desktop
+// serves several quants at once — one per context rung — and which ones they
+// are is a deployment fact that changes by converge. A build that named them
+// would list a model the desktop had stopped serving, which is exactly what it
+// did between 2026-09-15 and 2026-09-17. The compiled default survives as the
+// answer for a policy that names no local route at all, so a stripped-down
+// policy still reaches the desktop.
+func localCatalog(policy Policy) Catalog {
+	catalog := Catalog{Name: LocalProviderName, Endpoint: localEndpoint()}
+	for _, key := range sortedKeys(policy.Routes) {
+		if native, isNative := nativeRouteFor(key); !isNative || native.flavor != LocalProviderName {
+			continue
+		}
+		window := policy.Routes[key].ContextWindow
+		if window <= 0 {
+			window = LocalContextWindow
+		}
+		catalog.Models = append(catalog.Models, ModelInfo{ID: key, ContextWindow: window, Preferred: true})
+	}
+	if len(catalog.Models) == 0 {
+		catalog.Models = []ModelInfo{{ID: LocalModelID, ContextWindow: LocalContextWindow, Preferred: true}}
+	}
+	return catalog
 }
 
 // catalogSpecsFor derives one spec per provider family the policy describes

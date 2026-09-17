@@ -450,10 +450,22 @@ func ResolveRoute(model, endpoint string, endpointExplicit bool, policy Policy) 
 	return route, nil
 }
 
+// LocalModelID is the leaf default and the fallback the catalog falls back to,
+// never the list of what the desktop serves: the deployed quants are in the
+// routing policy, which changes by converge, and this changes by rebuild. It
+// is `UD-Q2_K_XL` at 96k because that is the tag chosen to run beside a
+// working desktop — about 11.6 GiB resident against the card's 15,980 MiB, so
+// a subagent does not push the owner off the GPU — and a leaf is the agent
+// most likely to be running while somebody is using the machine.
+//
+// It was `q27-IQ2_M-96k` until 2026-09-17, a tag deleted from the desktop on
+// 2026-09-15, so every leaf that took the default routed to a model the server
+// did not have. A compiled-in name is a claim about another machine and goes
+// stale silently; the policy is the answer, and this is the floor under it.
 const (
 	LocalProviderName  = "local"
-	LocalModelID       = "local/q27-IQ2_M-96k"
-	localWireModelID   = "q27-IQ2_M-96k"
+	LocalModelID       = "local/q27-UD-Q2_K_XL-96k"
+	localWireModelID   = "q27-UD-Q2_K_XL-96k"
 	LocalContextWindow = 98304
 	localDefaultURL    = "http://fractal.wyvern-temperature.ts.net:11434/v1/chat/completions"
 )
