@@ -54,6 +54,9 @@ type Request struct {
 	Tools       []Tool
 	CacheKey    string
 	Temperature *float64
+	// MaxTokens bounds this one generation, nil to take the route's policy
+	// or the wire default. A caller sets it only to override those.
+	MaxTokens *int
 }
 
 // RequestPayloadProvider exposes the exact JSON payload that a provider will
@@ -70,6 +73,7 @@ type wireRequest struct {
 	ReasoningEffort  string        `json:"reasoning_effort,omitempty"`
 	IncludeReasoning bool          `json:"include_reasoning,omitempty"`
 	PromptCacheKey   string        `json:"prompt_cache_key"`
+	MaxTokens        int           `json:"max_tokens,omitempty"`
 	Temperature      *float64      `json:"temperature,omitempty"`
 	StreamOptions    streamOptions `json:"stream_options"`
 	Tools            []wireTool    `json:"tools,omitempty"`
@@ -183,6 +187,17 @@ type ContextWindowProvider interface {
 }
 
 const FallbackContextWindow = 128000
+
+// DefaultMaxOutputTokens bounds one generation on the OpenAI-shaped wire when
+// the route's policy does not set its own.
+//
+// It is deliberately not the Anthropic wire's ceiling. That wire sends
+// `anthropicMaxTokens` because the Messages API *requires* the field, so its
+// value was chosen to mean "effectively no limit" and to leave behaviour
+// unchanged. This one exists to *be* a limit, so it is sized to sit well above
+// any single turn this fleet has produced while still capping a generation
+// that will not stop. The two differ because they are for different things.
+const DefaultMaxOutputTokens = 32768
 
 // OpenRouterEndpoint is the stock chat-completions endpoint, and the default
 // value of SLBH_ENDPOINT. It lives here rather than in config so the policy
@@ -512,6 +527,22 @@ func (p *HTTPProvider) Wire() string {
 		return WireOpenAIChat
 	}
 	return p.wire.name()
+}
+
+// maxOutputTokens resolves the generation bound for a request on this route:
+// the request's own value, then the route's policy, then the wire default
+// passed by the caller. A caller that passes zero wants no bound sent.
+//
+// The ordering matches resolveContextWindow — the explicit value beats the
+// pin beats the fallback — so a reader who knows one knows the other.
+func (p *HTTPProvider) maxOutputTokens(req Request, wireDefault int) int {
+	if req.MaxTokens != nil && *req.MaxTokens > 0 {
+		return *req.MaxTokens
+	}
+	if p.Route.Policy.MaxOutputTokens > 0 {
+		return p.Route.Policy.MaxOutputTokens
+	}
+	return wireDefault
 }
 
 // effortValue maps a request's effort level through this route's descriptor.

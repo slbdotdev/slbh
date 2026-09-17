@@ -143,6 +143,19 @@ type RoutePolicy struct {
 	Wire            string           `json:"wire"`
 	CatalogEndpoint string           `json:"catalogEndpoint,omitempty"`
 	ContextWindow   int              `json:"contextWindow,omitempty"`
+	// MaxOutputTokens bounds a single generation on this route, zero to take
+	// the wire's own default. It is per-route rather than global because the
+	// routes differ by more than an order of magnitude in what a legitimate
+	// turn costs and in what an unbounded one costs: a cloud route runs away
+	// in seconds, while the local 27B decodes at about 76 tokens per second,
+	// where an unbounded generation against a 196,608-token window is some
+	// forty minutes of held GPU before anything stops it.
+	//
+	// Bounding also restores the telemetry. An unbounded request can only ever
+	// come back `stop`, so `finish_reason` carries no signal; with a bound, a
+	// generation that would not end reports `length` and is visible as what it
+	// is rather than as a hang.
+	MaxOutputTokens int              `json:"maxOutputTokens,omitempty"`
 	Effort          EffortDescriptor `json:"effort"`
 	Provider        *ProviderPosture `json:"provider,omitempty"`
 }
@@ -209,6 +222,14 @@ func (r RoutePolicy) validate(key string) error {
 	}
 	if r.ContextWindow < 0 {
 		return fmt.Errorf("route %q has a negative contextWindow", key)
+	}
+	if r.MaxOutputTokens < 0 {
+		return fmt.Errorf("route %q has a negative maxOutputTokens", key)
+	}
+	if r.ContextWindow > 0 && r.MaxOutputTokens > r.ContextWindow {
+		return fmt.Errorf(
+			"route %q sets maxOutputTokens %d above its own contextWindow %d, so the bound could never be reached",
+			key, r.MaxOutputTokens, r.ContextWindow)
 	}
 	if strings.TrimSpace(r.Effort.Field) == "" {
 		return fmt.Errorf("route %q has no effort field", key)

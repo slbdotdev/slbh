@@ -124,7 +124,7 @@ func (anthropicMessagesWire) payload(p *HTTPProvider, req Request) ([]byte, erro
 	}
 	body := anthropicWireRequest{
 		Model:       p.modelID(req.Model),
-		MaxTokens:   anthropicMaxTokens,
+		MaxTokens:   p.maxOutputTokens(req, anthropicMaxTokens),
 		Stream:      true,
 		Messages:    anthropicMessages(req.Messages),
 		Temperature: req.Temperature,

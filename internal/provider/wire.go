@@ -132,6 +132,7 @@ func (openAIChatWire) payload(p *HTTPProvider, req Request) ([]byte, error) {
 		ReasoningEffort:  effort,
 		IncludeReasoning: effort != "",
 		PromptCacheKey:   req.CacheKey,
+		MaxTokens:        p.maxOutputTokens(req, DefaultMaxOutputTokens),
 		Temperature:      req.Temperature,
 		StreamOptions:    streamOptions{IncludeUsage: true},
 		Provider:         providerObjectFor(p.Route),
