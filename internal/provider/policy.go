@@ -139,10 +139,10 @@ type EffortDescriptor struct {
 // RoutePolicy is one route's entry: where it goes, how it speaks, how big its
 // context really is, how it spells effort, and what posture governs it.
 type RoutePolicy struct {
-	Endpoint        string           `json:"endpoint"`
-	Wire            string           `json:"wire"`
-	CatalogEndpoint string           `json:"catalogEndpoint,omitempty"`
-	ContextWindow   int              `json:"contextWindow,omitempty"`
+	Endpoint        string `json:"endpoint"`
+	Wire            string `json:"wire"`
+	CatalogEndpoint string `json:"catalogEndpoint,omitempty"`
+	ContextWindow   int    `json:"contextWindow,omitempty"`
 	// MaxOutputTokens bounds a single generation on this route, zero to take
 	// the wire's own default. It is per-route rather than global because the
 	// routes differ by more than an order of magnitude in what a legitimate

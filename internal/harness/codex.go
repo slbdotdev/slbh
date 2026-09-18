@@ -688,7 +688,7 @@ func (c *codexLeaf) handle(message codexWire) {
 		c.mu.Unlock()
 		c.agent.setStatus("idle")
 		if answer != "" {
-			if parent, ok := c.agent.runtime.Agent(c.agent.ParentID); ok {
+			if parent, ok := c.agent.runtime.lookupAgent(c.agent.ParentID); ok {
 				if err := parent.receiveChildResult(c.agent, answer); err != nil {
 					c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "delivery_error", Text: err.Error()})
 				}
@@ -732,7 +732,7 @@ func (c *codexLeaf) handleToolCall(message codexWire) {
 		_ = c.rpc.respond(message.ID, map[string]any{"success": false, "contentItems": []any{map[string]any{"type": "inputText", "text": "message is required"}}})
 		return
 	}
-	parent, ok := c.runtime.Agent(c.agent.ParentID)
+	parent, ok := c.runtime.lookupAgent(c.agent.ParentID)
 	if !ok {
 		_ = c.rpc.respond(message.ID, map[string]any{"success": false, "contentItems": []any{map[string]any{"type": "inputText", "text": "parent is unavailable"}}})
 		return

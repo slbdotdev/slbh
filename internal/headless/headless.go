@@ -73,17 +73,25 @@ func Run(rt *harness.Runtime, opts Options) (Result, error) {
 	if rt == nil {
 		return Result{}, fmt.Errorf("headless: nil runtime")
 	}
-	seat := rt.Seat()
-	if seat == nil {
+	var seat harness.AgentSnapshot
+	var found bool
+	for _, agent := range rt.Agents() {
+		if agent.Depth == 0 {
+			seat = agent
+			found = true
+			break
+		}
+	}
+	if !found {
 		return Result{}, fmt.Errorf("headless: runtime has no seat agent")
 	}
-	res := Result{AgentID: seat.ID, Model: seat.Snapshot().Model, StopReason: "done", Runtime: rt.ID()}
+	res := Result{AgentID: seat.ID, Model: seat.Model, StopReason: "done", Runtime: rt.ID()}
 	if path, err := rt.TranscriptPath(seat.ID); err == nil {
 		res.Transcript = path
 	}
 
 	start := time.Now()
-	if err := seat.Send(opts.Prompt); err != nil {
+	if err := rt.SendPrompt(seat.ID, opts.Prompt); err != nil {
 		return res, fmt.Errorf("headless: send: %w", err)
 	}
 

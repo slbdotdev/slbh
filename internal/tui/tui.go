@@ -147,11 +147,7 @@ func New(runtime *harness.Runtime) Model {
 	input.MinHeight = 1
 	input.Focus()
 	view := viewport.New(viewport.WithWidth(80), viewport.WithHeight(20))
-	seat := runtime.Seat()
-	viewID := ""
-	if seat != nil {
-		viewID = seat.ID
-	}
+	viewID := seatID(runtime)
 	historyPath := ""
 	var history []string
 	if runtime != nil {
@@ -377,18 +373,18 @@ func (m *Model) submit() tea.Cmd {
 	if strings.HasPrefix(text, "/") {
 		return m.handleCommand(text)
 	}
-	a, ok := m.runtime.Agent(m.viewAgentID)
+	a, ok := agentSnapshot(m.runtime, m.viewAgentID)
 	if !ok {
-		a = m.runtime.Seat()
+		a, ok = seatSnapshot(m.runtime)
 	}
-	if a == nil {
+	if !ok {
 		return nil
 	}
 	var err error
 	if a.ID == seatID(m.runtime) {
-		err = a.Send(text)
+		err = m.runtime.SendPrompt(a.ID, text)
 	} else {
-		err = a.Steer(text)
+		err = m.runtime.SteerAgent(a.ID, text)
 	}
 	if err != nil {
 		m.runtime.EmitStatus("error", err.Error())
@@ -535,8 +531,11 @@ func (m *Model) handleCommand(command string) tea.Cmd {
 		}
 	case "/effort":
 		if arg != "" {
-			if seat := m.runtime.Seat(); seat != nil {
-				seat.SetEffort(arg)
+			if id := seatID(m.runtime); id != "" {
+				if err := m.runtime.SetAgentEffort(id, arg); err != nil {
+					m.addLocal("error", err.Error())
+					return nil
+				}
 			}
 			cfg := m.runtime.Config()
 			cfg.SeatEffort = arg
@@ -549,7 +548,7 @@ func (m *Model) handleCommand(command string) tea.Cmd {
 	case "/agents":
 		m.addLocal("status", formatAgents(m.agents))
 	case "/jobs":
-		m.addLocal("status", fmt.Sprintf("%v", m.runtime.Jobs().List()))
+		m.addLocal("status", fmt.Sprintf("%v", m.runtime.JobSnapshots()))
 	case "/mouse":
 		m.mouseCapture = !m.mouseCapture
 		if m.mouseCapture {
@@ -1598,10 +1597,10 @@ func responseType(event harness.Event) string {
 
 func (m Model) statusLine() string {
 	current := harness.AgentSnapshot{Model: "-", Effort: "-"}
-	if agent, ok := m.runtime.Agent(m.viewAgentID); ok {
-		current = agent.Snapshot()
-	} else if seat := m.runtime.Seat(); seat != nil {
-		current = seat.Snapshot()
+	if agent, ok := agentSnapshot(m.runtime, m.viewAgentID); ok {
+		current = agent
+	} else if seat, ok := seatSnapshot(m.runtime); ok {
+		current = seat
 	}
 	width := max(1, m.chatWidth())
 	model := current.Model
@@ -1614,7 +1613,7 @@ func (m Model) statusLine() string {
 		formatContextStats(current),
 		formatCacheStats(current),
 	}
-	if jobs := len(m.runtime.Jobs().List()); jobs > 0 {
+	if jobs := len(m.runtime.JobSnapshots()); jobs > 0 {
 		parts = append(parts, fmt.Sprintf("jobs %d", jobs))
 	}
 	if agents := len(m.agents); agents > 1 {
@@ -1681,10 +1680,34 @@ func (m Model) agentPanel() string {
 }
 
 func seatID(runtime *harness.Runtime) string {
-	if seat := runtime.Seat(); seat != nil {
+	if seat, ok := seatSnapshot(runtime); ok {
 		return seat.ID
 	}
 	return ""
+}
+
+func seatSnapshot(runtime *harness.Runtime) (harness.AgentSnapshot, bool) {
+	if runtime == nil {
+		return harness.AgentSnapshot{}, false
+	}
+	for _, agent := range runtime.Agents() {
+		if agent.Depth == 0 {
+			return agent, true
+		}
+	}
+	return harness.AgentSnapshot{}, false
+}
+
+func agentSnapshot(runtime *harness.Runtime, agentID string) (harness.AgentSnapshot, bool) {
+	if runtime == nil {
+		return harness.AgentSnapshot{}, false
+	}
+	for _, agent := range runtime.Agents() {
+		if agent.ID == agentID {
+			return agent, true
+		}
+	}
+	return harness.AgentSnapshot{}, false
 }
 
 func formatAgents(agents []harness.AgentSnapshot) string {

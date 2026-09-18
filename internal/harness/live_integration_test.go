@@ -160,7 +160,7 @@ func TestLiveTranscriptReplayAndCache(t *testing.T) {
 	}
 	defer runtime.Close()
 
-	seat := runtime.Seat()
+	seat := runtime.seat()
 	transcriptPath, err := runtime.TranscriptPath(seat.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -277,7 +277,7 @@ func TestLiveNativeSeatCodexLeafContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	seat := runtime.Seat()
+	seat := runtime.seat()
 	prompt := fmt.Sprintf("Launch one Codex leaf using harness codex and model %s. Give it this brief: reply with exactly NATIVE_CODEX_LEAF_OK and nothing else. After the leaf reports back, reply with exactly NATIVE_CODEX_LEAF_OK and nothing else.", codexModel)
 	if err := seat.Send(prompt); err != nil {
 		t.Fatal(err)

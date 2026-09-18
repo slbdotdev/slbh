@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/slbdotdev/slbh/internal/config"
+	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/logx"
 	"github.com/slbdotdev/slbh/internal/provider"
 )
@@ -113,15 +114,155 @@ func testRuntime(t *testing.T) *Runtime {
 	return r
 }
 
+func TestAgentSnapshotJSONRoundTrip(t *testing.T) {
+	want := AgentSnapshot{
+		ID:              "agent-1234",
+		Title:           "reviewer",
+		ParentID:        "agent-parent",
+		Depth:           2,
+		Model:           "gpt-test",
+		Effort:          "high",
+		Status:          "thinking",
+		Harness:         "codex",
+		WorkDir:         "/tmp/work",
+		ContextWindow:   128000,
+		ContextUsed:     12000,
+		CacheHitTokens:  7000,
+		CacheMissTokens: 5000,
+	}
+	data, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got AgentSnapshot
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("AgentSnapshot round trip = %#v, want %#v", got, want)
+	}
+	for _, key := range []string{"id", "title", "parent_id", "depth", "model", "effort", "status", "harness", "work_dir", "context_window", "context_used", "cache_hit_tokens", "cache_miss_tokens"} {
+		if !strings.Contains(string(data), `"`+key+`"`) {
+			t.Fatalf("AgentSnapshot JSON missing %q: %s", key, data)
+		}
+	}
+}
+
+func TestJobSnapshotJSONRoundTrip(t *testing.T) {
+	want := JobSnapshot{
+		ID:          "job-1234",
+		Author:      "agent-1234",
+		Script:      "printf output",
+		ToolName:    "long_job",
+		Status:      "complete",
+		Started:     time.Date(2026, 9, 18, 1, 2, 3, 0, time.UTC),
+		Finished:    time.Date(2026, 9, 18, 1, 2, 4, 0, time.UTC),
+		ExitCode:    0,
+		StdoutBytes: 6,
+		StderrBytes: 2,
+		WarnAfter:   30 * time.Second,
+	}
+	data, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got JobSnapshot
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("JobSnapshot round trip = %#v, want %#v", got, want)
+	}
+	for _, key := range []string{"id", "author", "script", "tool_name", "status", "started", "finished", "exit_code", "stdout_bytes", "stderr_bytes", "warn_after"} {
+		if !strings.Contains(string(data), `"`+key+`"`) {
+			t.Fatalf("JobSnapshot JSON missing %q: %s", key, data)
+		}
+	}
+}
+
+func TestJobSnapshotsReturnsCopies(t *testing.T) {
+	r := testRuntime(t)
+	seat := r.seat()
+	started, err := r.jobs.Start(context.Background(), job.Spec{
+		Author:   seat.ID,
+		Script:   "printf output",
+		Command:  []string{"sh", "-c", "printf output"},
+		ToolName: "long_job",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started.Done()
+
+	first := r.JobSnapshots()
+	if len(first) != 1 {
+		t.Fatalf("JobSnapshots length = %d, want 1", len(first))
+	}
+	original := first[0]
+	first[0] = JobSnapshot{ID: "mutated"}
+	first = append(first, JobSnapshot{ID: "invented"})
+
+	second := r.JobSnapshots()
+	if len(second) != 1 || second[0] != original {
+		t.Fatalf("mutating returned snapshots changed runtime jobs: %#v", second)
+	}
+}
+
+func TestRuntimeSetAgentEffort(t *testing.T) {
+	r := testRuntime(t)
+	seat := r.seat()
+
+	if err := r.SetAgentEffort(seat.ID, "medium"); err != nil {
+		t.Fatal(err)
+	}
+	if got := seat.Snapshot().Effort; got != "medium" {
+		t.Fatalf("SetAgentEffort set effort %q, want medium", got)
+	}
+}
+
+func TestRuntimeSendPrompt(t *testing.T) {
+	r := testRuntime(t)
+	seat := r.seat()
+
+	if err := r.SendPrompt(seat.ID, "first prompt"); err != nil {
+		t.Fatal(err)
+	}
+	waitAgentTurn(t, r, seat.ID)
+	history := seat.History()
+	for _, message := range history {
+		if message.Content == "first prompt" {
+			return
+		}
+	}
+	t.Fatalf("SendPrompt did not deliver the prompt: %#v", history)
+}
+
+func TestRuntimeSteerAgent(t *testing.T) {
+	r := testRuntime(t)
+	seat := r.seat()
+
+	if err := r.SteerAgent(seat.ID, "new direction"); err != nil {
+		t.Fatal(err)
+	}
+	waitAgentTurn(t, r, seat.ID)
+	history := seat.History()
+	for _, message := range history {
+		if message.Content == "[steer] new direction" {
+			return
+		}
+	}
+	t.Fatalf("SteerAgent did not deliver the steer: %#v", history)
+}
+
 func TestRuntimeStreamsAndLogs(t *testing.T) {
 	r := testRuntime(t)
 	if got := len(strings.TrimPrefix(r.ID(), "run-")); got != 8 {
 		t.Fatalf("runtime ID suffix length = %d, want 8", got)
 	}
-	if got := len(strings.TrimPrefix(r.Seat().ID, "agent-")); got != 8 {
+	if got := len(strings.TrimPrefix(r.seat().ID, "agent-")); got != 8 {
 		t.Fatalf("agent ID suffix length = %d, want 8", got)
 	}
-	r.Seat().Send("hello")
+	r.seat().Send("hello")
 	deadline := time.After(5 * time.Second)
 	var sawDone bool
 	for !sawDone {
@@ -134,7 +275,7 @@ func TestRuntimeStreamsAndLogs(t *testing.T) {
 			t.Fatal("agent turn did not finish")
 		}
 	}
-	transcriptPath, err := r.TranscriptPath(r.Seat().ID)
+	transcriptPath, err := r.TranscriptPath(r.seat().ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +313,7 @@ func TestRuntimeDoesNotDropStreamEventsWhenUIFallsBehind(t *testing.T) {
 	r := testRuntime(t)
 	const count = 4096
 	for i := 0; i < count; i++ {
-		r.emit(Event{AgentID: r.Seat().ID, AgentTitle: "seat", Kind: "assistant", Text: "stream-event"})
+		r.emit(Event{AgentID: r.seat().ID, AgentTitle: "seat", Kind: "assistant", Text: "stream-event"})
 	}
 	received := 0
 	deadline := time.After(5 * time.Second)
@@ -190,7 +331,7 @@ func TestRuntimeDoesNotDropStreamEventsWhenUIFallsBehind(t *testing.T) {
 
 func TestAgentSessionsHaveSeparateTranscriptsAndClearRotatesSelectedAgent(t *testing.T) {
 	r := testRuntime(t)
-	seat := r.Seat()
+	seat := r.seat()
 	firstPath, err := r.TranscriptPath(seat.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +368,7 @@ func TestAgentSessionsHaveSeparateTranscriptsAndClearRotatesSelectedAgent(t *tes
 	if firstPath == secondPath {
 		t.Fatalf("clear reused transcript path %q", secondPath)
 	}
-	if got := r.Seat().ID; got != seat.ID {
+	if got := r.seat().ID; got != seat.ID {
 		t.Fatalf("clear changed seat ID from %q to %q", seat.ID, got)
 	}
 	if got, err := r.TranscriptPath(child.ID); err != nil || got != childPath {
@@ -287,13 +428,13 @@ func TestAgentTracksContextAndCacheStats(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	r.Seat().Send("hello")
+	r.seat().Send("hello")
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
 		case event := <-r.Events():
 			if event.Kind == "turn_done" {
-				snapshot := r.Seat().Snapshot()
+				snapshot := r.seat().Snapshot()
 				if snapshot.ContextWindow != provider.FallbackContextWindow {
 					t.Fatalf("context window = %d, want %d", snapshot.ContextWindow, provider.FallbackContextWindow)
 				}
@@ -313,7 +454,7 @@ func TestAgentTracksContextAndCacheStats(t *testing.T) {
 
 func TestDepthAndSteerIsolation(t *testing.T) {
 	r := testRuntime(t)
-	seat := r.Seat()
+	seat := r.seat()
 	child, err := r.LaunchSubagent(seat.ID, "child", "brief")
 	if err != nil {
 		t.Fatal(err)
@@ -344,17 +485,17 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	workDir := t.TempDir()
 	outsideDir := t.TempDir()
 	r.workDir = workDir
-	r.Seat().WorkDir = workDir
+	r.seat().WorkDir = workDir
 	path := filepath.Join(outsideDir, "nested", "file.txt")
 	writeArgs, err := json.Marshal(map[string]string{"path": path, "content": "one\ntwo\n"})
-	if _, err := r.ExecuteTool(r.Seat().ID, "write_file", string(writeArgs)); err != nil {
+	if _, err := r.ExecuteTool(r.seat().ID, "write_file", string(writeArgs)); err != nil {
 		t.Fatal(err)
 	}
 	globArgs, err := json.Marshal(map[string]string{"pattern": filepath.Join(outsideDir, "nested", "*.txt")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	matches, err := r.ExecuteTool(r.Seat().ID, "glob", string(globArgs))
+	matches, err := r.ExecuteTool(r.seat().ID, "glob", string(globArgs))
 	if err != nil || !strings.Contains(matches, filepath.Clean(path)) {
 		t.Fatalf("glob=%q err=%v", matches, err)
 	}
@@ -362,7 +503,7 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	grep, err := r.ExecuteTool(r.Seat().ID, "grep", string(grepArgs))
+	grep, err := r.ExecuteTool(r.seat().ID, "grep", string(grepArgs))
 	if err != nil || !strings.Contains(grep, filepath.Clean(path)+":2:two") {
 		t.Fatalf("grep=%q err=%v", grep, err)
 	}
@@ -370,7 +511,7 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines, err := r.ExecuteTool(r.Seat().ID, "read_lines", string(readLinesArgs))
+	lines, err := r.ExecuteTool(r.seat().ID, "read_lines", string(readLinesArgs))
 	if err != nil || !strings.Contains(lines, "2:two") {
 		t.Fatalf("lines=%q err=%v", lines, err)
 	}
@@ -378,14 +519,14 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.ExecuteTool(r.Seat().ID, "edit_file", string(editArgs)); err != nil {
+	if _, err := r.ExecuteTool(r.seat().ID, "edit_file", string(editArgs)); err != nil {
 		t.Fatal(err)
 	}
 	readArgs, err := json.Marshal(map[string]string{"path": path})
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := r.ExecuteTool(r.Seat().ID, "read_file", string(readArgs))
+	content, err := r.ExecuteTool(r.seat().ID, "read_file", string(readArgs))
 	if err != nil || content != "ONE\ntwo\n" {
 		t.Fatalf("content=%q err=%v", content, err)
 	}
@@ -397,14 +538,14 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if relativeContent, err := r.ExecuteTool(r.Seat().ID, "read_file", string(relativeReadArgs)); err != nil || relativeContent != content {
+	if relativeContent, err := r.ExecuteTool(r.seat().ID, "read_file", string(relativeReadArgs)); err != nil || relativeContent != content {
 		t.Fatalf("relative content=%q err=%v", relativeContent, err)
 	}
 	bytesArgs, err := json.Marshal(map[string]any{"path": path, "start": 0, "end": 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	bytes, err := r.ExecuteTool(r.Seat().ID, "read_bytes", string(bytesArgs))
+	bytes, err := r.ExecuteTool(r.seat().ID, "read_bytes", string(bytesArgs))
 	if err != nil || bytes != "ONE" {
 		t.Fatalf("bytes=%q err=%v", bytes, err)
 	}
@@ -413,7 +554,7 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.ExecuteTool(r.Seat().ID, "apply_patch", string(patchArgs)); err != nil {
+	if _, err := r.ExecuteTool(r.seat().ID, "apply_patch", string(patchArgs)); err != nil {
 		t.Fatal(err)
 	}
 	if content, err := os.ReadFile(path); err != nil || string(content) != "ONE\nTWO\n" {
@@ -427,7 +568,7 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cwdOutput, err := r.ExecuteTool(r.Seat().ID, "quick_bash", string(cwdArgs))
+	cwdOutput, err := r.ExecuteTool(r.seat().ID, "quick_bash", string(cwdArgs))
 	if err != nil || !strings.Contains(strings.ReplaceAll(cwdOutput, "\\", "/"), strings.ReplaceAll(filepath.Clean(outsideDir), "\\", "/")) {
 		t.Fatalf("quick_bash cwd=%q err=%v", cwdOutput, err)
 	}
@@ -435,11 +576,11 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobID, err := r.ExecuteTool(r.Seat().ID, "long_job", string(jobArgs))
+	jobID, err := r.ExecuteTool(r.seat().ID, "long_job", string(jobArgs))
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, ok := r.Jobs().Get(jobID)
+	job, ok := r.jobs.Get(jobID)
 	if !ok {
 		t.Fatalf("long_job %q was not registered", jobID)
 	}
@@ -457,7 +598,7 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pythonOutput, err := r.ExecuteTool(r.Seat().ID, "quick_py", string(pythonArgs))
+	pythonOutput, err := r.ExecuteTool(r.seat().ID, "quick_py", string(pythonArgs))
 	if err != nil || !strings.Contains(strings.ReplaceAll(pythonOutput, "\\", "/"), strings.ReplaceAll(filepath.Clean(outsideDir), "\\", "/")) {
 		t.Fatalf("quick_py cwd=%q err=%v", pythonOutput, err)
 	}
@@ -465,11 +606,11 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pythonJobID, err := r.ExecuteTool(r.Seat().ID, "long_py", string(pythonJobArgs))
+	pythonJobID, err := r.ExecuteTool(r.seat().ID, "long_py", string(pythonJobArgs))
 	if err != nil {
 		t.Fatal(err)
 	}
-	pythonJob, ok := r.Jobs().Get(pythonJobID)
+	pythonJob, ok := r.jobs.Get(pythonJobID)
 	if !ok {
 		t.Fatalf("long_py %q was not registered", pythonJobID)
 	}
@@ -505,11 +646,11 @@ func TestReadJobReturnsOutputOfRunningJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobID, err := r.ExecuteTool(r.Seat().ID, "long_job", string(jobArgs))
+	jobID, err := r.ExecuteTool(r.seat().ID, "long_job", string(jobArgs))
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, ok := r.Jobs().Get(jobID)
+	job, ok := r.jobs.Get(jobID)
 	if !ok {
 		t.Fatalf("long_job %q was not registered", jobID)
 	}
@@ -523,7 +664,7 @@ func TestReadJobReturnsOutputOfRunningJob(t *testing.T) {
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		raw, err := r.ExecuteTool(r.Seat().ID, "read_job", string(readArgs))
+		raw, err := r.ExecuteTool(r.seat().ID, "read_job", string(readArgs))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -547,7 +688,7 @@ func TestReadJobReturnsOutputOfRunningJob(t *testing.T) {
 		t.Fatal("job was no longer running when read_job answered")
 	default:
 	}
-	if _, err := r.ExecuteTool(r.Seat().ID, "kill_job", string(readArgs)); err != nil {
+	if _, err := r.ExecuteTool(r.seat().ID, "kill_job", string(readArgs)); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -563,7 +704,7 @@ func TestProviderToolCallsExecuteAndContinue(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	r.Seat().Send("use a tool")
+	r.seat().Send("use a tool")
 	deadline := time.After(5 * time.Second)
 	var sawResult, sawDone bool
 	for !sawDone {
@@ -591,10 +732,10 @@ func TestReasoningContentIsReplayedForToolContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if err := r.Seat().Send("use a tool"); err != nil {
+	if err := r.seat().Send("use a tool"); err != nil {
 		t.Fatal(err)
 	}
-	waitAgentTurn(t, r, r.Seat().ID)
+	waitAgentTurn(t, r, r.seat().ID)
 
 	requests := p.snapshot()
 	if len(requests) != 2 {
@@ -628,10 +769,10 @@ func TestEmptyApprovalPolicyDoesNotCallProviderButExplicitLaunchModelWorks(t *te
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if got := r.Seat().Snapshot().Model; got != "" {
+	if got := r.seat().Snapshot().Model; got != "" {
 		t.Fatalf("seat model = %q, want fail-closed empty model", got)
 	}
-	child, err := r.LaunchSubagentSpec(r.Seat().ID, LaunchSpec{Title: "explicit", Model: "user-requested"})
+	child, err := r.LaunchSubagentSpec(r.seat().ID, LaunchSpec{Title: "explicit", Model: "user-requested"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -652,7 +793,7 @@ func TestLeafSubagentUsesLeafDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	levelOne, err := r.LaunchSubagentSpec(r.Seat().ID, LaunchSpec{Title: "level one"})
+	levelOne, err := r.LaunchSubagentSpec(r.seat().ID, LaunchSpec{Title: "level one"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +818,7 @@ func TestCodexLeafStartFailureDoesNotLeaveOrphanAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if _, err := r.LaunchSubagentSpec(r.Seat().ID, LaunchSpec{Title: "broken codex", Harness: "codex", Model: "gpt-test"}); err == nil {
+	if _, err := r.LaunchSubagentSpec(r.seat().ID, LaunchSpec{Title: "broken codex", Harness: "codex", Model: "gpt-test"}); err == nil {
 		t.Fatal("missing Codex executable unexpectedly launched")
 	}
 	agents := r.Agents()
@@ -698,10 +839,10 @@ func TestCodexLeafRequiresExplicitChatGPTModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if _, err := r.LaunchSubagentSpec(r.Seat().ID, LaunchSpec{Title: "missing model", Harness: "codex"}); err == nil || !strings.Contains(err.Error(), "explicit ChatGPT model") {
+	if _, err := r.LaunchSubagentSpec(r.seat().ID, LaunchSpec{Title: "missing model", Harness: "codex"}); err == nil || !strings.Contains(err.Error(), "explicit ChatGPT model") {
 		t.Fatalf("Codex launch error = %v, want explicit-model validation", err)
 	}
-	levelOne, err := r.LaunchSubagentSpec(r.Seat().ID, LaunchSpec{Title: "native parent", Model: "native-child"})
+	levelOne, err := r.LaunchSubagentSpec(r.seat().ID, LaunchSpec{Title: "native parent", Model: "native-child"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -760,17 +901,17 @@ func TestChildResultReachesParent(t *testing.T) {
 	}
 	defer r.Close()
 
-	r.Seat().Send("ask a child")
+	r.seat().Send("ask a child")
 	deadline := time.After(5 * time.Second)
 	var sawParentResult bool
 	var childResultTitle string
 	for !sawParentResult {
 		select {
 		case event := <-r.Events():
-			if event.AgentID == r.Seat().ID && event.Kind == "child_result" {
+			if event.AgentID == r.seat().ID && event.Kind == "child_result" {
 				childResultTitle = event.AgentTitle
 			}
-			if event.AgentID == r.Seat().ID && event.Kind == "assistant" && event.Text == "parent saw child" {
+			if event.AgentID == r.seat().ID && event.Kind == "assistant" && event.Text == "parent saw child" {
 				sawParentResult = true
 			}
 		case <-deadline:
@@ -781,17 +922,17 @@ func TestChildResultReachesParent(t *testing.T) {
 		t.Fatalf("child result event title = %q, want child", childResultTitle)
 	}
 
-	waitAgentTurn(t, r, r.Seat().ID)
+	waitAgentTurn(t, r, r.seat().ID)
 	var resultCount int
-	for _, message := range r.Seat().History() {
+	for _, message := range r.seat().History() {
 		if strings.HasPrefix(message.Content, "[result from child] child answer") {
 			resultCount++
 		}
 	}
 	if resultCount != 1 {
-		t.Fatalf("parent history has %d child results, want one: %#v", resultCount, r.Seat().History())
+		t.Fatalf("parent history has %d child results, want one: %#v", resultCount, r.seat().History())
 	}
-	transcriptPath, err := r.TranscriptPath(r.Seat().ID)
+	transcriptPath, err := r.TranscriptPath(r.seat().ID)
 	if err != nil {
 		t.Fatal(err)
 	}

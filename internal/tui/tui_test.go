@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -33,8 +34,8 @@ func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = updated.(Model)
 	m.events = append(m.events,
-		harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "seat", Kind: "user", Text: "hi"},
-		harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "seat", Kind: "error", Text: strings.Repeat("long error ", 20)},
+		harness.Event{AgentID: seatID(runtime), AgentTitle: "seat", Kind: "user", Text: "hi"},
+		harness.Event{AgentID: seatID(runtime), AgentTitle: "seat", Kind: "error", Text: strings.Repeat("long error ", 20)},
 	)
 	m.refreshView()
 	view := m.View().Content
@@ -54,7 +55,11 @@ func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 	if strings.Contains(m.statusLine(), "Enter send") || strings.Contains(m.statusLine(), "agents 1") || strings.Contains(m.statusLine(), "jobs 0") {
 		t.Fatal("footer contains hidden help or zero-count metadata")
 	}
-	if !strings.Contains(m.statusLine(), runtime.Seat().Model+" "+runtime.Seat().Effort) || !strings.Contains(m.statusLine(), "--/--") || !strings.Contains(m.statusLine(), " · --") {
+	seat, ok := seatSnapshot(runtime)
+	if !ok {
+		t.Fatal("runtime has no seat snapshot")
+	}
+	if !strings.Contains(m.statusLine(), seat.Model+" "+seat.Effort) || !strings.Contains(m.statusLine(), "--/--") || !strings.Contains(m.statusLine(), " · --") {
 		t.Fatal("footer should show the actual model identifier followed by effort")
 	}
 }
@@ -69,7 +74,7 @@ func TestAgentPanelKeepsAllAgentsInsideTerminal(t *testing.T) {
 	m := New(runtime)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = updated.(Model)
-	child, err := runtime.LaunchSubagent(runtime.Seat().ID, "child", "")
+	child, err := runtime.LaunchSubagent(seatID(runtime), "child", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +174,7 @@ func TestEndedSubagentLeavesActivePanelButKeepsTranscript(t *testing.T) {
 	m := New(runtime)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = updated.(Model)
-	child, err := runtime.LaunchSubagent(runtime.Seat().ID, "child", "")
+	child, err := runtime.LaunchSubagent(seatID(runtime), "child", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +184,7 @@ func TestEndedSubagentLeavesActivePanelButKeepsTranscript(t *testing.T) {
 	m.focusAgents = true
 	m.selected = 1
 
-	if err := runtime.EndSubagent(runtime.Seat().ID, child.ID); err != nil {
+	if err := runtime.EndSubagent(seatID(runtime), child.ID); err != nil {
 		t.Fatal(err)
 	}
 	updated, _ = m.Update(eventMsg(harness.Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "status", Text: "stopped"}))
@@ -188,8 +193,8 @@ func TestEndedSubagentLeavesActivePanelButKeepsTranscript(t *testing.T) {
 	if containsAgent(m.agents, child.ID) {
 		t.Fatalf("stopped child remains in active agents: %#v", m.agents)
 	}
-	if m.viewAgentID != runtime.Seat().ID {
-		t.Fatalf("view stayed on ended child %q, want seat %q", m.viewAgentID, runtime.Seat().ID)
+	if m.viewAgentID != seatID(runtime) {
+		t.Fatalf("view stayed on ended child %q, want seat %q", m.viewAgentID, seatID(runtime))
 	}
 	if strings.Contains(m.agentPanel(), "child") {
 		t.Fatalf("ended child remains selectable in panel: %q", m.agentPanel())
@@ -229,9 +234,9 @@ func TestMessageBlocksAreSpacedAndColored(t *testing.T) {
 
 	width := 40
 	renderModel := Model{}
-	user := harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "seat", Kind: "user", Text: "hello"}
-	thinking := harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "seat", Kind: "thinking", Text: "working"}
-	assistant := harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "seat-agent", Kind: "assistant", Text: "done"}
+	user := harness.Event{AgentID: seatID(runtime), AgentTitle: "seat", Kind: "user", Text: "hello"}
+	thinking := harness.Event{AgentID: seatID(runtime), AgentTitle: "seat", Kind: "thinking", Text: "working"}
+	assistant := harness.Event{AgentID: seatID(runtime), AgentTitle: "seat-agent", Kind: "assistant", Text: "done"}
 
 	if got := lipgloss.Width(renderModel.renderEvent(user, width)); got != width {
 		t.Fatalf("user block width=%d, want %d", got, width)
@@ -343,8 +348,8 @@ func TestMarkdownRenderingCachesBySourceAndWidth(t *testing.T) {
 	m.width, m.height = 60, 24
 	assistantText := "A **formatted** response with enough words to wrap differently at a much narrower terminal width."
 	m.events = []harness.Event{
-		{AgentID: runtime.Seat().ID, Kind: "user", Text: "show me"},
-		{AgentID: runtime.Seat().ID, Kind: "assistant", Text: assistantText},
+		{AgentID: seatID(runtime), Kind: "user", Text: "show me"},
+		{AgentID: seatID(runtime), Kind: "assistant", Text: assistantText},
 	}
 	m.refreshView()
 	wide := m.viewport.View()
@@ -411,7 +416,7 @@ func TestChildResultsRenderAsNamedPinkMessageBlocks(t *testing.T) {
 	defer runtime.Close()
 
 	renderModel := Model{}
-	childResult := harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "researcher", Kind: "child_result", Text: "findings"}
+	childResult := harness.Event{AgentID: seatID(runtime), AgentTitle: "researcher", Kind: "child_result", Text: "findings"}
 	block := renderModel.renderEvent(childResult, 40)
 	if !strings.Contains(block, "48;5;132") {
 		t.Fatalf("child result has no pink background: %q", block)
@@ -431,7 +436,7 @@ func TestChildResultsRenderAsNamedPinkMessageBlocks(t *testing.T) {
 		t.Fatal("child result is not treated as a chat message")
 	}
 
-	forwarded := harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "researcher", Kind: "steer", Text: "progress update", Metadata: map[string]any{"sender": "child-id"}}
+	forwarded := harness.Event{AgentID: seatID(runtime), AgentTitle: "researcher", Kind: "steer", Text: "progress update", Metadata: map[string]any{"sender": "child-id"}}
 	forwardedBlock := renderModel.renderEvent(forwarded, 40)
 	if !strings.Contains(forwardedBlock, "48;5;132") || !strings.Contains(ansi.Strip(strings.Split(forwardedBlock, "\n")[0]), "• researcher") {
 		t.Fatalf("forwarded child message is not a named pink block: %q", forwardedBlock)
@@ -451,14 +456,14 @@ func TestLeadingControlEventsStayOutOfMessageViewport(t *testing.T) {
 	m := New(runtime)
 	m.width = 40
 	m.events = []harness.Event{
-		{AgentID: runtime.Seat().ID, Kind: "runtime", Text: "runtime started"},
-		{AgentID: runtime.Seat().ID, Kind: "status", Text: "thinking"},
-		{AgentID: runtime.Seat().ID, Kind: "user", Text: "hi"},
-		{AgentID: runtime.Seat().ID, Kind: "status", Text: "idle"},
-		{AgentID: runtime.Seat().ID, Kind: "usage", Text: "token usage should stay hidden"},
-		{AgentID: runtime.Seat().ID, Kind: "inference_request", Text: "wire payload should stay hidden"},
-		{AgentID: runtime.Seat().ID, Kind: "thinking", Text: "working"},
-		{AgentID: runtime.Seat().ID, Kind: "turn_done", Text: "lifecycle event should stay hidden"},
+		{AgentID: seatID(runtime), Kind: "runtime", Text: "runtime started"},
+		{AgentID: seatID(runtime), Kind: "status", Text: "thinking"},
+		{AgentID: seatID(runtime), Kind: "user", Text: "hi"},
+		{AgentID: seatID(runtime), Kind: "status", Text: "idle"},
+		{AgentID: seatID(runtime), Kind: "usage", Text: "token usage should stay hidden"},
+		{AgentID: seatID(runtime), Kind: "inference_request", Text: "wire payload should stay hidden"},
+		{AgentID: seatID(runtime), Kind: "thinking", Text: "working"},
+		{AgentID: seatID(runtime), Kind: "turn_done", Text: "lifecycle event should stay hidden"},
 	}
 	m.refreshView()
 	content := ansi.Strip(m.viewport.View())
@@ -485,8 +490,8 @@ func TestClearCommandKeepsSubsequentMessagesVisible(t *testing.T) {
 
 	m := New(runtime)
 	m.width = 40
-	seatID := runtime.Seat().ID
-	runtime.Seat().Send("old prompt")
+	seatID := seatID(runtime)
+	_ = runtime.SendPrompt(seatID, "old prompt")
 	deadline := time.After(time.Second)
 	for {
 		select {
@@ -509,14 +514,22 @@ initialTurnDone:
 	}
 
 	m.handleCommand("/clear")
-	if history := runtime.Seat().History(); len(history) != 0 {
-		t.Fatalf("agent history survived clear: %#v", history)
+	transcript, err := runtime.TranscriptPath(seatID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "old prompt") {
+		t.Fatalf("cleared transcript retained old prompt: %s", data)
 	}
 	if content := ansi.Strip(m.viewport.View()); strings.Contains(content, "old prompt") || strings.Contains(content, "old answer") {
 		t.Fatalf("cleared messages remain visible: %q", content)
 	}
 
-	runtime.Seat().Send("new prompt")
+	_ = runtime.SendPrompt(seatID, "new prompt")
 	deadline = time.After(time.Second)
 	for {
 		select {
@@ -529,9 +542,12 @@ initialTurnDone:
 		}
 	}
 newTurnDone:
-	history := runtime.Seat().History()
-	if len(history) != 1 || history[0].Content != "new prompt" {
-		t.Fatalf("post-clear turn reused old history: %#v", history)
+	data, err = os.ReadFile(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "new prompt") || strings.Contains(string(data), "old prompt") {
+		t.Fatalf("post-clear transcript has wrong history: %s", data)
 	}
 
 	updated, _ := m.Update(eventMsg(harness.Event{AgentID: seatID, Kind: "status", Text: "thinking"}))
@@ -602,9 +618,9 @@ func TestNonChatBlocksRollAtTenLines(t *testing.T) {
 	m := New(runtime)
 	m.width = 40
 	m.events = []harness.Event{
-		{AgentID: runtime.Seat().ID, Kind: "user", Text: "hi"},
-		{AgentID: runtime.Seat().ID, Kind: "thinking", Text: text},
-		{AgentID: runtime.Seat().ID, Kind: "tool_result", Text: text, Metadata: map[string]any{"name": "quick_bash"}},
+		{AgentID: seatID(runtime), Kind: "user", Text: "hi"},
+		{AgentID: seatID(runtime), Kind: "thinking", Text: text},
+		{AgentID: seatID(runtime), Kind: "tool_result", Text: text, Metadata: map[string]any{"name": "quick_bash"}},
 	}
 	m.refreshView()
 	if got := m.viewport.TotalLineCount(); got != nonChatBlockHeight+4 {
@@ -659,9 +675,9 @@ func TestMessageViewportScrollsWithKeyboardAndMouse(t *testing.T) {
 	m := New(runtime)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
 	m = updated.(Model)
-	m.events = append(m.events, harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "seat", Kind: "user", Text: "hi"})
+	m.events = append(m.events, harness.Event{AgentID: seatID(runtime), AgentTitle: "seat", Kind: "user", Text: "hi"})
 	for i := 0; i < 20; i++ {
-		m.events = append(m.events, harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "seat", Kind: "assistant", Text: fmt.Sprintf("message %02d %s", i, strings.Repeat("content ", 8))})
+		m.events = append(m.events, harness.Event{AgentID: seatID(runtime), AgentTitle: "seat", Kind: "assistant", Text: fmt.Sprintf("message %02d %s", i, strings.Repeat("content ", 8))})
 	}
 	m.refreshView()
 	if !m.viewport.AtBottom() {
@@ -674,7 +690,7 @@ func TestMessageViewportScrollsWithKeyboardAndMouse(t *testing.T) {
 		t.Fatalf("PageUp did not move the viewport or mark it as user-scrolled (offset=%d max=%d lines=%d height=%d)", m.viewport.YOffset(), m.viewport.TotalLineCount()-m.viewport.Height(), m.viewport.TotalLineCount(), m.viewport.Height())
 	}
 	yOffset := m.viewport.YOffset()
-	updated, _ = m.Update(eventMsg(harness.Event{AgentID: runtime.Seat().ID, AgentTitle: "seat", Kind: "status", Text: "streaming"}))
+	updated, _ = m.Update(eventMsg(harness.Event{AgentID: seatID(runtime), AgentTitle: "seat", Kind: "status", Text: "streaming"}))
 	m = updated.(Model)
 	if m.viewport.YOffset() != yOffset {
 		t.Fatalf("stream refresh changed scrolled offset from %d to %d", yOffset, m.viewport.YOffset())
@@ -984,7 +1000,7 @@ func TestThrottledBlocksAreNeverStrandedByCommandlessUpdates(t *testing.T) {
 	}
 	defer runtime.Close()
 
-	seat := runtime.Seat().ID
+	seat := seatID(runtime)
 	m := New(runtime)
 	m.width, m.height = 60, 24
 	m.events = []harness.Event{
@@ -1034,7 +1050,7 @@ func TestModelMenuPathsAlsoScheduleTheCatchUpTick(t *testing.T) {
 	}
 	defer runtime.Close()
 
-	seat := runtime.Seat().ID
+	seat := seatID(runtime)
 	m := New(runtime)
 	m.width, m.height = 60, 24
 	m.events = []harness.Event{

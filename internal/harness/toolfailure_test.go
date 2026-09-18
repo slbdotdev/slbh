@@ -87,7 +87,7 @@ func TestFailingShellCommandReturnsItsOutputToTheModel(t *testing.T) {
 	}
 	defer r.Close()
 
-	if err := r.Seat().Send("run it"); err != nil {
+	if err := r.seat().Send("run it"); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 

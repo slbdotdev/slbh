@@ -63,7 +63,7 @@ func TestCompactMessagesPreservesTurnBoundary(t *testing.T) {
 
 func TestSystemPromptDirectsAsyncChildHandling(t *testing.T) {
 	r := testRuntime(t)
-	prompt := systemPrompt(r.Seat())
+	prompt := systemPrompt(r.seat())
 	for _, phrase := range []string{
 		"launch_subagent returns immediately",
 		"do not block this turn waiting for a child",

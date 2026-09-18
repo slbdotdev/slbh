@@ -29,19 +29,34 @@ type Event struct {
 }
 
 type AgentSnapshot struct {
-	ID              string
-	Title           string
-	ParentID        string
-	Depth           int
-	Model           string
-	Effort          string
-	Status          string
-	Harness         string
-	WorkDir         string
-	ContextWindow   int
-	ContextUsed     int
-	CacheHitTokens  int
-	CacheMissTokens int
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	ParentID        string `json:"parent_id"`
+	Depth           int    `json:"depth"`
+	Model           string `json:"model"`
+	Effort          string `json:"effort"`
+	Status          string `json:"status"`
+	Harness         string `json:"harness"`
+	WorkDir         string `json:"work_dir"`
+	ContextWindow   int    `json:"context_window"`
+	ContextUsed     int    `json:"context_used"`
+	CacheHitTokens  int    `json:"cache_hit_tokens"`
+	CacheMissTokens int    `json:"cache_miss_tokens"`
+}
+
+// JobSnapshot is a copy of a background job's externally observable state.
+type JobSnapshot struct {
+	ID          string        `json:"id"`
+	Author      string        `json:"author"`
+	Script      string        `json:"script"`
+	ToolName    string        `json:"tool_name"`
+	Status      string        `json:"status"`
+	Started     time.Time     `json:"started"`
+	Finished    time.Time     `json:"finished"`
+	ExitCode    int           `json:"exit_code"`
+	StdoutBytes int           `json:"stdout_bytes"`
+	StderrBytes int           `json:"stderr_bytes"`
+	WarnAfter   time.Duration `json:"warn_after"`
 }
 
 type LaunchSpec struct {
@@ -156,7 +171,6 @@ func (r *Runtime) ID() string           { return r.id }
 func (r *Runtime) Dir() string          { return r.runtimeDir }
 func (r *Runtime) Home() string         { return r.config.Home }
 func (r *Runtime) Events() <-chan Event { return r.events }
-func (r *Runtime) Jobs() *job.Manager   { return r.jobs }
 
 func (r *Runtime) Config() config.Config {
 	r.mu.RLock()
@@ -240,7 +254,7 @@ func (r *Runtime) ConfigureModelSlots(seatModel, subagentModel, leafModel string
 	if err := cfg.Save(); err != nil {
 		return err
 	}
-	if seat, ok := r.Agent(seatID); ok {
+	if seat, ok := r.lookupAgent(seatID); ok {
 		model := seatModel
 		if !cfg.ModelApproved(model) {
 			model = ""
@@ -293,7 +307,7 @@ func (r *Runtime) ModelGuidance() string {
 	defaults := fmt.Sprintf("defaults are seat=%q, subagent=%q, leaf=%q", cfg.SeatModel, cfg.SubagentModel, cfg.LeafModel)
 	return "Model guidance: approved models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". Use the configured subagent default for level-one children and the leaf default for level-two children when no model is requested. A model explicitly requested by the user may override the approved list; do not invent model IDs. Codex leaves use the headless Codex app-server and ChatGPT model slugs, independent of the native approval list. To launch one from a native seat or level-one agent, set harness to \"codex\" and pass the exact ChatGPT model slug in model; never substitute a native default for a Codex leaf."
 }
-func (r *Runtime) Seat() *Agent {
+func (r *Runtime) seat() *Agent {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, agent := range r.agents {
@@ -477,7 +491,57 @@ func (r *Runtime) Agents() []AgentSnapshot {
 	return result
 }
 
-func (r *Runtime) Agent(agentID string) (*Agent, bool) {
+// JobSnapshots returns copies of all jobs owned by the runtime.
+func (r *Runtime) JobSnapshots() []JobSnapshot {
+	jobs := r.jobs.List()
+	result := make([]JobSnapshot, len(jobs))
+	for i, snapshot := range jobs {
+		result[i] = JobSnapshot{
+			ID:          snapshot.ID,
+			Author:      snapshot.Author,
+			Script:      snapshot.Script,
+			ToolName:    snapshot.ToolName,
+			Status:      string(snapshot.Status),
+			Started:     snapshot.Started,
+			Finished:    snapshot.Finished,
+			ExitCode:    snapshot.ExitCode,
+			StdoutBytes: snapshot.StdoutBytes,
+			StderrBytes: snapshot.StderrBytes,
+			WarnAfter:   snapshot.WarnAfter,
+		}
+	}
+	return result
+}
+
+// SendPrompt delivers a user prompt to an agent.
+func (r *Runtime) SendPrompt(agentID, prompt string) error {
+	agent, ok := r.lookupAgent(agentID)
+	if !ok {
+		return fmt.Errorf("agent %q not found", agentID)
+	}
+	return agent.Send(prompt)
+}
+
+// SteerAgent delivers a steering message to an agent.
+func (r *Runtime) SteerAgent(agentID, message string) error {
+	agent, ok := r.lookupAgent(agentID)
+	if !ok {
+		return fmt.Errorf("agent %q not found", agentID)
+	}
+	return agent.Steer(message)
+}
+
+// SetAgentEffort updates an agent's inference effort.
+func (r *Runtime) SetAgentEffort(agentID, effort string) error {
+	agent, ok := r.lookupAgent(agentID)
+	if !ok {
+		return fmt.Errorf("agent %q not found", agentID)
+	}
+	agent.SetEffort(effort)
+	return nil
+}
+
+func (r *Runtime) lookupAgent(agentID string) (*Agent, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	a, ok := r.agents[agentID]
@@ -485,7 +549,7 @@ func (r *Runtime) Agent(agentID string) (*Agent, bool) {
 }
 
 func (r *Runtime) Compact(agentID string, keep int) (int, error) {
-	agent, ok := r.Agent(agentID)
+	agent, ok := r.lookupAgent(agentID)
 	if !ok {
 		return 0, fmt.Errorf("agent %q not found", agentID)
 	}
@@ -493,7 +557,7 @@ func (r *Runtime) Compact(agentID string, keep int) (int, error) {
 }
 
 func (r *Runtime) Clear(agentID string) error {
-	agent, ok := r.Agent(agentID)
+	agent, ok := r.lookupAgent(agentID)
 	if !ok {
 		return fmt.Errorf("agent %q not found", agentID)
 	}
@@ -676,7 +740,7 @@ func (r *Runtime) EmitStatus(kind, text string) {
 // reading.
 func (r *Runtime) deliverJobWarning(snapshot job.Snapshot) {
 	r.emit(Event{AgentID: snapshot.Author, Kind: "job_warning", Text: "job is still running", Metadata: map[string]any{"job": snapshot.ID, "warn_after": snapshot.WarnAfter.String()}})
-	agent, ok := r.Agent(snapshot.Author)
+	agent, ok := r.lookupAgent(snapshot.Author)
 	if !ok {
 		return
 	}
@@ -686,7 +750,7 @@ func (r *Runtime) deliverJobWarning(snapshot job.Snapshot) {
 }
 
 func (r *Runtime) deliverJobResult(snapshot job.Snapshot, stdout, stderr string) {
-	agent, ok := r.Agent(snapshot.Author)
+	agent, ok := r.lookupAgent(snapshot.Author)
 	if !ok {
 		return
 	}

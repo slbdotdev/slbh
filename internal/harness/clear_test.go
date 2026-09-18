@@ -50,7 +50,7 @@ func TestClearDefersTheLogSwapUntilAnInFlightTurnEnds(t *testing.T) {
 	}
 	defer r.Close()
 
-	seat := r.Seat()
+	seat := r.seat()
 	oldPath, err := r.TranscriptPath(seat.ID)
 	if err != nil {
 		t.Fatal(err)

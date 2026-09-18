@@ -378,7 +378,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			a.mu.Unlock()
 			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: "idle"})
 			if a.ParentID != "" && answer.Len() > 0 {
-				if parent, ok := a.runtime.Agent(a.ParentID); ok {
+				if parent, ok := a.runtime.lookupAgent(a.ParentID); ok {
 					if err := parent.receiveChildResult(a, answer.String()); err != nil {
 						a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "delivery_error", Text: err.Error()})
 					}

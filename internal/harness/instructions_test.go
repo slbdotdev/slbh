@@ -60,7 +60,7 @@ func allThreeDocs() map[string]string {
 // agentAtDepth returns the seat, a level-one manager, or a level-two leaf.
 func agentAtDepth(t *testing.T, r *Runtime, depth int) *Agent {
 	t.Helper()
-	agent := r.Seat()
+	agent := r.seat()
 	for i := 0; i < depth; i++ {
 		child, err := r.LaunchSubagent(agent.ID, "child-agent-here", "")
 		if err != nil {
@@ -153,7 +153,7 @@ func TestSystemPromptWithOnlyOneLayerDeployed(t *testing.T) {
 	if !strings.Contains(systemPrompt(leaf), leafDoc) {
 		t.Fatal("leaf did not receive the one deployed document")
 	}
-	seat := r.Seat()
+	seat := r.seat()
 	if systemPrompt(seat) != bakedSystemPrompt(seat) {
 		t.Fatal("seat received a document when only the leaf layer was deployed")
 	}

@@ -75,7 +75,7 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 		return "", err
 	}
 	base := r.workDir
-	if agent, ok := r.Agent(agentID); ok && agent.WorkDir != "" {
+	if agent, ok := r.lookupAgent(agentID); ok && agent.WorkDir != "" {
 		base = agent.WorkDir
 	}
 	switch name {
@@ -150,11 +150,11 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 		}
 		return child.ID, nil
 	case "msg_subagent":
-		child, ok := r.Agent(value(a.Values, "agent_id"))
+		child, ok := r.lookupAgent(value(a.Values, "agent_id"))
 		if !ok {
 			return "", fmt.Errorf("agent not found")
 		}
-		sender, ok := r.Agent(agentID)
+		sender, ok := r.lookupAgent(agentID)
 		if !ok {
 			return "", fmt.Errorf("sender agent not found")
 		}

@@ -60,7 +60,7 @@ func TestAnthropicWireUsageReachesTheHarness(t *testing.T) {
 	}
 	defer runtime.Close()
 
-	seat := runtime.Seat()
+	seat := runtime.seat()
 	if err := seat.Send("hello"); err != nil {
 		t.Fatal(err)
 	}
