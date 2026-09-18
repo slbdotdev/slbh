@@ -10,7 +10,9 @@ import (
 
 	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/job"
+	"github.com/slbdotdev/slbh/internal/orgstore"
 	"github.com/slbdotdev/slbh/internal/provider"
+	"github.com/slbdotdev/slbh/internal/seam"
 )
 
 const (
@@ -33,6 +35,7 @@ type Agent struct {
 	runtime  *Runtime
 	ID       string
 	Title    string
+	Role     string
 	ParentID string
 	Depth    int
 	Model    string
@@ -57,10 +60,12 @@ type Agent struct {
 	historyEpoch  uint64
 	codexMu       sync.RWMutex
 	codex         *codexLeaf
+	claudeMu      sync.RWMutex
+	claude        *claudeLeaf
 }
 
-func newAgent(runtime *Runtime, agentID, title, parentID string, depth int, model, effort string) *Agent {
-	return &Agent{runtime: runtime, ID: agentID, Title: title, ParentID: parentID, Depth: depth, Model: model, Effort: effort, Harness: "native", WorkDir: runtime.workDir, status: "idle", wake: make(chan struct{}, 1), done: make(chan struct{})}
+func newAgent(runtime *Runtime, agentID, title, role, parentID string, depth int, model, effort string) *Agent {
+	return &Agent{runtime: runtime, ID: agentID, Title: title, Role: role, ParentID: parentID, Depth: depth, Model: model, Effort: effort, Harness: "native", WorkDir: runtime.workDir, status: "idle", wake: make(chan struct{}, 1), done: make(chan struct{})}
 }
 
 func (a *Agent) start() {
@@ -77,6 +82,9 @@ func (a *Agent) Send(prompt string) error {
 	if codex := a.codexBackend(); codex != nil {
 		return codex.send(prompt, "user")
 	}
+	if claude := a.claudeBackend(); claude != nil {
+		return claude.send(prompt, "user")
+	}
 	return a.deliver(agentMessage{prompt: prompt, kind: "user", text: prompt})
 }
 
@@ -88,6 +96,9 @@ func (a *Agent) Steer(message string) error {
 	}
 	if codex := a.codexBackend(); codex != nil {
 		return codex.send(message, "steer")
+	}
+	if claude := a.claudeBackend(); claude != nil {
+		return claude.send(message, "steer")
 	}
 	return a.deliver(agentMessage{prompt: "[steer] " + message, kind: "steer", text: message})
 }
@@ -104,6 +115,9 @@ func (a *Agent) steerFrom(sender *Agent, message string) error {
 	}
 	if codex := a.codexBackend(); codex != nil {
 		return codex.send(fmt.Sprintf("[steer] [from %s (%s)] %s", sender.Title, sender.ID, message), "steer")
+	}
+	if claude := a.claudeBackend(); claude != nil {
+		return claude.send(fmt.Sprintf("[steer] [from %s (%s)] %s", sender.Title, sender.ID, message), "steer")
 	}
 	return a.deliver(agentMessage{
 		prompt:      fmt.Sprintf("[steer] [from %s (%s)] %s", sender.Title, sender.ID, message),
@@ -148,17 +162,18 @@ func (a *Agent) appendMessages(history []provider.Message, messages []agentMessa
 		if message.senderTitle != "" {
 			title = message.senderTitle
 		}
-		a.runtime.emit(Event{AgentID: a.ID, AgentTitle: title, Kind: message.kind, Text: message.text, Metadata: message.metadata})
+		a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: title, Kind: message.kind, Text: message.text, Metadata: message.metadata})
 	}
 	return history
 }
 
-func (a *Agent) Snapshot() AgentSnapshot {
+func (a *Agent) Snapshot() seam.AgentSnapshot {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return AgentSnapshot{
+	return seam.AgentSnapshot{
 		ID:              a.ID,
 		Title:           a.Title,
+		Role:            a.Role,
 		ParentID:        a.ParentID,
 		Depth:           a.Depth,
 		Model:           a.Model,
@@ -206,6 +221,15 @@ func (a *Agent) ClearHistory() {
 		codex.clear()
 		return
 	}
+	if claude := a.claudeBackend(); claude != nil {
+		a.mu.Lock()
+		a.history = nil
+		a.contextUsed = 0
+		a.historyEpoch++
+		a.mu.Unlock()
+		claude.clear()
+		return
+	}
 	a.mu.Lock()
 	a.history = nil
 	a.contextUsed = 0
@@ -215,8 +239,13 @@ func (a *Agent) ClearHistory() {
 
 func (a *Agent) stop() {
 	a.stopOnce.Do(func() {
+		a.runtime.cancelSubagentWarning(a.ID)
 		if codex := a.codexBackend(); codex != nil {
 			codex.stop()
+			return
+		}
+		if claude := a.claudeBackend(); claude != nil {
+			claude.stop()
 			return
 		}
 		a.mu.Lock()
@@ -236,6 +265,12 @@ func (a *Agent) codexBackend() *codexLeaf {
 	a.codexMu.RLock()
 	defer a.codexMu.RUnlock()
 	return a.codex
+}
+
+func (a *Agent) claudeBackend() *claudeLeaf {
+	a.claudeMu.RLock()
+	defer a.claudeMu.RUnlock()
+	return a.claude
 }
 
 func (a *Agent) loop(ctx context.Context) {
@@ -283,7 +318,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 	}
 	contextWindow := a.resolveContextWindow(ctx, p)
 	system := systemPrompt(a)
-	tools := ToolDefinitions()
+	tools := a.runtime.toolDefinitions(a.ID)
 	for round := 0; ; {
 		if ctx.Err() != nil {
 			return
@@ -320,10 +355,10 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 				switch event.Kind {
 				case provider.EventText:
 					answer.WriteString(event.Text)
-					a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "assistant", Text: event.Text})
+					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "assistant", Text: event.Text})
 				case provider.EventReasoning:
 					reasoning.WriteString(event.Text)
-					a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "thinking", Text: event.Text})
+					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "thinking", Text: event.Text})
 				case provider.EventTool:
 					call := calls[event.ToolIndex]
 					if call == nil {
@@ -337,10 +372,10 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 						call.Function.Name = event.ToolName
 					}
 					call.Function.Arguments += event.Input
-					a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool", Text: event.Input, Metadata: map[string]any{"name": event.ToolName, "call_id": event.ToolCallID, "index": event.ToolIndex}})
+					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool", Text: event.Input, Metadata: map[string]any{"name": event.ToolName, "call_id": event.ToolCallID, "index": event.ToolIndex}})
 				case provider.EventUsage:
 					a.recordUsage(event.Usage)
-					a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "usage", Metadata: event.Usage})
+					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "usage", Metadata: event.Usage})
 				}
 				return nil
 			})
@@ -376,15 +411,15 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			}
 			a.status = "idle"
 			a.mu.Unlock()
-			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: "idle"})
+			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: "idle"})
 			if a.ParentID != "" && answer.Len() > 0 {
-				if parent, ok := a.runtime.Agent(a.ParentID); ok {
+				if parent, ok := a.runtime.lookupAgent(a.ParentID); ok {
 					if err := parent.receiveChildResult(a, answer.String()); err != nil {
-						a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "delivery_error", Text: err.Error()})
+						a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "delivery_error", Text: err.Error()})
 					}
 				}
 			}
-			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "turn_done"})
+			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "turn_done"})
 			return
 		}
 		ordered := make([]int, 0, len(calls))
@@ -426,7 +461,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			// would be marshalled into the next request, reaching both the
 			// transcript and the provider itself.
 			result = a.runtime.redactSecrets(result)
-			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool_result", Text: result, Metadata: map[string]any{"name": call.Function.Name, "call_id": call.ID}})
+			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool_result", Text: result, Metadata: map[string]any{"name": call.Function.Name, "call_id": call.ID}})
 			history = append(history, provider.Message{Role: "tool", ToolCallID: call.ID, Name: call.Function.Name, Content: result})
 			history = a.appendMessages(history, a.takeMessages())
 		}
@@ -436,14 +471,14 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 
 func (a *Agent) fail(err error) {
 	a.setStatus("error")
-	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "error", Text: err.Error()})
+	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "error", Text: err.Error()})
 }
 
 func (a *Agent) setStatus(status string) {
 	a.mu.Lock()
 	a.status = status
 	a.mu.Unlock()
-	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: status})
+	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: status})
 }
 
 func (a *Agent) recordRequestContext(req provider.Request, contextWindow int) {
@@ -513,7 +548,29 @@ func usageNestedInt(usage map[string]any, parent, key string) (int, bool) {
 }
 
 func (a *Agent) receiveChildResult(child *Agent, text string) error {
+	a.runtime.cancelSubagentWarning(child.ID)
 	return a.deliver(agentMessage{prompt: fmt.Sprintf("[result from %s] %s", child.Title, text), kind: "child_result", text: text, metadata: map[string]any{"child": child.ID}, senderTitle: child.Title})
+}
+
+func (a *Agent) receiveSubagentWarning(child *Agent, after time.Duration) error {
+	text := fmt.Sprintf("%s %s is still running after %s. This is the only warning for this child: inspect it with list_subagents, message it with msg_subagent, end it with end_subagent, or continue other work and wait for its result.", child.Title, child.ID, after)
+	return a.deliver(agentMessage{
+		prompt:      "[warning from subagent " + child.Title + "]\n" + text,
+		kind:        "subagent_warning",
+		text:        text,
+		metadata:    map[string]any{"child": child.ID, "warn_after": after.String()},
+		senderTitle: child.Title,
+	})
+}
+
+func (a *Agent) receiveOrgRequest(request orgstore.Request) error {
+	text := fmt.Sprintf("[request %d from Secretary]\n%s\n\nThis is a proposal to be judged against the tree before dispatching; only the owner's word is an order.", request.ID, request.Text)
+	return a.deliver(agentMessage{
+		prompt:   text,
+		kind:     "org_request",
+		text:     text,
+		metadata: map[string]any{"request": request.ID},
+	})
 }
 
 func (a *Agent) receiveJobResult(snapshot job.Snapshot, stdout, stderr string) error {
@@ -588,6 +645,10 @@ func (a *Agent) Compact(keep int) int {
 		codex.compact()
 		return 0
 	}
+	if claude := a.claudeBackend(); claude != nil {
+		claude.compact()
+		return 0
+	}
 	if keep < 4 {
 		keep = 4
 	}
@@ -599,7 +660,7 @@ func (a *Agent) Compact(keep int) int {
 	}
 	a.history = compacted
 	a.mu.Unlock()
-	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
+	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
 	return dropped
 }
 
@@ -614,13 +675,13 @@ func (a *Agent) maybeCompact(contextWindow int, system string, tools []provider.
 	a.mu.Lock()
 	a.history = compacted
 	a.mu.Unlock()
-	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
+	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
 }
 
 func (a *Agent) compactHistoryIfNeeded(history []provider.Message, contextWindow int, system string, tools []provider.Tool) []provider.Message {
 	compacted, dropped := compactHistory(history, contextWindow, system, tools, 24)
 	if dropped > 0 {
-		a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
+		a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
 		return compacted
 	}
 	return history
@@ -730,13 +791,15 @@ func compactMessages(history []provider.Message, keep int) ([]provider.Message, 
 func systemPrompt(a *Agent) string {
 	prompt := bakedSystemPrompt(a)
 	layer := a.runtime.LayerInstructions(a.Depth)
-	if strings.TrimSpace(layer) == "" {
-		// No document for this layer: run on baked mechanics alone. Absence is
-		// deliberately not a refusal here, unlike a missing routing policy,
-		// which is a security posture. Degrade, never brick.
-		return prompt
+	if strings.TrimSpace(layer) != "" {
+		prompt += fmt.Sprintf("\n\nOrg instructions for your layer (%s). These are managed by the fleet and define what an agent at this layer may and may not do. Where they appear to contradict the runtime mechanics above, the mechanics are facts about this build and stand; the role policy governs everything else.\n\n%s", config.LayerForDepth(a.Depth), layer)
 	}
-	return prompt + fmt.Sprintf("\n\nOrg instructions for your layer (%s). These are managed by the fleet and define what an agent at this layer may and may not do. Where they appear to contradict the runtime mechanics above, the mechanics are facts about this build and stand; the role policy governs everything else.\n\n%s", config.LayerForDepth(a.Depth), layer)
+	if skills := a.runtime.LayerSkillPrompt(a.Depth); skills != "" {
+		prompt += "\n\n" + skills
+	}
+	// Missing documents and skills both degrade independently. A native agent
+	// always retains the baked mechanics even on an unmanaged host.
+	return prompt
 }
 
 // bakedSystemPrompt is the harness-mechanics half, authored as one string.
@@ -748,7 +811,7 @@ func systemPrompt(a *Agent) string {
 // The fold was verified byte-identical to the patched output before the
 // legacy form was removed.
 func bakedSystemPrompt(a *Agent) string {
-	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message and completed long_job/long_py output, is a mandatory mid-turn steer: read and act on it during your current work. A [warning from long_job ...] or [warning from long_py ...] message means a background job you started has passed its warn_after_seconds and is still running; it is a decision point for you alone. Kill it with kill_job, leave it running and take its result when it finishes, or carry on with other work. It is the only warning that job will send, nothing escalates it, and deciding to keep waiting is a valid decision. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
+	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Your frozen roster role is %s and runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message and completed long_job/long_py output, is a mandatory mid-turn steer: read and act on it during your current work. A [warning from long_job ...] or [warning from long_py ...] message means a background job you started has passed its warn_after_seconds and is still running; it is a decision point for you alone. Kill it with kill_job, leave it running and take its result when it finishes, or carry on with other work. It is the only warning that job will send, nothing escalates it, and deciding to keep waiting is a valid decision. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Role, a.Depth, a.runtime.ModelGuidance())
 }
 
 // maxToolErrorOutput bounds the output carried back with a failing tool call. A five-second

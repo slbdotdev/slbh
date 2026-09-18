@@ -15,37 +15,14 @@ import (
 	"github.com/slbdotdev/slbh/internal/id"
 	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/logx"
+	"github.com/slbdotdev/slbh/internal/orgstore"
 	"github.com/slbdotdev/slbh/internal/provider"
+	"github.com/slbdotdev/slbh/internal/seam"
 )
-
-type Event struct {
-	Time       time.Time      `json:"time"`
-	RuntimeID  string         `json:"runtime"`
-	AgentID    string         `json:"agent"`
-	AgentTitle string         `json:"agent_title"`
-	Kind       string         `json:"kind"`
-	Text       string         `json:"text,omitempty"`
-	Metadata   map[string]any `json:"metadata,omitempty"`
-}
-
-type AgentSnapshot struct {
-	ID              string
-	Title           string
-	ParentID        string
-	Depth           int
-	Model           string
-	Effort          string
-	Status          string
-	Harness         string
-	WorkDir         string
-	ContextWindow   int
-	ContextUsed     int
-	CacheHitTokens  int
-	CacheMissTokens int
-}
 
 type LaunchSpec struct {
 	Title            string
+	Role             string
 	Harness          string
 	Model            string
 	Effort           string
@@ -75,25 +52,38 @@ type Runtime struct {
 	// pending holds a session opened by Clear while the agent was still
 	// mid-turn. It becomes current at that turn's end, so the turn that issued
 	// a request keeps its own transcript through its last event.
-	pending      map[string]*agentSession
-	sessions     []*agentSession
-	redactor     *secretRedactor
-	events       chan Event
-	eventMu      sync.Mutex
-	eventQueue   []Event
-	eventWake    chan struct{}
-	provider     func(model string) (provider.Provider, error)
-	codexCommand string
-	catalog      []provider.Catalog
-	closeOnce    sync.Once
+	pending            map[string]*agentSession
+	sessions           []*agentSession
+	redactor           *secretRedactor
+	eventMu            sync.Mutex
+	eventLog           []seam.Event
+	eventNotify        chan struct{}
+	eventsClosed       bool
+	eventSequence      seam.EventCursor
+	provider           func(model string) (provider.Provider, error)
+	codexCommand       string
+	claudeCommand      string
+	catalog            []provider.Catalog
+	closeOnce          sync.Once
+	orgStore           *orgstore.Store
+	requestWatchStop   chan struct{}
+	requestWatchDone   chan struct{}
+	requestPoll        time.Duration
+	subagentWarningsMu sync.Mutex
+	subagentWarnings   map[string]*time.Timer
 }
 
 type Options struct {
-	Config       config.Config
-	Provider     func(model string) (provider.Provider, error)
-	Events       chan Event
-	CodexCommand string
+	Config        config.Config
+	Provider      func(model string) (provider.Provider, error)
+	CodexCommand  string
+	ClaudeCommand string
+	// RequestPollInterval defaults to two seconds. Tests and embedders may use
+	// a shorter interval; production callers should leave it zero.
+	RequestPollInterval time.Duration
 }
+
+var _ seam.Runtime = (*Runtime)(nil)
 
 func New(cfg config.Config, options Options) (*Runtime, error) {
 	if cfg.Home == "" {
@@ -106,11 +96,16 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), events: options.Events, eventWake: make(chan struct{}, 1), provider: options.Provider, codexCommand: options.CodexCommand}
-	if r.events == nil {
-		r.events = make(chan Event, 1024)
+	store, err := orgstore.Open(cfg.Home)
+	if err != nil {
+		cancel()
+		return nil, err
 	}
-	go r.dispatchEvents()
+	poll := options.RequestPollInterval
+	if poll <= 0 {
+		poll = 2 * time.Second
+	}
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), eventNotify: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand, orgStore: store, requestWatchStop: make(chan struct{}), requestWatchDone: make(chan struct{}), requestPoll: poll, subagentWarnings: make(map[string]*time.Timer)}
 	if r.provider == nil {
 		// The current config is read per call rather than captured, so a policy
 		// authored from /models on an unmanaged host takes effect on the next
@@ -137,7 +132,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	if !cfg.ModelApproved(seatModel) {
 		seatModel = ""
 	}
-	seat, err := r.newAgent("seat", "", 0, seatModel, cfg.SeatEffort)
+	seat, err := r.newAgent("seat", "seat", "", 0, seatModel, cfg.SeatEffort)
 	if err != nil {
 		cancel()
 		_ = os.Remove(filepath.Join(r.runtimeDir, "runtime.json"))
@@ -148,36 +143,35 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	r.seatID = seat.ID
 	r.mu.Unlock()
 	seat.start()
-	r.emit(Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "runtime", Text: "runtime started"})
+	r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "runtime", Text: "runtime started"})
+	go r.watchOrgRequests()
 	return r, nil
 }
 
-func (r *Runtime) ID() string           { return r.id }
-func (r *Runtime) Dir() string          { return r.runtimeDir }
-func (r *Runtime) Home() string         { return r.config.Home }
-func (r *Runtime) Events() <-chan Event { return r.events }
-func (r *Runtime) Jobs() *job.Manager   { return r.jobs }
+func (r *Runtime) ID() string   { return r.id }
+func (r *Runtime) Dir() string  { return r.runtimeDir }
+func (r *Runtime) Home() string { return r.config.Home }
 
 func (r *Runtime) Config() config.Config {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.config
+	return cloneConfig(r.config)
 }
 
-// SetModelCatalog makes the live provider tree available to every agent's
+// setModelCatalog makes the live provider tree available to every agent's
 // next context. Catalog discovery is intentionally initiated by the TUI, not
 // during startup, so launching slbh never spends a network request merely to
 // render the terminal.
-func (r *Runtime) SetModelCatalog(catalog []provider.Catalog) {
+func (r *Runtime) setModelCatalog(catalog []provider.Catalog) {
 	r.mu.Lock()
-	r.catalog = append([]provider.Catalog(nil), catalog...)
+	r.catalog = cloneCatalog(catalog)
 	r.mu.Unlock()
 }
 
 func (r *Runtime) ModelCatalog() []provider.Catalog {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return append([]provider.Catalog(nil), r.catalog...)
+	return cloneCatalog(r.catalog)
 }
 
 // PolicySource reports which routing policy is in force and where it came
@@ -189,14 +183,14 @@ func (r *Runtime) PolicySource() config.PolicySource {
 	return r.config.PolicySource
 }
 
-// AuthorLocalPolicy writes a local routing policy into the app-owned
+// authorLocalPolicy writes a local routing policy into the app-owned
 // config.json and re-resolves which policy is in force.
 //
 // On a managed host the managed file still wins, and the returned source says
 // so: the write is honest but inert, which is exactly what the precedence rule
 // promises and what the user must be told. On an unmanaged host this is what
 // turns the fail-closed refusal back into a working harness.
-func (r *Runtime) AuthorLocalPolicy(policy provider.Policy) (config.PolicySource, error) {
+func (r *Runtime) authorLocalPolicy(policy provider.Policy) (config.PolicySource, error) {
 	// Resolution re-reads the managed file, so it happens on a copy with no
 	// lock held: a request resolving its own route takes the same lock, and
 	// blocking it behind a file read for a menu keypress would be a poor
@@ -218,17 +212,17 @@ func (r *Runtime) AuthorLocalPolicy(policy provider.Policy) (config.PolicySource
 	return saved.PolicySource, nil
 }
 
-// ConfigureModels preserves the older two-slot API while keeping the leaf
+// configureModels preserves the older two-slot API while keeping the leaf
 // default aligned with the level-one subagent model.
-func (r *Runtime) ConfigureModels(seatModel, subagentModel string, approved []string) error {
+func (r *Runtime) configureModels(seatModel, subagentModel string, approved []string) error {
 	cfg := r.Config()
-	return r.ConfigureModelSlots(seatModel, subagentModel, cfg.LeafModel, approved)
+	return r.configureModelSlots(seatModel, subagentModel, cfg.LeafModel, approved)
 }
 
-// ConfigureModelSlots persists the user's model choices and updates the seat
+// configureModelSlots persists the user's model choices and updates the seat
 // agent immediately. An unapproved configured default is retained in the
 // dotfile but resolves to no model until it is approved again.
-func (r *Runtime) ConfigureModelSlots(seatModel, subagentModel, leafModel string, approved []string) error {
+func (r *Runtime) configureModelSlots(seatModel, subagentModel, leafModel string, approved []string) error {
 	r.mu.Lock()
 	r.config.SeatModel = seatModel
 	r.config.SubagentModel = subagentModel
@@ -240,7 +234,7 @@ func (r *Runtime) ConfigureModelSlots(seatModel, subagentModel, leafModel string
 	if err := cfg.Save(); err != nil {
 		return err
 	}
-	if seat, ok := r.Agent(seatID); ok {
+	if seat, ok := r.lookupAgent(seatID); ok {
 		model := seatModel
 		if !cfg.ModelApproved(model) {
 			model = ""
@@ -266,13 +260,34 @@ func (r *Runtime) LayerInstructions(depth int) string {
 func (r *Runtime) InstructionSource() config.InstructionSource {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.config.Instructions.Source
+	source := r.config.Instructions.Source
+	source.Missing = append([]string(nil), source.Missing...)
+	return source
+}
+
+// SkillSource reports where the managed skill metadata came from and why any
+// layer or skill was omitted.
+func (r *Runtime) SkillSource() config.SkillSource {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	source := r.config.Skills.Source
+	source.Missing = append([]string(nil), source.Missing...)
+	return source
+}
+
+// LayerSkillPrompt returns the metadata-only skill section for a native agent
+// at depth. Codex and Claude Code leaves use separate prompt paths and do not
+// call it because their own harnesses load skills.
+func (r *Runtime) LayerSkillPrompt(depth int) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.config.Skills.PromptFor(depth)
 }
 
 func (r *Runtime) ModelGuidance() string {
 	r.mu.RLock()
 	cfg := r.config
-	catalog := append([]provider.Catalog(nil), r.catalog...)
+	catalog := cloneCatalog(r.catalog)
 	r.mu.RUnlock()
 
 	approved := "none"
@@ -290,10 +305,30 @@ func (r *Runtime) ModelGuidance() string {
 	if len(branches) == 0 {
 		branches = append(branches, "no provider catalog loaded; use the configured default or honor an explicit user model request")
 	}
-	defaults := fmt.Sprintf("defaults are seat=%q, subagent=%q, leaf=%q", cfg.SeatModel, cfg.SubagentModel, cfg.LeafModel)
-	return "Model guidance: approved models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". Use the configured subagent default for level-one children and the leaf default for level-two children when no model is requested. A model explicitly requested by the user may override the approved list; do not invent model IDs. Codex leaves use the headless Codex app-server and ChatGPT model slugs, independent of the native approval list. To launch one from a native seat or level-one agent, set harness to \"codex\" and pass the exact ChatGPT model slug in model; never substitute a native default for a Codex leaf."
+	defaults := fmt.Sprintf("configured application defaults are seat=%q, subagent=%q, leaf=%q", cfg.SeatModel, cfg.SubagentModel, cfg.LeafModel)
+	return "Model guidance: approved native models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". " + rosterLaunchGuidance(cfg.Roster) + " Every launch must name its roster role. The depth-0 Seat may launch only the roster's depth-1 Manager; only a native depth-1 Manager may launch the roster's depth-2 roles. Every depth-2 launch must pass a non-empty model explicitly; configured subagent and leaf defaults are never substituted. Each launch is checked against the selected role's roster harness and pinned or approved model set. Per-launch effort is honored; omission uses the roster role's effort."
 }
-func (r *Runtime) Seat() *Agent {
+
+func rosterLaunchGuidance(roster config.Roster) string {
+	if roster.Source.Kind != config.RosterManaged {
+		return "Managed roster unavailable (" + roster.Source.Describe() + "); child launches refuse."
+	}
+	roles := append(roster.ChildRoles("seat", 1), roster.ChildRoles("manager", 2)...)
+	parts := make([]string, 0, len(roles))
+	for _, role := range roles {
+		model := role.Model
+		if model == "at_dispatch" {
+			model = "one of [" + strings.Join(role.ModelsApproved, ", ") + "]"
+		}
+		harness, err := launchHarness(role.Harness)
+		if err != nil {
+			harness = "invalid(" + role.Harness + ")"
+		}
+		parts = append(parts, fmt.Sprintf("%s=depth-%d/%s/%s", role.Name, role.Depth, harness, model))
+	}
+	return "Managed roster launch roles: " + strings.Join(parts, "; ") + "."
+}
+func (r *Runtime) seat() *Agent {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, agent := range r.agents {
@@ -304,8 +339,8 @@ func (r *Runtime) Seat() *Agent {
 	return nil
 }
 
-func (r *Runtime) newAgent(title, parentID string, depth int, model, effort string) (*Agent, error) {
-	agent := newAgent(r, id.NewShort("agent"), title, parentID, depth, model, effort)
+func (r *Runtime) newAgent(title, role, parentID string, depth int, model, effort string) (*Agent, error) {
+	agent := newAgent(r, id.NewShort("agent"), title, role, parentID, depth, model, effort)
 	session, err := r.openAgentSession(agent.ID)
 	if err != nil {
 		return nil, err
@@ -359,11 +394,7 @@ func (r *Runtime) TranscriptPath(agentID string) (string, error) {
 	return session.path, nil
 }
 
-func (r *Runtime) LaunchSubagent(parentID, title, brief string) (*Agent, error) {
-	return r.LaunchSubagentSpec(parentID, LaunchSpec{Title: title, Brief: brief})
-}
-
-func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, error) {
+func (r *Runtime) launchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, error) {
 	r.mu.RLock()
 	parent, ok := r.agents[parentID]
 	r.mu.RUnlock()
@@ -379,27 +410,65 @@ func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	if spec.Title == "" {
 		return nil, fmt.Errorf("subagent title is required")
 	}
-	if spec.Harness != "" && spec.Harness != "native" && spec.Harness != "codex" {
-		return nil, fmt.Errorf("unsupported harness %q", spec.Harness)
+	if spec.WarnAfterSeconds < 0 {
+		return nil, fmt.Errorf("launch_subagent.warn_after_seconds must not be negative")
 	}
-	model, effort := strings.TrimSpace(spec.Model), strings.TrimSpace(spec.Effort)
+	warnAfterSeconds := spec.WarnAfterSeconds
+	if warnAfterSeconds == 0 {
+		warnAfterSeconds = defaultSubagentWarnAfterSeconds
+	}
 	r.mu.RLock()
 	cfg := r.config
 	r.mu.RUnlock()
-	if model == "" {
-		if spec.Harness == "codex" {
-			return nil, fmt.Errorf("Codex leaves require an explicit ChatGPT model in launch_subagent.model")
+	roleName := strings.ToLower(strings.TrimSpace(spec.Role))
+	if roleName == "" {
+		return nil, fmt.Errorf("launch_subagent.role is required and must name a frozen roster role")
+	}
+	if cfg.Roster.Source.Kind != config.RosterManaged {
+		return nil, fmt.Errorf("cannot launch roster role %q: %s", roleName, cfg.Roster.Source.Describe())
+	}
+	role, ok := cfg.Roster.Role(roleName)
+	if !ok {
+		return nil, fmt.Errorf("unknown roster role %q", roleName)
+	}
+	childDepth := parent.Depth + 1
+	if role.Depth != childDepth {
+		return nil, fmt.Errorf("roster role %q has depth %d and cannot be launched at depth %d", role.Name, role.Depth, childDepth)
+	}
+	if role.LaunchedBy != parent.Role {
+		return nil, fmt.Errorf("roster role %q is launched by %q, not parent role %q", role.Name, role.LaunchedBy, parent.Role)
+	}
+	if parent.Depth == 0 && (parent.Role != "seat" || role.Name != "manager") {
+		return nil, fmt.Errorf("the depth-0 Seat may launch only the roster's manager role")
+	}
+	if parent.Depth == 1 && parent.Role != "manager" {
+		return nil, fmt.Errorf("only the native manager role at depth 1 may launch a depth-2 role")
+	}
+	expectedHarness, err := launchHarness(role.Harness)
+	if err != nil {
+		return nil, fmt.Errorf("roster role %q: %w", role.Name, err)
+	}
+	harness := strings.TrimSpace(spec.Harness)
+	if harness == "" {
+		harness = expectedHarness
+	} else if harness != expectedHarness {
+		return nil, fmt.Errorf("roster role %q requires harness %q, got %q", role.Name, expectedHarness, harness)
+	}
+	model, effort := strings.TrimSpace(spec.Model), strings.TrimSpace(spec.Effort)
+	if childDepth == 2 && model == "" {
+		return nil, fmt.Errorf("a depth-1 Manager launching depth-2 roster role %q must pass a non-empty explicit model in launch_subagent.model; configured defaults are not used for leaves", role.Name)
+	}
+	if role.Model == "at_dispatch" {
+		if !containsExact(role.ModelsApproved, model) {
+			return nil, fmt.Errorf("roster role %q model %q is not in its approved set %v", role.Name, model, role.ModelsApproved)
 		}
-		model = cfg.SubagentModel
-		if parent.Depth >= 1 && cfg.LeafModel != "" {
-			model = cfg.LeafModel
-		}
-		if !cfg.ModelApproved(model) {
-			model = ""
-		}
+	} else if model == "" {
+		model = role.Model
+	} else if model != role.Model {
+		return nil, fmt.Errorf("roster role %q requires model %q, got %q", role.Name, role.Model, model)
 	}
 	if effort == "" {
-		effort = cfg.SubagentEffort
+		effort = role.Effort
 	}
 	workingDir := parent.WorkDir
 	if spec.WorkingDir != "" {
@@ -416,25 +485,28 @@ func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 			return nil, fmt.Errorf("working directory %q is not a directory", spec.WorkingDir)
 		}
 	}
-	agent, err := r.newAgent(spec.Title, parentID, parent.Depth+1, model, effort)
+	agent, err := r.newAgent(spec.Title, role.Name, parentID, childDepth, model, effort)
 	if err != nil {
 		return nil, err
 	}
-	agent.Harness = spec.Harness
-	if agent.Harness == "" {
-		agent.Harness = "native"
-	}
+	agent.Harness = harness
 	agent.WorkDir = workingDir
 	if agent.Harness == "codex" {
 		if err := agent.startCodex(r.codexCommand); err != nil {
 			r.discardAgent(agent.ID)
 			return nil, err
 		}
+	} else if agent.Harness == "claude_code" {
+		if err := agent.startClaude(r.claudeCommand); err != nil {
+			r.discardAgent(agent.ID)
+			return nil, err
+		}
 	} else {
 		agent.start()
 	}
-	r.emit(Event{AgentID: agent.ID, AgentTitle: spec.Title, Kind: "status", Text: "subagent launched", Metadata: map[string]any{"parent": parentID, "harness": agent.Harness, "working_dir": agent.WorkDir}})
+	r.emit(seam.Event{AgentID: agent.ID, AgentTitle: spec.Title, Kind: "status", Text: "subagent launched", Metadata: map[string]any{"parent": parentID, "role": agent.Role, "harness": agent.Harness, "model": agent.Model, "effort": agent.Effort, "working_dir": agent.WorkDir}})
 	if spec.Brief != "" {
+		r.armSubagentWarning(agent.ID, parentID, time.Duration(warnAfterSeconds)*time.Second)
 		if err := agent.Send(spec.Brief); err != nil {
 			agent.stop()
 			r.discardAgent(agent.ID)
@@ -444,7 +516,28 @@ func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	return agent, nil
 }
 
+func launchHarness(rosterHarness string) (string, error) {
+	switch rosterHarness {
+	case "slbh":
+		return "native", nil
+	case "codex", "claude_code":
+		return rosterHarness, nil
+	default:
+		return "", fmt.Errorf("unsupported roster harness %q", rosterHarness)
+	}
+}
+
+func containsExact(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Runtime) discardAgent(agentID string) {
+	r.cancelSubagentWarning(agentID)
 	r.mu.Lock()
 	delete(r.agents, agentID)
 	session := r.current[agentID]
@@ -461,10 +554,60 @@ func (r *Runtime) discardAgent(agentID string) {
 	}
 }
 
-func (r *Runtime) Agents() []AgentSnapshot {
+const defaultSubagentWarnAfterSeconds = 5
+
+func (r *Runtime) armSubagentWarning(childID, parentID string, after time.Duration) {
+	r.subagentWarningsMu.Lock()
+	if previous := r.subagentWarnings[childID]; previous != nil {
+		previous.Stop()
+	}
+	var timer *time.Timer
+	timer = time.AfterFunc(after, func() {
+		r.subagentWarningsMu.Lock()
+		if current := r.subagentWarnings[childID]; current != timer {
+			r.subagentWarningsMu.Unlock()
+			return
+		}
+		delete(r.subagentWarnings, childID)
+		r.subagentWarningsMu.Unlock()
+		if r.ctx.Err() != nil {
+			return
+		}
+		child, childOK := r.lookupAgent(childID)
+		parent, parentOK := r.lookupAgent(parentID)
+		if !childOK || !parentOK {
+			return
+		}
+		if err := parent.receiveSubagentWarning(child, after); err != nil {
+			r.emit(seam.Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"parent": parent.ID, "warning": "subagent"}})
+		}
+	})
+	r.subagentWarnings[childID] = timer
+	r.subagentWarningsMu.Unlock()
+}
+
+func (r *Runtime) cancelSubagentWarning(childID string) {
+	r.subagentWarningsMu.Lock()
+	if timer := r.subagentWarnings[childID]; timer != nil {
+		timer.Stop()
+		delete(r.subagentWarnings, childID)
+	}
+	r.subagentWarningsMu.Unlock()
+}
+
+func (r *Runtime) cancelAllSubagentWarnings() {
+	r.subagentWarningsMu.Lock()
+	for childID, timer := range r.subagentWarnings {
+		timer.Stop()
+		delete(r.subagentWarnings, childID)
+	}
+	r.subagentWarningsMu.Unlock()
+}
+
+func (r *Runtime) Agents() []seam.AgentSnapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	result := make([]AgentSnapshot, 0, len(r.agents))
+	result := make([]seam.AgentSnapshot, 0, len(r.agents))
 	for _, a := range r.agents {
 		result = append(result, a.Snapshot())
 	}
@@ -477,23 +620,73 @@ func (r *Runtime) Agents() []AgentSnapshot {
 	return result
 }
 
-func (r *Runtime) Agent(agentID string) (*Agent, bool) {
+// JobSnapshots returns copies of all jobs owned by the runtime.
+func (r *Runtime) JobSnapshots() []seam.JobSnapshot {
+	jobs := r.jobs.List()
+	result := make([]seam.JobSnapshot, len(jobs))
+	for i, snapshot := range jobs {
+		result[i] = seam.JobSnapshot{
+			ID:          snapshot.ID,
+			Author:      snapshot.Author,
+			Script:      snapshot.Script,
+			ToolName:    snapshot.ToolName,
+			Status:      string(snapshot.Status),
+			Started:     snapshot.Started,
+			Finished:    snapshot.Finished,
+			ExitCode:    snapshot.ExitCode,
+			StdoutBytes: snapshot.StdoutBytes,
+			StderrBytes: snapshot.StderrBytes,
+			WarnAfter:   snapshot.WarnAfter,
+		}
+	}
+	return result
+}
+
+// sendPrompt delivers a user prompt to an agent.
+func (r *Runtime) sendPrompt(agentID, prompt string) error {
+	agent, ok := r.lookupAgent(agentID)
+	if !ok {
+		return fmt.Errorf("agent %q not found", agentID)
+	}
+	return agent.Send(prompt)
+}
+
+// steerAgent delivers a steering message to an agent.
+func (r *Runtime) steerAgent(agentID, message string) error {
+	agent, ok := r.lookupAgent(agentID)
+	if !ok {
+		return fmt.Errorf("agent %q not found", agentID)
+	}
+	return agent.Steer(message)
+}
+
+// setAgentEffort updates an agent's inference effort.
+func (r *Runtime) setAgentEffort(agentID, effort string) error {
+	agent, ok := r.lookupAgent(agentID)
+	if !ok {
+		return fmt.Errorf("agent %q not found", agentID)
+	}
+	agent.SetEffort(effort)
+	return nil
+}
+
+func (r *Runtime) lookupAgent(agentID string) (*Agent, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	a, ok := r.agents[agentID]
 	return a, ok
 }
 
-func (r *Runtime) Compact(agentID string, keep int) (int, error) {
-	agent, ok := r.Agent(agentID)
+func (r *Runtime) compact(agentID string, keep int) (int, error) {
+	agent, ok := r.lookupAgent(agentID)
 	if !ok {
 		return 0, fmt.Errorf("agent %q not found", agentID)
 	}
 	return agent.Compact(keep), nil
 }
 
-func (r *Runtime) Clear(agentID string) error {
-	agent, ok := r.Agent(agentID)
+func (r *Runtime) clear(agentID string) error {
+	agent, ok := r.lookupAgent(agentID)
 	if !ok {
 		return fmt.Errorf("agent %q not found", agentID)
 	}
@@ -508,14 +701,16 @@ func (r *Runtime) Clear(agentID string) error {
 	// file would open mid-answer to a question it does not contain. The swap
 	// therefore waits for the turn boundary; an idle agent has no turn in
 	// flight, so for it the boundary is now.
-	// Both backends defer. An earlier version excepted Codex on the grounds
+	// Native and Codex defer. An earlier version excepted Codex on the grounds
 	// that its clear interrupts the turn, but clear() only sets `resetting` and
 	// signals `wake`: the turn/interrupt RPC happens later, in reset(), when
 	// the leaf's run loop next services that signal. In the gap the
 	// app-server's already-queued deltas still pass the threadID guard and
 	// would land in the new transcript — the very defect this defers to avoid.
-	// reset() promotes explicitly once the interrupt has returned.
-	idle := agent.codexBackend() == nil && agent.Snapshot().Status != "thinking"
+	// reset() promotes explicitly once the interrupt has returned. Claude Code
+	// clear synchronously stops its old stream, promotes at that boundary, and
+	// starts a fresh process with fresh conversation history.
+	idle := agent.codexBackend() == nil && agent.claudeBackend() == nil && agent.Snapshot().Status != "thinking"
 	r.mu.Lock()
 	if superseded, ok := r.pending[agentID]; ok {
 		_ = superseded.log.Close()
@@ -555,12 +750,18 @@ func (r *Runtime) promotePending(agentID string) {
 	}
 }
 
-// Done closes when the runtime is shutting down. A headless run selects on it
-// so that a signal arriving during an in-flight turn ends the run, instead of
-// blocking forever on an events channel that Close never closes.
-func (r *Runtime) Done() <-chan struct{} { return r.ctx.Done() }
+func (r *Runtime) emit(event seam.Event) {
+	r.queueEvent(event, false)
+}
 
-func (r *Runtime) emit(event Event) {
+func (r *Runtime) queueEvent(event seam.Event, closeEvents bool) {
+	r.eventMu.Lock()
+	if r.eventsClosed {
+		r.eventMu.Unlock()
+		return
+	}
+	r.eventMu.Unlock()
+
 	if event.Time.IsZero() {
 		event.Time = time.Now().UTC()
 	}
@@ -580,6 +781,9 @@ func (r *Runtime) emit(event Event) {
 	// stored copy and the rendered one identically.
 	event.Text = redactor.redact(event.Text)
 	event.Metadata = redactor.redactMetadata(event.Metadata)
+	if event.Kind == "turn_done" || event.Kind == "error" {
+		r.cancelSubagentWarning(event.AgentID)
+	}
 	if session != nil {
 		_ = session.log.Append(logx.Entry{Time: event.Time, Agent: event.AgentID, Session: session.id, Kind: event.Kind, Text: event.Text, Metadata: event.Metadata})
 	}
@@ -591,44 +795,93 @@ func (r *Runtime) emit(event Event) {
 		r.promotePending(agentID)
 	}
 	r.eventMu.Lock()
-	r.eventQueue = append(r.eventQueue, event)
+	if r.eventsClosed {
+		r.eventMu.Unlock()
+		return
+	}
+	if closeEvents {
+		r.eventsClosed = true
+	}
+	r.eventSequence++
+	event.Cursor = r.eventSequence
+	event = serializableEvent(event)
+	r.eventLog = append(r.eventLog, event)
+	close(r.eventNotify)
+	r.eventNotify = make(chan struct{})
 	r.eventMu.Unlock()
-	select {
-	case r.eventWake <- struct{}{}:
-	default:
-		// The wake channel is only a notification. Events stay in the FIFO
-		// queue until the dispatcher hands them to the UI.
-	}
 }
 
-func (r *Runtime) dispatchEvents() {
-	for {
-		select {
-		case <-r.eventWake:
-			r.flushEvents()
-		case <-r.ctx.Done():
-			return
-		}
+// PollEvents implements the seam's cursor-based stream. The runtime retains
+// the ordered log for its lifetime; a slow consumer therefore delays nobody
+// and loses nothing. eventNotify is private wake-up machinery only and never
+// crosses the seam.
+func (r *Runtime) PollEvents(query seam.EventQuery) seam.EventBatch {
+	wait := time.Duration(query.WaitMilliseconds) * time.Millisecond
+	if wait < 0 {
+		wait = 0
 	}
-}
-
-func (r *Runtime) flushEvents() {
+	deadline := time.Now().Add(wait)
 	for {
 		r.eventMu.Lock()
-		if len(r.eventQueue) == 0 {
-			r.eventMu.Unlock()
-			return
+		start := sort.Search(len(r.eventLog), func(i int) bool {
+			return r.eventLog[i].Cursor > query.After
+		})
+		end := len(r.eventLog)
+		if query.Limit > 0 && start+query.Limit < end {
+			end = start + query.Limit
 		}
-		event := r.eventQueue[0]
-		r.eventQueue[0] = Event{}
-		r.eventQueue = r.eventQueue[1:]
+		batch := seam.EventBatch{Cursor: query.After}
+		if start < end {
+			batch.Events = make([]seam.Event, end-start)
+			for i, event := range r.eventLog[start:end] {
+				batch.Events[i] = serializableEvent(event)
+			}
+			batch.Cursor = batch.Events[len(batch.Events)-1].Cursor
+		}
+		batch.End = r.eventsClosed && end == len(r.eventLog)
+		notify := r.eventNotify
 		r.eventMu.Unlock()
+		if len(batch.Events) > 0 || batch.End || wait == 0 {
+			return batch
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return batch
+		}
+		timer := time.NewTimer(remaining)
 		select {
-		case r.events <- event:
-		case <-r.ctx.Done():
-			return
+		case <-notify:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+			return batch
 		}
 	}
+}
+
+// serializableEvent makes the event independent of its producer and confines
+// metadata to JSON values. An invalid metadata value is replaced with a
+// serializable diagnostic instead of allowing a channel, function, or live
+// pointer to cross the seam.
+func serializableEvent(event seam.Event) seam.Event {
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		event.Metadata = map[string]any{"serialization_error": err.Error()}
+		encoded, _ = json.Marshal(event)
+	}
+	var copied seam.Event
+	if err := json.Unmarshal(encoded, &copied); err != nil {
+		return seam.Event{
+			Cursor:    event.Cursor,
+			Time:      event.Time,
+			RuntimeID: event.RuntimeID,
+			AgentID:   event.AgentID,
+			Kind:      "serialization_error",
+			Text:      err.Error(),
+		}
+	}
+	return copied
 }
 
 func (r *Runtime) recordInferenceRequest(agent *Agent, round int, req provider.Request, p provider.Provider) {
@@ -647,13 +900,13 @@ func (r *Runtime) recordInferenceRequest(agent *Agent, round int, req provider.R
 		metadata["context"] = json.RawMessage(context)
 		metadata["context_sha256"] = provider.PayloadSHA256(context)
 	}
-	r.emit(Event{AgentID: agent.ID, AgentTitle: agent.Title, Kind: "inference_request", Metadata: metadata})
+	r.emit(seam.Event{AgentID: agent.ID, AgentTitle: agent.Title, Kind: "inference_request", Metadata: metadata})
 }
 
-// EmitStatus lets front ends record local control-plane events without
+// emitStatus lets front ends record local control-plane events without
 // fabricating a provider turn.
-func (r *Runtime) EmitStatus(kind, text string) {
-	r.emit(Event{Kind: kind, Text: text})
+func (r *Runtime) emitStatus(kind, text string) {
+	r.emit(seam.Event{Kind: kind, Text: text})
 }
 
 // deliverJobWarning routes a job's single warn_after_seconds warning.
@@ -675,31 +928,108 @@ func (r *Runtime) EmitStatus(kind, text string) {
 // unchanged: what the agent is told and what the manager observed are the same
 // reading.
 func (r *Runtime) deliverJobWarning(snapshot job.Snapshot) {
-	r.emit(Event{AgentID: snapshot.Author, Kind: "job_warning", Text: "job is still running", Metadata: map[string]any{"job": snapshot.ID, "warn_after": snapshot.WarnAfter.String()}})
-	agent, ok := r.Agent(snapshot.Author)
+	r.emit(seam.Event{AgentID: snapshot.Author, Kind: "job_warning", Text: "job is still running", Metadata: map[string]any{"job": snapshot.ID, "warn_after": snapshot.WarnAfter.String()}})
+	agent, ok := r.lookupAgent(snapshot.Author)
 	if !ok {
 		return
 	}
 	if err := agent.receiveJobWarning(snapshot); err != nil {
-		r.emit(Event{AgentID: snapshot.Author, AgentTitle: agent.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"job": snapshot.ID}})
+		r.emit(seam.Event{AgentID: snapshot.Author, AgentTitle: agent.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"job": snapshot.ID}})
 	}
 }
 
 func (r *Runtime) deliverJobResult(snapshot job.Snapshot, stdout, stderr string) {
-	agent, ok := r.Agent(snapshot.Author)
+	agent, ok := r.lookupAgent(snapshot.Author)
 	if !ok {
 		return
 	}
 	if err := agent.receiveJobResult(snapshot, stdout, stderr); err != nil {
-		r.emit(Event{AgentID: snapshot.Author, AgentTitle: agent.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"job": snapshot.ID}})
+		r.emit(seam.Event{AgentID: snapshot.Author, AgentTitle: agent.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"job": snapshot.ID}})
+	}
+}
+
+func (r *Runtime) watchOrgRequests() {
+	defer close(r.requestWatchDone)
+	watchRequestQueue(r.requestWatchStop, r.requestPoll, r.orgStore, func(request orgstore.Request) bool {
+		seat, ok := r.lookupAgent(r.seatID)
+		if !ok {
+			return false
+		}
+		if err := seat.receiveOrgRequest(request); err != nil {
+			r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"request": request.ID}})
+			return false
+		}
+		return true
+	}, func(err error) {
+		r.emitStatus("org_requests", err.Error())
+	})
+}
+
+type requestQueueStore interface {
+	Requests() ([]orgstore.Request, error)
+	RequestsState() (orgstore.RequestLogState, error)
+}
+
+func watchRequestQueue(stop <-chan struct{}, poll time.Duration, store requestQueueStore, handle func(orgstore.Request) bool, reportError func(error)) {
+	seen := make(map[uint64]struct{})
+	deliver := func() {
+		requests, err := store.Requests()
+		if err != nil {
+			reportError(err)
+			return
+		}
+		for _, request := range requests {
+			if request.Status != orgstore.StatusQueued {
+				continue
+			}
+			if _, delivered := seen[request.ID]; delivered {
+				continue
+			}
+			if !handle(request) {
+				continue
+			}
+			seen[request.ID] = struct{}{}
+		}
+	}
+
+	// Establish the baseline before the first scan. If an external append lands
+	// between these operations, the scan sees it now; if it lands after the
+	// scan, the next state check differs from this baseline. Scanning first can
+	// lose an append that lands before the baseline is sampled forever.
+	state, err := store.RequestsState()
+	if err != nil {
+		reportError(err)
+	}
+	deliver()
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			next, statErr := store.RequestsState()
+			if statErr != nil {
+				reportError(statErr)
+				continue
+			}
+			if next.Size == state.Size && next.ModTime.Equal(state.ModTime) {
+				continue
+			}
+			state = next
+			deliver()
+		}
 	}
 }
 
 func (r *Runtime) Close() error {
 	var err error
 	r.closeOnce.Do(func() {
-		r.emit(Event{Kind: "runtime", Text: "runtime stopping"})
+		close(r.requestWatchStop)
+		<-r.requestWatchDone
+		r.queueEvent(seam.Event{Kind: "runtime", Text: "runtime stopping"}, true)
 		r.cancel()
+		r.cancelAllSubagentWarnings()
 		r.mu.RLock()
 		agents := make([]*Agent, 0, len(r.agents))
 		for _, a := range r.agents {

@@ -728,7 +728,7 @@ func TestAcceptanceCachedUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	seat := runtime.Seat()
+	seat := runtime.seat()
 
 	// A long, dull prefix: big enough to be worth caching, boring enough that
 	// the model does not spend the turn on it.
@@ -822,7 +822,7 @@ func TestAcceptanceContextPin(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	seat := runtime.Seat()
+	seat := runtime.seat()
 	seat.Send("Reply with exactly " + acceptSentinel + " and nothing else. Do not call tools.")
 	waitLiveTurn(t, runtime, 1)
 

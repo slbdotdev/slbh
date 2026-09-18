@@ -1,13 +1,13 @@
 # slbh
 
-`slbh` is a small, Linux-first agent harness for coding work. It provides a
-Bubble Tea terminal UI, an independent seat agent and child agents, streaming
-OpenAI-compatible provider responses, durable JSONL transcripts, and managed
-shell jobs.
+`slbh` is the Linux-first runtime for org v0.3, not a fourth managed harness.
+It runs the Seat and Intern, launches managed Codex/Claude/native leaves, and
+provides a Bubble Tea terminal UI, streaming provider responses, durable JSONL
+transcripts, and managed shell jobs.
 
 ## Requirements
 
-- Go 1.27 or newer.
+- Go 1.26 or newer.
 - An API key for any native provider model you select. Codex leaves use an
   authenticated local `codex` executable instead.
 - To launch Codex leaves, `codex` must be on `PATH` (or be supplied through
@@ -30,25 +30,25 @@ go build -o slbh ./cmd/slbh
 ./slbh
 ```
 
-The defaults are a `deepseek-v4-flash` seat agent at `high` effort,
-`zai/glm-5.3-flash` child agents at `high` effort, and the local 5080
-workhorse `local/q27-IQ2_M-96k` for leaf agents. A new configuration has no
-approved models, so the default native seat model stays disabled until models
-are selected.
+The defaults are a `zai/glm-5.3-flash` Seat at `high` effort and a local
+`local/q27-UD-Q2_K_XL-64k` leaf/Intern route. The v0.3 roster is authoritative
+for child roles: the Seat launches the `manager` role, a Manager names each
+leaf role (`luna`, `sol`, `opus`, or `flex`), and every leaf launch supplies an
+explicit model. A new configuration has no approved models, so the default
+native Seat model stays disabled until models are selected.
 
-After starting a fresh configuration, run `/models`, wait for the catalogs,
-and assign the seat, subagent, and leaf defaults with `r`, `s`, and `l`.
-Press `Esc` to save and close the model menu. `/model NAME` is a shortcut that
-approves and selects `NAME` for the seat agent only; child defaults still need
-to be approved or supplied explicitly when a child is launched.
+After starting a fresh configuration, run `/models` and wait for the catalogs.
+The Seat model can be selected with `/model NAME`; roster-managed child
+launches use the synchronized role data and require the role name plus an
+explicit leaf model. Press `Esc` to save and close the model menu.
 
 ## Providers and configuration
 
 Provider routing is automatic:
 
 - `local/` model names route to the desktop RTX 5080's Ollama server without
-  an API key. The default local model is `local/q27-IQ2_M-96k`, the campaign's
-  best long-context quant, served as `q27-IQ2_M-96k` on Ollama.
+  an API key. The default local model is `local/q27-UD-Q2_K_XL-64k`, served as
+  `q27-UD-Q2_K_XL-64k` on Ollama.
 - `DEEPSEEK_API_KEY` routes `deepseek/` and `deepseek-` model names to
   DeepSeek.
 - `ZAI_API_KEY` routes `zai/` and `glm-` model names to Z.ai.
@@ -85,7 +85,7 @@ credential — never the policy itself, which has to change without a rebuild.
 The policy resolves in a fixed order:
 
 1. `$SLBH_HOME/policy.json`, if present and valid. This file is wholly managed
-   — on the fleet, Ansible deploys it — and slbh only ever reads it.
+   by the `slb-org` sync on the fleet, and slbh only ever reads it.
 2. otherwise a `local_policy` block in the app-owned `$SLBH_HOME/config.json`,
    which `/models` can author.
 3. otherwise slbh refuses to route.
@@ -216,10 +216,12 @@ These environment variables are read at startup:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SLBH_HOME` | `$HOME/.slbh` | Base directory for configuration, history, and runtime records. |
-| `SLBH_MODEL` | `deepseek-v4-flash` | Seat agent model. |
+| `SLBH_MODEL` | `zai/glm-5.3-flash` | Seat agent model. |
 | `SLBH_EFFORT` | `high` | Seat reasoning effort. |
+| `SLBH_INTERN_MODEL` | `local/q27-UD-Q2_K_XL-64k` | Intern model. |
+| `SLBH_INTERN_EFFORT` | `medium` | Intern reasoning effort. |
 | `SLBH_SUBAGENT_MODEL` | `zai/glm-5.3-flash` | Default child-agent model. |
-| `SLBH_LEAF_MODEL` | `local/q27-IQ2_M-96k` | Default depth-two child model. |
+| `SLBH_LEAF_MODEL` | `local/q27-UD-Q2_K_XL-64k` | Legacy depth-two default; roster launches require an explicit leaf model. |
 | `SLBH_SUBAGENT_EFFORT` | `high` | Default child-agent effort. |
 | `SLBH_PYTHON` | managed `~/.local/share/slbh/python` interpreter | Python interpreter used by `quick_py` and `long_py`. |
 | `SLBH_ENDPOINT` | OpenRouter chat-completions endpoint | Compatible provider endpoint. |

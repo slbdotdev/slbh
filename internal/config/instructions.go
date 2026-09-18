@@ -16,10 +16,12 @@ const (
 	LayerSeat    = "seat"
 	LayerManager = "manager"
 	LayerLeaf    = "leaf"
+	// InstructionIntern is loaded by name and is never selected by agent depth.
+	InstructionIntern = "intern"
 )
 
 // InstructionsDir is the directory under $SLBH_HOME that ansible deploys the
-// three documents into. It sits beside policy.json and is read the same way:
+// managed documents into. It sits beside policy.json and is read the same way:
 // wholly managed, never written by slbh.
 const InstructionsDir = "instructions"
 
@@ -32,10 +34,9 @@ const (
 
 // LayerForDepth maps an agent's runtime depth to its instruction layer.
 //
-// The mapping is by depth rather than by a configured role name because depth
-// is the one fact the runtime cannot be wrong about: it assigns it when the
-// agent is created and nothing can edit it afterwards. A role name in a config
-// file is a second source of truth for something already known.
+// The mapping remains by depth because these are layer documents shared by
+// several roster roles. The separately loaded roster names launch identity;
+// launch validation requires its declared depth to match the runtime depth.
 //
 // Depths beyond 2 are leaves rather than an error. The runtime caps delegation
 // at depth 2 today (a parent at depth >= 2 may not launch), so depth 3 cannot
@@ -62,8 +63,8 @@ type InstructionSource struct {
 	Kind string
 	// Dir is the directory the documents were looked for in.
 	Dir string
-	// Missing names the layers that had no readable document, in seat,
-	// manager, leaf order.
+	// Missing names the documents that had no readable content, in seat,
+	// manager, leaf, intern order.
 	Missing []string
 	// Note carries read errors other than a plain absence. A file that exists
 	// but cannot be read is a different fact from a file that was never
@@ -88,12 +89,14 @@ func (s InstructionSource) Describe() string {
 	return text
 }
 
-// Instructions holds the per-layer managed documents in force.
+// Instructions holds the managed instruction documents in force.
 type Instructions struct {
-	// Layers maps a layer name to its document text. A layer with no deployed
+	// Layers maps a document name to its text. A document with no deployed
 	// document is absent from the map rather than present and empty, so
 	// "nothing was deployed" and "an empty document was deployed" are the same
 	// fact — which they are, because an empty instruction is no instruction.
+	// The intern document is stored here by name but LayerForDepth never selects
+	// it.
 	Layers map[string]string
 	// Source describes where the documents came from.
 	Source InstructionSource
@@ -112,7 +115,14 @@ func (i Instructions) For(depth int) string {
 	return i.Layers[LayerForDepth(depth)]
 }
 
-// LoadInstructions reads the three layer documents from $SLBH_HOME/instructions.
+// ForName returns a managed instruction document by its filename stem. It is
+// the access path for documents, such as intern.md, that have no agent depth.
+func (i Instructions) ForName(name string) string {
+	return i.Layers[name]
+}
+
+// LoadInstructions reads the layer documents and intern.md from
+// $SLBH_HOME/instructions.
 //
 // It never returns an error. Every failure mode — no directory, no file, an
 // unreadable file — degrades to a layer with no document and is recorded on
@@ -125,22 +135,22 @@ func LoadInstructions(home string) Instructions {
 		Source: InstructionSource{Kind: InstructionsNone, Dir: dir},
 	}
 	var notes []string
-	for _, layer := range []string{LayerSeat, LayerManager, LayerLeaf} {
-		path := filepath.Join(dir, layer+".md")
+	for _, name := range []string{LayerSeat, LayerManager, LayerLeaf, InstructionIntern} {
+		path := filepath.Join(dir, name+".md")
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if !os.IsNotExist(err) {
 				notes = append(notes, fmt.Sprintf("%s is unreadable: %v", path, err))
 			}
-			loaded.Source.Missing = append(loaded.Source.Missing, layer)
+			loaded.Source.Missing = append(loaded.Source.Missing, name)
 			continue
 		}
 		text := strings.TrimSpace(string(data))
 		if text == "" {
-			loaded.Source.Missing = append(loaded.Source.Missing, layer)
+			loaded.Source.Missing = append(loaded.Source.Missing, name)
 			continue
 		}
-		loaded.Layers[layer] = text
+		loaded.Layers[name] = text
 		loaded.Source.Kind = InstructionsManaged
 	}
 	loaded.Source.Note = strings.Join(notes, "; ")

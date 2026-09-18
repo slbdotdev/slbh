@@ -50,7 +50,7 @@ func TestClearDefersTheLogSwapUntilAnInFlightTurnEnds(t *testing.T) {
 	}
 	defer r.Close()
 
-	seat := r.Seat()
+	seat := r.seat()
 	oldPath, err := r.TranscriptPath(seat.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestClearDefersTheLogSwapUntilAnInFlightTurnEnds(t *testing.T) {
 	}
 	<-p.started
 
-	if err := r.Clear(seat.ID); err != nil {
+	if err := r.clear(seat.ID); err != nil {
 		t.Fatal(err)
 	}
 	during, err := r.TranscriptPath(seat.ID)
@@ -94,7 +94,7 @@ func waitForKind(t *testing.T, r *Runtime, kind string) {
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.Kind == kind {
 				return
 			}

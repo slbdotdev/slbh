@@ -51,13 +51,17 @@ func (s PolicySource) Describe() string {
 }
 
 type Config struct {
-	Home           string
-	SeatModel      string
-	SeatEffort     string
-	SubagentModel  string
-	LeafModel      string
-	SubagentEffort string
-	Endpoint       string
+	Home             string
+	SecretarySession string
+	SecretaryWake    bool
+	SeatModel        string
+	SeatEffort       string
+	InternModel      string
+	InternEffort     string
+	SubagentModel    string
+	LeafModel        string
+	SubagentEffort   string
+	Endpoint         string
 	// EndpointExplicit records that Endpoint came from SLBH_ENDPOINT rather
 	// than from the default. Routing needs the provenance, not just the value:
 	// an endpoint the operator set deliberately overrides a native route,
@@ -83,6 +87,13 @@ type Config struct {
 	// $SLBH_HOME/instructions. Derived like Policy, never persisted: slbh
 	// reads these files and never writes them.
 	Instructions Instructions
+	// Skills are the per-layer skill metadata read from $SLBH_HOME/skills.
+	// Only name, description and absolute SKILL.md path are retained; skill
+	// bodies remain on disk until an agent chooses to read one.
+	Skills Skills
+	// Roster is the managed launch identity and compatibility policy read from
+	// $SLBH_HOME/roster.toml. It is derived and never persisted by slbh.
+	Roster Roster
 }
 
 func Load() Config {
@@ -95,7 +106,9 @@ func Load() Config {
 		}
 	}
 	cfg := Config{
-		Home: home,
+		Home:             home,
+		SecretarySession: getenv("SLBH_SECRETARY_SESSION", "secretary"),
+		SecretaryWake:    getenvBool("SLBH_SECRETARY_WAKE", true),
 		// The seat default is `high`, and deliberately not `xhigh`. Two
 		// separate reasons, either of which is enough.
 		//
@@ -113,8 +126,10 @@ func Load() Config {
 		// worth its cost: pooled across the two live output_config.effort
 		// ladders, its median is +16.1% over `high` but it wins only 67% of
 		// turn-pairs and costs about 48% more wall clock.
-		SeatModel:      getenv("SLBH_MODEL", "deepseek-v4-flash"),
+		SeatModel:      getenv("SLBH_MODEL", "zai/glm-5.3-flash"),
 		SeatEffort:     getenv("SLBH_EFFORT", "high"),
+		InternModel:    getenv("SLBH_INTERN_MODEL", provider.LocalModelID),
+		InternEffort:   getenv("SLBH_INTERN_EFFORT", "medium"),
 		SubagentModel:  getenv("SLBH_SUBAGENT_MODEL", "zai/glm-5.3-flash"),
 		LeafModel:      getenv("SLBH_LEAF_MODEL", provider.LocalModelID),
 		SubagentEffort: getenv("SLBH_SUBAGENT_EFFORT", "high"),
@@ -123,6 +138,12 @@ func Load() Config {
 	}
 	cfg.EndpointExplicit = strings.TrimSpace(os.Getenv("SLBH_ENDPOINT")) != ""
 	if persisted, ok := loadFile(home); ok {
+		if os.Getenv("SLBH_SECRETARY_SESSION") == "" && persisted.SecretarySession != "" {
+			cfg.SecretarySession = persisted.SecretarySession
+		}
+		if os.Getenv("SLBH_SECRETARY_WAKE") == "" && persisted.SecretaryWake != nil {
+			cfg.SecretaryWake = *persisted.SecretaryWake
+		}
 		if os.Getenv("SLBH_MODEL") == "" {
 			seatModel := persisted.SeatModel
 			if seatModel == "" {
@@ -140,6 +161,12 @@ func Load() Config {
 			if seatEffort != "" {
 				cfg.SeatEffort = seatEffort
 			}
+		}
+		if os.Getenv("SLBH_INTERN_MODEL") == "" && persisted.InternModel != "" {
+			cfg.InternModel = persisted.InternModel
+		}
+		if os.Getenv("SLBH_INTERN_EFFORT") == "" && persisted.InternEffort != "" {
+			cfg.InternEffort = persisted.InternEffort
 		}
 		if os.Getenv("SLBH_SUBAGENT_MODEL") == "" && persisted.SubagentModel != "" {
 			cfg.SubagentModel = persisted.SubagentModel
@@ -164,6 +191,8 @@ func Load() Config {
 	}
 	cfg.Policy, cfg.PolicySource = ResolvePolicy(home, cfg.LocalPolicy)
 	cfg.Instructions = LoadInstructions(home)
+	cfg.Skills = LoadSkills(home)
+	cfg.Roster = LoadRoster(home)
 	return cfg
 }
 
@@ -231,14 +260,18 @@ func (c *Config) ApplyLocalPolicy(policy provider.Policy) error {
 }
 
 type fileConfig struct {
-	SeatModel      string   `json:"seat_model,omitempty"`
-	SeatEffort     string   `json:"seat_effort,omitempty"`
-	RootModel      string   `json:"root_model,omitempty"`
-	RootEffort     string   `json:"root_effort,omitempty"`
-	SubagentModel  string   `json:"subagent_model,omitempty"`
-	LeafModel      string   `json:"leaf_model,omitempty"`
-	SubagentEffort string   `json:"subagent_effort,omitempty"`
-	ApprovedModels []string `json:"approved_models"`
+	SecretarySession string   `json:"secretary_session,omitempty"`
+	SecretaryWake    *bool    `json:"secretary_wake,omitempty"`
+	SeatModel        string   `json:"seat_model,omitempty"`
+	SeatEffort       string   `json:"seat_effort,omitempty"`
+	InternModel      string   `json:"intern_model,omitempty"`
+	InternEffort     string   `json:"intern_effort,omitempty"`
+	RootModel        string   `json:"root_model,omitempty"`
+	RootEffort       string   `json:"root_effort,omitempty"`
+	SubagentModel    string   `json:"subagent_model,omitempty"`
+	LeafModel        string   `json:"leaf_model,omitempty"`
+	SubagentEffort   string   `json:"subagent_effort,omitempty"`
+	ApprovedModels   []string `json:"approved_models"`
 	// LocalPolicy is the app-owned half of the split. slbh writes it here and
 	// never into the managed policy.json, which it only ever reads.
 	LocalPolicy *provider.Policy `json:"local_policy,omitempty"`
@@ -254,8 +287,13 @@ func (c Config) Save() error {
 	// LocalPolicy is written back on every save. Without it a /effort or
 	// /model save would drop the policy the user authored to make an unmanaged
 	// host work, and the next launch would refuse every route.
+	secretaryWake := c.SecretaryWake
 	payload, err := json.MarshalIndent(fileConfig{
-		SeatModel: c.SeatModel, SeatEffort: c.SeatEffort,
+		SecretarySession: c.SecretarySession,
+		SecretaryWake:    &secretaryWake,
+		SeatModel:        c.SeatModel, SeatEffort: c.SeatEffort,
+		InternModel:   c.InternModel,
+		InternEffort:  c.InternEffort,
 		SubagentModel: c.SubagentModel, LeafModel: c.LeafModel, SubagentEffort: c.SubagentEffort,
 		ApprovedModels: unique(c.ApprovedModels),
 		LocalPolicy:    c.LocalPolicy,
@@ -326,4 +364,12 @@ func getenv(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func getenvBool(name string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	return !strings.EqualFold(value, "false") && value != "0"
 }

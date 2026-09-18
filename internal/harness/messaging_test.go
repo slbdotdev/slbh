@@ -82,7 +82,7 @@ func toolEvent(index int, id, name, args string) provider.Event {
 func messagingRuntime(t *testing.T) (*Runtime, *boundaryProvider) {
 	t.Helper()
 	p := &boundaryProvider{calls: make(chan pendingInference, 16)}
-	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "passive", SubagentModel: "passive", LeafModel: "passive"}, Options{Provider: func(model string) (provider.Provider, error) {
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "passive", SubagentModel: "passive", LeafModel: "passive", Roster: testRoster()}, Options{Provider: func(model string) (provider.Provider, error) {
 		if model == "active" {
 			return p, nil
 		}
@@ -145,16 +145,16 @@ func TestMessagesReachEveryAgentAtInferenceBoundary(t *testing.T) {
 	for _, direction := range []string{"parent-to-child", "child-to-parent", "parent-to-leaf", "leaf-to-parent", "sibling-to-sibling"} {
 		t.Run(direction, func(t *testing.T) {
 			r, p := messagingRuntime(t)
-			seat := r.Seat()
-			child, err := r.LaunchSubagent(seat.ID, "child", "")
+			seat := r.seat()
+			child, err := r.launchSubagentSpec(seat.ID, LaunchSpec{Title: "child", Role: "manager"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			leaf, err := r.LaunchSubagent(child.ID, "leaf", "")
+			leaf, err := r.launchSubagentSpec(child.ID, LaunchSpec{Title: "leaf", Role: "flex", Model: "passive"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			sibling, err := r.LaunchSubagent(seat.ID, "sibling", "")
+			sibling, err := r.launchSubagentSpec(seat.ID, LaunchSpec{Title: "sibling", Role: "manager"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -196,7 +196,7 @@ func TestMessagesReachEveryAgentAtInferenceBoundary(t *testing.T) {
 
 func TestIdleSteerWakesWithoutAnotherMessage(t *testing.T) {
 	r, p := messagingRuntime(t)
-	a := r.Seat()
+	a := r.seat()
 	a.SetModel("active")
 	if err := a.Steer("wake now"); err != nil {
 		t.Fatal(err)
@@ -209,9 +209,9 @@ func TestIdleSteerWakesWithoutAnotherMessage(t *testing.T) {
 
 func TestOneInboxPreservesFIFOBurstAndDoesNotBlockOnBusyAgentOrUI(t *testing.T) {
 	r, p := messagingRuntime(t)
-	a := r.Seat()
+	a := r.seat()
 	a.SetModel("active")
-	child, err := r.LaunchSubagent(a.ID, "child", "")
+	child, err := r.launchSubagentSpec(a.ID, LaunchSpec{Title: "child", Role: "manager"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestOneInboxPreservesFIFOBurstAndDoesNotBlockOnBusyAgentOrUI(t *testing.T) 
 	}
 	// Saturate telemetry without reading Events; message transport must work.
 	for i := 0; i < 1100; i++ {
-		r.EmitStatus("status", "UI backpressure")
+		r.emitStatus("status", "UI backpressure")
 	}
 	first.finish(t, textEvent("retained"))
 	next := p.next(t)
@@ -274,13 +274,13 @@ func TestOneInboxPreservesFIFOBurstAndDoesNotBlockOnBusyAgentOrUI(t *testing.T) 
 
 func TestAutomaticChildResultEntersBusyParentTurn(t *testing.T) {
 	r, p := messagingRuntime(t)
-	seat := r.Seat()
+	seat := r.seat()
 	seat.SetModel("active")
 	if err := seat.Send("working while child runs"); err != nil {
 		t.Fatal(err)
 	}
 	first := p.next(t)
-	child, err := r.LaunchSubagent(seat.ID, "child", "do the work")
+	child, err := r.launchSubagentSpec(seat.ID, LaunchSpec{Title: "child", Role: "manager", Brief: "do the work"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestAutomaticChildResultEntersBusyParentTurn(t *testing.T) {
 
 func TestInferenceToolBatchIsPreservedWhenMessagesArrive(t *testing.T) {
 	r, p := messagingRuntime(t)
-	a := r.Seat()
+	a := r.seat()
 	a.SetModel("active")
 	a.WorkDir = t.TempDir()
 	if err := a.Send("write two files"); err != nil {
@@ -369,7 +369,7 @@ func waitJobResultQueued(t *testing.T, a *Agent, jobID string) {
 
 func TestLongJobCompletionIsDeliveredAtNextBoundary(t *testing.T) {
 	r, p := messagingRuntime(t)
-	a := r.Seat()
+	a := r.seat()
 	a.SetModel("active")
 	a.WorkDir = t.TempDir()
 	release := filepath.Join(a.WorkDir, "release")
@@ -404,7 +404,7 @@ func TestLongJobCompletionIsDeliveredAtNextBoundary(t *testing.T) {
 	if jobID == "" {
 		t.Fatalf("continuation did not retain long_job result: %#v", second.request.Messages)
 	}
-	if _, ok := r.Jobs().Get(jobID); !ok {
+	if _, ok := r.jobs.Get(jobID); !ok {
 		t.Fatalf("long_job %q was not registered", jobID)
 	}
 	if runtime.GOOS != "windows" {
@@ -439,7 +439,7 @@ func TestToolInFlightFinishesAndDeliversBeforeNextTool(t *testing.T) {
 		t.Skip("Linux/WSL bash boundary test")
 	}
 	r, p := messagingRuntime(t)
-	a := r.Seat()
+	a := r.seat()
 	a.SetModel("active")
 	a.WorkDir = t.TempDir()
 	release := filepath.Join(a.WorkDir, "release")
@@ -488,21 +488,21 @@ func TestToolInFlightFinishesAndDeliversBeforeNextTool(t *testing.T) {
 
 func TestStoppedRecipientsAndEmptyMessagesFailExplicitly(t *testing.T) {
 	r, _ := messagingRuntime(t)
-	child, err := r.LaunchSubagent(r.Seat().ID, "child", "")
+	child, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "child", Role: "manager"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := child.Steer("  "); err == nil {
 		t.Fatal("empty message accepted")
 	}
-	if err := r.EndSubagent(r.Seat().ID, child.ID); err != nil {
+	if err := r.endSubagent(r.seat().ID, child.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := child.Send("late"); err == nil {
 		t.Fatal("stopped recipient accepted input")
 	}
 	args, _ := json.Marshal(map[string]string{"agent_id": child.ID, "message": "late"})
-	if _, err := r.ExecuteTool(r.Seat().ID, "msg_subagent", string(args)); err == nil || !strings.Contains(err.Error(), "stopped") {
+	if _, err := r.ExecuteTool(r.seat().ID, "msg_subagent", string(args)); err == nil || !strings.Contains(err.Error(), "stopped") {
 		t.Fatalf("stopped recipient reported success: %v", err)
 	}
 }
@@ -554,7 +554,7 @@ func TestHTTPMessageWaitsForResponseCompletionWithinSameTurn(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = r.Close() })
 	t.Cleanup(func() { close(release) })
-	if err := r.Seat().Send("initial"); err != nil {
+	if err := r.seat().Send("initial"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -563,7 +563,7 @@ func TestHTTPMessageWaitsForResponseCompletionWithinSameTurn(t *testing.T) {
 		t.Fatal("HTTP stream never started")
 	}
 	<-requests
-	if err := r.Seat().Steer("during HTTP stream"); err != nil {
+	if err := r.seat().Steer("during HTTP stream"); err != nil {
 		t.Fatal(err)
 	}
 	// Send a token instead of closing: cleanup still releases the handler on
@@ -584,8 +584,8 @@ func TestHTTPMessageWaitsForResponseCompletionWithinSameTurn(t *testing.T) {
 	}
 	requireMessage(t, next, "assistant", "paid output")
 	requireMessage(t, next, "user", "[steer] during HTTP stream")
-	waitAgentTurn(t, r, r.Seat().ID)
-	path, _ := r.TranscriptPath(r.Seat().ID)
+	waitAgentTurn(t, r, r.seat().ID)
+	path, _ := r.TranscriptPath(r.seat().ID)
 	entries, err := logx.Read(path)
 	if err != nil {
 		t.Fatal(err)
@@ -615,7 +615,7 @@ func TestHTTPMessageWaitsForResponseCompletionWithinSameTurn(t *testing.T) {
 // test failed at the third boundary wait below: nothing ever woke the agent.
 func TestLongJobWarningWakesIdleAuthoringAgent(t *testing.T) {
 	r, p := messagingRuntime(t)
-	a := r.Seat()
+	a := r.seat()
 	a.SetModel("active")
 	a.WorkDir = t.TempDir()
 	if err := a.Send("start background work"); err != nil {
@@ -645,7 +645,7 @@ func TestLongJobWarningWakesIdleAuthoringAgent(t *testing.T) {
 	if jobID == "" {
 		t.Fatalf("continuation did not retain the long_job id: %#v", second.request.Messages)
 	}
-	started, ok := r.Jobs().Get(jobID)
+	started, ok := r.jobs.Get(jobID)
 	if !ok {
 		t.Fatalf("long_job %q was not registered", jobID)
 	}
@@ -706,7 +706,7 @@ func TestLongJobWarningWakesIdleAuthoringAgent(t *testing.T) {
 // interpreter that a development checkout may not have.
 func TestJobWarningNamesTheToolThatStartedTheJob(t *testing.T) {
 	r, p := messagingRuntime(t)
-	a := r.Seat()
+	a := r.seat()
 	a.SetModel("active")
 	r.deliverJobWarning(job.Snapshot{
 		ID:        "job-long-py",

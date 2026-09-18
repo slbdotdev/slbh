@@ -18,7 +18,7 @@ func TestGlobRecursesAndSpeaksOnNoMatch(t *testing.T) {
 	r := testRuntime(t)
 	work := t.TempDir()
 	r.workDir = work
-	r.Seat().WorkDir = work
+	r.seat().WorkDir = work
 	if err := os.MkdirAll(filepath.Join(work, "src", "pkg"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestGlobRecursesAndSpeaksOnNoMatch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, err := r.ExecuteTool(r.Seat().ID, "glob", string(args))
+		out, err := r.ExecuteTool(r.seat().ID, "glob", string(args))
 		if err != nil {
 			t.Fatalf("glob %q: %v", pattern, err)
 		}

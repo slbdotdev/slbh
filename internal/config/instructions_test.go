@@ -50,9 +50,10 @@ func TestLayerForDepthMapsEachLevel(t *testing.T) {
 
 func TestLoadInstructionsReadsEachLayerIntoItsOwnSlot(t *testing.T) {
 	home := writeLayers(t, map[string]string{
-		LayerSeat:    "seat doc: converge and commit",
-		LayerManager: "manager doc: launch level-two leaves",
-		LayerLeaf:    "leaf doc: launch nothing",
+		LayerSeat:         "seat doc: converge and commit",
+		LayerManager:      "manager doc: launch level-two leaves",
+		LayerLeaf:         "leaf doc: launch nothing",
+		InstructionIntern: "intern doc: ask questions",
 	})
 	loaded := LoadInstructions(home)
 	if loaded.Source.Kind != InstructionsManaged {
@@ -73,6 +74,14 @@ func TestLoadInstructionsReadsEachLayerIntoItsOwnSlot(t *testing.T) {
 			t.Fatalf("For(%d) = %q, want %q", depth, got, want)
 		}
 	}
+	if got := loaded.ForName(InstructionIntern); got != "intern doc: ask questions" {
+		t.Fatalf("ForName(%q) = %q, want intern document", InstructionIntern, got)
+	}
+	for _, depth := range []int{-1, 0, 1, 2, 99} {
+		if got := loaded.For(depth); got == loaded.ForName(InstructionIntern) {
+			t.Fatalf("For(%d) selected the named intern document", depth)
+		}
+	}
 }
 
 // The fleet may deploy the leaf document before the others, or withdraw one.
@@ -89,11 +98,11 @@ func TestLoadInstructionsReportsPartialDeployment(t *testing.T) {
 	if got := loaded.For(0); got != "" {
 		t.Fatalf("seat = %q, want empty", got)
 	}
-	if strings.Join(loaded.Source.Missing, ",") != LayerSeat+","+LayerManager {
-		t.Fatalf("missing = %v, want [seat manager]", loaded.Source.Missing)
+	if strings.Join(loaded.Source.Missing, ",") != LayerSeat+","+LayerManager+","+InstructionIntern {
+		t.Fatalf("missing = %v, want [seat manager intern]", loaded.Source.Missing)
 	}
-	if !strings.Contains(loaded.Source.Describe(), "no seat, manager document") {
-		t.Fatalf("Describe() = %q, want it to name the missing layers", loaded.Source.Describe())
+	if !strings.Contains(loaded.Source.Describe(), "no seat, manager, intern document") {
+		t.Fatalf("Describe() = %q, want it to name the missing documents", loaded.Source.Describe())
 	}
 }
 

@@ -12,11 +12,11 @@ import (
 func TestSaveAndLoadModelPolicy(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("SLBH_HOME", home)
-	for _, name := range []string{"SLBH_MODEL", "SLBH_EFFORT", "SLBH_SUBAGENT_MODEL", "SLBH_LEAF_MODEL", "SLBH_SUBAGENT_EFFORT", "SLBH_ENDPOINT"} {
+	for _, name := range []string{"SLBH_SECRETARY_SESSION", "SLBH_MODEL", "SLBH_EFFORT", "SLBH_SUBAGENT_MODEL", "SLBH_LEAF_MODEL", "SLBH_SUBAGENT_EFFORT", "SLBH_ENDPOINT"} {
 		t.Setenv(name, "")
 	}
 	want := Config{
-		Home: home, SeatModel: "deepseek/deepseek-chat", SeatEffort: "high",
+		Home: home, SecretarySession: "named-secretary", SeatModel: "deepseek/deepseek-chat", SeatEffort: "high",
 		SubagentModel: "zai/glm-5.3-flash", LeafModel: "deepseek/deepseek-chat", SubagentEffort: "medium",
 		ApprovedModels: []string{"deepseek/deepseek-chat", "zai/glm-5.3-flash", "deepseek/deepseek-chat"},
 	}
@@ -24,7 +24,7 @@ func TestSaveAndLoadModelPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := Load()
-	if got.SeatModel != want.SeatModel || got.SubagentModel != want.SubagentModel || got.LeafModel != want.LeafModel || len(got.ApprovedModels) != 2 {
+	if got.SecretarySession != want.SecretarySession || got.SeatModel != want.SeatModel || got.SubagentModel != want.SubagentModel || got.LeafModel != want.LeafModel || len(got.ApprovedModels) != 2 {
 		t.Fatalf("loaded config = %#v", got)
 	}
 	if got.ModelApproved("zai/glm-5.3-flash") == false || got.ModelApproved("unknown") {
@@ -32,6 +32,30 @@ func TestSaveAndLoadModelPolicy(t *testing.T) {
 	}
 	if _, err := os.Stat(home + string(os.PathSeparator) + "config.json"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSecretarySessionDefaultEnvironmentAndPersistence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SLBH_HOME", home)
+	t.Setenv("SLBH_SECRETARY_SESSION", "")
+	if got := Load().SecretarySession; got != "secretary" {
+		t.Fatalf("default SecretarySession = %q, want secretary", got)
+	}
+
+	t.Setenv("SLBH_SECRETARY_SESSION", "env-secretary")
+	if got := Load().SecretarySession; got != "env-secretary" {
+		t.Fatalf("environment SecretarySession = %q", got)
+	}
+
+	t.Setenv("SLBH_SECRETARY_SESSION", "")
+	cfg := Load()
+	cfg.SecretarySession = "persisted-secretary"
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if got := Load().SecretarySession; got != "persisted-secretary" {
+		t.Fatalf("persisted SecretarySession = %q", got)
 	}
 }
 
@@ -84,6 +108,60 @@ func TestDefaultLeafModelIsLocalWorkhorse(t *testing.T) {
 	got := Load()
 	if got.LeafModel != provider.LocalModelID {
 		t.Fatalf("leaf model = %q, want %q", got.LeafModel, provider.LocalModelID)
+	}
+}
+
+func TestInternModelDefaultEnvironmentAndPersistence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SLBH_HOME", home)
+	t.Setenv("SLBH_INTERN_MODEL", "")
+	if got := Load().InternModel; got != "local/q27-UD-Q2_K_XL-64k" {
+		t.Fatalf("default InternModel = %q", got)
+	}
+
+	t.Setenv("SLBH_INTERN_MODEL", "local/override")
+	if got := Load().InternModel; got != "local/override" {
+		t.Fatalf("environment InternModel = %q", got)
+	}
+
+	t.Setenv("SLBH_INTERN_MODEL", "")
+	cfg := Load()
+	cfg.InternModel = "local/persisted"
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if got := Load().InternModel; got != "local/persisted" {
+		t.Fatalf("persisted InternModel = %q", got)
+	}
+}
+
+func TestSecretaryWakeAndInternEffortDefaultsEnvironmentAndPersistence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SLBH_HOME", home)
+	t.Setenv("SLBH_SECRETARY_WAKE", "")
+	t.Setenv("SLBH_INTERN_EFFORT", "")
+	got := Load()
+	if !got.SecretaryWake || got.InternEffort != "medium" {
+		t.Fatalf("defaults = SecretaryWake %v, InternEffort %q", got.SecretaryWake, got.InternEffort)
+	}
+
+	t.Setenv("SLBH_SECRETARY_WAKE", "false")
+	t.Setenv("SLBH_INTERN_EFFORT", "high")
+	got = Load()
+	if got.SecretaryWake || got.InternEffort != "high" {
+		t.Fatalf("environment = SecretaryWake %v, InternEffort %q", got.SecretaryWake, got.InternEffort)
+	}
+
+	t.Setenv("SLBH_SECRETARY_WAKE", "")
+	t.Setenv("SLBH_INTERN_EFFORT", "")
+	got.SecretaryWake = false
+	got.InternEffort = "low"
+	if err := got.Save(); err != nil {
+		t.Fatal(err)
+	}
+	got = Load()
+	if got.SecretaryWake || got.InternEffort != "low" {
+		t.Fatalf("persisted = SecretaryWake %v, InternEffort %q", got.SecretaryWake, got.InternEffort)
 	}
 }
 

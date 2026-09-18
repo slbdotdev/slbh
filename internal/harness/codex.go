@@ -18,11 +18,19 @@ import (
 	"time"
 
 	"github.com/slbdotdev/slbh/internal/config"
+	"github.com/slbdotdev/slbh/internal/seam"
 )
 
 const codexParentTool = "slbh_message_parent"
 
 const codexCallTimeout = 30 * time.Second
+
+// codexReasoningEffort passes slbh's effort through unchanged: every slbh
+// level is one the app-server accepts for the roster's Codex models, and its
+// ReasoningEffort is an open string. Empty means inherit Codex's default.
+func codexReasoningEffort(level string) string {
+	return strings.TrimSpace(level)
+}
 
 type codexWire struct {
 	ID     json.RawMessage `json:"id,omitempty"`
@@ -249,7 +257,7 @@ func (c *codexLeaf) send(message, kind string) error {
 	}
 	c.pending = append(c.pending, message)
 	c.mu.Unlock()
-	c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: kind, Text: message, Metadata: map[string]any{"harness": "codex"}})
+	c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: kind, Text: message, Metadata: map[string]any{"harness": "codex"}})
 	select {
 	case c.wake <- struct{}{}:
 	default:
@@ -285,7 +293,7 @@ func (c *codexLeaf) compact() {
 	}
 	c.mu.Unlock()
 	if stopped {
-		c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "error", Text: "Codex compaction requested after the leaf stopped", Metadata: map[string]any{"harness": "codex"}})
+		c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "error", Text: "Codex compaction requested after the leaf stopped", Metadata: map[string]any{"harness": "codex"}})
 		return
 	}
 	if !ready || thread == "" || active {
@@ -304,11 +312,11 @@ func (c *codexLeaf) requestCompact(thread string) {
 		defer cancel()
 		if _, err := c.rpc.call(ctx, "thread/compact/start", map[string]any{"threadId": thread}); err != nil {
 			if !c.isStopped() {
-				c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "error", Text: fmt.Sprintf("Codex compaction: %v", err), Metadata: map[string]any{"thread": thread, "harness": "codex"}})
+				c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "error", Text: fmt.Sprintf("Codex compaction: %v", err), Metadata: map[string]any{"thread": thread, "harness": "codex"}})
 			}
 			return
 		}
-		c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "compact", Text: "Codex compaction requested", Metadata: map[string]any{"thread": thread, "harness": "codex"}})
+		c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "compact", Text: "Codex compaction requested", Metadata: map[string]any{"thread": thread, "harness": "codex"}})
 	}()
 }
 
@@ -375,7 +383,7 @@ func (c *codexLeaf) run() {
 	c.ready = true
 	c.mu.Unlock()
 	c.agent.setStatus("idle")
-	c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "codex_ready", Metadata: map[string]any{"thread": c.threadID}})
+	c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "codex_ready", Metadata: map[string]any{"thread": c.threadID}})
 	c.pump(ctx)
 	c.maybeCompact()
 	for {
@@ -428,7 +436,7 @@ func (c *codexLeaf) reset(ctx context.Context) {
 	c.ready = true
 	c.mu.Unlock()
 	c.agent.setStatus("idle")
-	c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "codex_ready", Metadata: map[string]any{"thread": c.threadID, "reset": true}})
+	c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "codex_ready", Metadata: map[string]any{"thread": c.threadID, "reset": true}})
 	c.pump(ctx)
 }
 
@@ -452,8 +460,9 @@ func (c *codexLeaf) initialize(ctx context.Context) error {
 // contradicted either would simply be wrong.
 const codexLeafMechanics = "You are a leaf worker managed by slbh. You may not launch, delegate to, or create other agents. You may send progress to your slbh parent with slbh_message_parent. Keep foreground commands bounded and use background work only when the Codex policy provides it."
 
-// developerInstructions assembles a Codex leaf's instructions from the same
-// two layers the native agents use.
+// developerInstructions assembles a Codex leaf's mechanics and managed role
+// document. It deliberately omits slbh's skill list because Codex loads the
+// synced skill directory through its own harness.
 //
 // This literal was the one place per-layer instruction already existed, as a
 // hardcoded string: the concept was here and only the delivery mechanism was
@@ -534,7 +543,14 @@ func (c *codexLeaf) pump(ctx context.Context) {
 		if turn != "" {
 			result, err = c.call(ctx, "turn/steer", map[string]any{"threadId": c.threadID, "input": []any{map[string]any{"type": "text", "text": message}}, "expectedTurnId": turn})
 		} else {
-			result, err = c.call(ctx, "turn/start", map[string]any{"threadId": c.threadID, "input": []any{map[string]any{"type": "text", "text": message}}})
+			params := map[string]any{"threadId": c.threadID, "input": []any{map[string]any{"type": "text", "text": message}}}
+			c.agent.mu.RLock()
+			effort := codexReasoningEffort(c.agent.Effort)
+			c.agent.mu.RUnlock()
+			if effort != "" {
+				params["effort"] = effort
+			}
+			result, err = c.call(ctx, "turn/start", params)
 		}
 		if err != nil {
 			c.mu.Lock()
@@ -580,7 +596,7 @@ func (c *codexLeaf) handle(message codexWire) {
 	}
 	if len(message.ID) > 0 && message.Method != "" {
 		_ = c.rpc.respondError(message.ID, -32601, "unsupported leaf server request")
-		c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "codex_request_rejected", Text: message.Method})
+		c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "codex_request_rejected", Text: message.Method})
 		return
 	}
 	switch message.Method {
@@ -597,9 +613,9 @@ func (c *codexLeaf) handle(message codexWire) {
 		_ = json.Unmarshal(params.Item["type"], &typ)
 		_ = json.Unmarshal(params.Item["id"], &itemID)
 		if typ == "collabToolCall" {
-			c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "codex_request_rejected", Text: "Codex collaboration is disabled for leaf workers", Metadata: map[string]any{"thread": params.ThreadID, "turn": params.TurnID, "item": itemID, "harness": "codex"}})
+			c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "codex_request_rejected", Text: "Codex collaboration is disabled for leaf workers", Metadata: map[string]any{"thread": params.ThreadID, "turn": params.TurnID, "item": itemID, "harness": "codex"}})
 		}
-		c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "codex_item_started", Text: typ, Metadata: map[string]any{"thread": params.ThreadID, "turn": params.TurnID, "item": itemID, "harness": "codex"}})
+		c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "codex_item_started", Text: typ, Metadata: map[string]any{"thread": params.ThreadID, "turn": params.TurnID, "item": itemID, "harness": "codex"}})
 	case "turn/started":
 		var params struct {
 			ThreadID string `json:"threadId"`
@@ -633,7 +649,7 @@ func (c *codexLeaf) handle(message codexWire) {
 		c.mu.Lock()
 		c.answers[params.TurnID] += params.Delta
 		c.mu.Unlock()
-		c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "assistant", Text: params.Delta, Metadata: map[string]any{"thread": params.ThreadID, "turn": params.TurnID, "item": params.ItemID, "harness": "codex"}})
+		c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "assistant", Text: params.Delta, Metadata: map[string]any{"thread": params.ThreadID, "turn": params.TurnID, "item": params.ItemID, "harness": "codex"}})
 	case "item/completed":
 		var params struct {
 			Item map[string]json.RawMessage `json:"item"`
@@ -674,19 +690,19 @@ func (c *codexLeaf) handle(message codexWire) {
 		c.mu.Unlock()
 		c.agent.setStatus("idle")
 		if answer != "" {
-			if parent, ok := c.agent.runtime.Agent(c.agent.ParentID); ok {
+			if parent, ok := c.agent.runtime.lookupAgent(c.agent.ParentID); ok {
 				if err := parent.receiveChildResult(c.agent, answer); err != nil {
-					c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "delivery_error", Text: err.Error()})
+					c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "delivery_error", Text: err.Error()})
 				}
 			}
 		}
-		c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "turn_done", Text: answer, Metadata: map[string]any{"thread": params.ThreadID, "turn": params.Turn.ID, "status": params.Turn.Status, "harness": "codex"}})
+		c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "turn_done", Text: answer, Metadata: map[string]any{"thread": params.ThreadID, "turn": params.Turn.ID, "status": params.Turn.Status, "harness": "codex"}})
 		select {
 		case c.wake <- struct{}{}:
 		default:
 		}
 	case "error":
-		c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "error", Text: string(message.Params)})
+		c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "error", Text: string(message.Params)})
 	}
 }
 
@@ -718,7 +734,7 @@ func (c *codexLeaf) handleToolCall(message codexWire) {
 		_ = c.rpc.respond(message.ID, map[string]any{"success": false, "contentItems": []any{map[string]any{"type": "inputText", "text": "message is required"}}})
 		return
 	}
-	parent, ok := c.runtime.Agent(c.agent.ParentID)
+	parent, ok := c.runtime.lookupAgent(c.agent.ParentID)
 	if !ok {
 		_ = c.rpc.respond(message.ID, map[string]any{"success": false, "contentItems": []any{map[string]any{"type": "inputText", "text": "parent is unavailable"}}})
 		return
@@ -728,7 +744,7 @@ func (c *codexLeaf) handleToolCall(message codexWire) {
 		_ = c.rpc.respond(message.ID, map[string]any{"success": false, "contentItems": []any{map[string]any{"type": "inputText", "text": err.Error()}}})
 		return
 	}
-	c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "child_message", Text: args.Message, Metadata: map[string]any{"parent": parent.ID, "thread": params.ThreadID, "turn": params.TurnID, "harness": "codex"}})
+	c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "child_message", Text: args.Message, Metadata: map[string]any{"parent": parent.ID, "thread": params.ThreadID, "turn": params.TurnID, "harness": "codex"}})
 	_ = c.rpc.respond(message.ID, map[string]any{"success": true, "contentItems": []any{map[string]any{"type": "inputText", "text": "accepted"}}})
 }
 
@@ -741,7 +757,7 @@ func (c *codexLeaf) fail(err error) {
 	c.ready = false
 	c.mu.Unlock()
 	c.agent.setStatus("error")
-	c.runtime.emit(Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "error", Text: err.Error(), Metadata: map[string]any{"harness": "codex"}})
+	c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "error", Text: err.Error(), Metadata: map[string]any{"harness": "codex"}})
 	c.terminateProcess()
 }
 

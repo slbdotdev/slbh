@@ -1,22 +1,22 @@
 package harness
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/slbdotdev/slbh/internal/job"
+	"github.com/slbdotdev/slbh/internal/orgstore"
 	"github.com/slbdotdev/slbh/internal/provider"
+	"github.com/slbdotdev/slbh/internal/readtools"
+	"github.com/slbdotdev/slbh/internal/seam"
+	"github.com/slbdotdev/slbh/internal/secretarywake"
 )
 
 // ToolDefinitions is the stable tool prefix sent to every provider request.
@@ -25,12 +25,8 @@ func ToolDefinitions() []provider.Tool {
 	stringArg := func(name string) map[string]any {
 		return map[string]any{"type": "object", "properties": map[string]any{name: map[string]any{"type": "string"}}, "required": []string{name}}
 	}
-	return []provider.Tool{
-		{Name: "glob", Description: "List files and directories matching a glob pattern. `**` matches any number of directory levels, so `**/*.py` finds every Python file in the tree and `**/*` lists the whole tree. Directories come back with a trailing separator. Says so explicitly when nothing matches.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"pattern": map[string]any{"type": "string", "description": "Glob pattern, relative to the working directory unless it is absolute. Supports *, ?, [...] within one path segment and ** across segments."}}, "required": []string{"pattern"}}},
-		{Name: "grep", Description: "Search text using a regular expression.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"pattern": map[string]any{"type": "string"}, "path": map[string]any{"type": "string"}}, "required": []string{"pattern"}}},
-		{Name: "read_file", Description: "Read a whole file up to 100k bytes.", Parameters: stringArg("path")},
-		{Name: "read_bytes", Description: "Read an inclusive byte range from a file.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "start": map[string]any{"type": "integer"}, "end": map[string]any{"type": "integer"}}, "required": []string{"path", "start", "end"}}},
-		{Name: "read_lines", Description: "Read an inclusive line range from a file.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "start": map[string]any{"type": "integer"}, "end": map[string]any{"type": "integer"}}, "required": []string{"path", "start", "end"}}},
+	definitions := readtools.Definitions()
+	return append(definitions, []provider.Tool{
 		{Name: "edit_file", Description: "Replace an exact string in a file atomically.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "old": map[string]any{"type": "string"}, "new": map[string]any{"type": "string"}}, "required": []string{"path", "old", "new"}}},
 		{Name: "apply_patch", Description: "Apply a unified patch to the working tree.", Parameters: stringArg("patch")},
 		{Name: "write_file", Description: "Create a new file; refuse to overwrite an existing file.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []string{"path", "content"}}},
@@ -42,18 +38,76 @@ func ToolDefinitions() []provider.Tool {
 		{Name: "read_job", Description: "Read current stdout and stderr for a job.", Parameters: stringArg("job_id")},
 		{Name: "kill_job", Description: "Kill a job owned by the calling agent.", Parameters: stringArg("job_id")},
 		{Name: "list_subagents", Description: "List this runtime's agent tree.", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
-		{Name: "launch_subagent", Description: "Launch a child agent up to depth two; returns immediately. The parent chooses a relevant title made of three words joined by hyphens (for example inspect-api-cache); this is guidance only and is not enforced. Omit model for a native child to use its configured default. For a Codex leaf, set harness to codex and pass the exact ChatGPT model slug in model; Codex does not use the native approval list. Honor an explicit user model request. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.", Parameters: map[string]any{"type": "object", "properties": map[string]any{
+		{Name: "launch_subagent", Description: "Launch one child and return immediately. Every launch must name a frozen roster role, and the runtime enforces that role's declared depth, launcher, harness, and model constraints. The depth-0 Seat may launch only the manager role. Only a native Manager at depth 1 may launch a depth-2 role. Every depth-2 launch must pass a non-empty model explicitly; configured defaults are never substituted. A depth-2 leaf cannot launch anything. The parent chooses a relevant title made of three words joined by hyphens (for example inspect-api-cache); this is guidance only and is not enforced. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.", Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"title":              map[string]any{"type": "string", "description": "A relevant three-word dashed title chosen by the parent, such as inspect-api-cache. Guidance only; not enforced."},
-			"harness":            map[string]any{"type": "string", "enum": []string{"native", "codex"}, "description": "Harness for the child. Omit for native; use codex for a headless Codex ChatGPT leaf."},
-			"model":              map[string]any{"type": "string", "description": "Model ID. For harness codex, pass the exact ChatGPT model slug (for example gpt-5.6-luna); it may be any model available to the Codex account."},
+			"role":               map[string]any{"type": "string", "description": "Frozen roster name for the child. Required on every launch. The runtime adds the roles allowed for this parent as the schema enum."},
+			"harness":            map[string]any{"type": "string", "enum": []string{"native", "codex", "claude_code"}, "description": "Harness for the child. May be omitted to use the named role's roster harness; an explicit value must match it."},
+			"model":              map[string]any{"type": "string", "description": "Model ID. Required and non-empty for every depth-2 role. It must equal a pinned role model or belong to an at-dispatch role's approved set. May be omitted only when launching the pinned manager role."},
 			"effort":             map[string]any{"type": "string"},
 			"brief":              map[string]any{"type": "string"},
-			"warn_after_seconds": map[string]any{"type": "integer"},
+			"warn_after_seconds": map[string]any{"type": "integer", "description": "Seconds before the parent receives one warning that this child is still running; defaults to 5."},
 			"working_dir":        map[string]any{"type": "string"},
-		}, "required": []string{"title", "brief"}}},
+		}, "required": []string{"title", "role", "brief"}}},
 		{Name: "msg_subagent", Description: "Send a mandatory mid-turn steer to any agent in this runtime, including your parent or siblings. FIFO delivery at the next API/tool call boundary; wakes idle recipients. Never waits for turn completion or cancels in-flight work.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string"}, "message": map[string]any{"type": "string"}}, "required": []string{"agent_id", "message"}}},
 		{Name: "end_subagent", Description: "Stop a child agent.", Parameters: stringArg("agent_id")},
+	}...)
+}
+
+func seatToolDefinitions() []provider.Tool {
+	return []provider.Tool{
+		{Name: "report_to_secretary", Description: "Append a durable Seat report to the org inbox. Supply exactly one of invalidates or invalidates_none.", Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"text":             map[string]any{"type": "string"},
+				"invalidates":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"invalidates_none": map[string]any{"type": "boolean"},
+			},
+			"required": []string{"text"},
+		}},
+		{Name: "org_requests", Description: "Return the Secretary request queue with current status and full history as JSON.", Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"open_only": map[string]any{"type": "boolean"},
+			},
+		}},
+		{Name: "update_request", Description: "Append an accepted, declined, or done status to a Secretary request.", Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":     map[string]any{"type": "integer", "minimum": 1},
+				"status": map[string]any{"type": "string", "enum": []string{"accepted", "declined", "done"}},
+				"note":   map[string]any{"type": "string"},
+			},
+			"required": []string{"id", "status"},
+		}},
 	}
+}
+
+func (r *Runtime) toolDefinitions(agentID string) []provider.Tool {
+	definitions := ToolDefinitions()
+	agent, ok := r.lookupAgent(agentID)
+	if !ok {
+		return definitions
+	}
+	r.mu.RLock()
+	roles := r.config.Roster.ChildRoles(agent.Role, agent.Depth+1)
+	r.mu.RUnlock()
+	roleNames := make([]string, len(roles))
+	for index, role := range roles {
+		roleNames[index] = role.Name
+	}
+	for index := range definitions {
+		if definitions[index].Name != "launch_subagent" {
+			continue
+		}
+		properties, _ := definitions[index].Parameters["properties"].(map[string]any)
+		roleSchema, _ := properties["role"].(map[string]any)
+		roleSchema["enum"] = roleNames
+		break
+	}
+	if agent.Depth != 0 {
+		return definitions
+	}
+	return append(definitions, seatToolDefinitions()...)
 }
 
 type args struct{ Values map[string]any }
@@ -75,20 +129,18 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 		return "", err
 	}
 	base := r.workDir
-	if agent, ok := r.Agent(agentID); ok && agent.WorkDir != "" {
+	if agent, ok := r.lookupAgent(agentID); ok && agent.WorkDir != "" {
 		base = agent.WorkDir
 	}
 	switch name {
-	case "glob":
-		return r.glob(base, value(a.Values, "pattern"))
-	case "grep":
-		return r.grep(base, value(a.Values, "pattern"), valueDefault(a.Values, "path", "."))
-	case "read_file":
-		return r.readFile(base, value(a.Values, "path"))
-	case "read_bytes":
-		return r.readBytes(base, value(a.Values, "path"), intValue(a.Values, "start"), intValue(a.Values, "end"))
-	case "read_lines":
-		return r.readLines(base, value(a.Values, "path"), intValue(a.Values, "start"), intValue(a.Values, "end"))
+	case "report_to_secretary", "org_requests", "update_request":
+		agent, ok := r.lookupAgent(agentID)
+		if !ok || agent.Depth != 0 {
+			return "", fmt.Errorf("tool %q is available only to the depth-0 Seat", name)
+		}
+		return r.executeSeatTool(name, a.Values)
+	case "glob", "grep", "read_file", "read_bytes", "read_lines":
+		return readtools.Execute(base, name, raw)
 	case "edit_file":
 		return r.editFile(base, value(a.Values, "path"), value(a.Values, "old"), value(a.Values, "new"))
 	case "apply_patch":
@@ -144,17 +196,17 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 	case "list_subagents":
 		return jsonString(r.Agents())
 	case "launch_subagent":
-		child, err := r.LaunchSubagentSpec(agentID, LaunchSpec{Title: value(a.Values, "title"), Harness: value(a.Values, "harness"), Model: value(a.Values, "model"), Effort: value(a.Values, "effort"), Brief: value(a.Values, "brief"), WarnAfterSeconds: intValue(a.Values, "warn_after_seconds"), WorkingDir: value(a.Values, "working_dir")})
+		child, err := r.launchSubagentSpec(agentID, LaunchSpec{Title: value(a.Values, "title"), Role: value(a.Values, "role"), Harness: value(a.Values, "harness"), Model: value(a.Values, "model"), Effort: value(a.Values, "effort"), Brief: value(a.Values, "brief"), WarnAfterSeconds: intValue(a.Values, "warn_after_seconds"), WorkingDir: value(a.Values, "working_dir")})
 		if err != nil {
 			return "", err
 		}
 		return child.ID, nil
 	case "msg_subagent":
-		child, ok := r.Agent(value(a.Values, "agent_id"))
+		child, ok := r.lookupAgent(value(a.Values, "agent_id"))
 		if !ok {
 			return "", fmt.Errorf("agent not found")
 		}
-		sender, ok := r.Agent(agentID)
+		sender, ok := r.lookupAgent(agentID)
 		if !ok {
 			return "", fmt.Errorf("sender agent not found")
 		}
@@ -167,7 +219,7 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 		}
 		return "accepted for delivery at the next API/tool call boundary; idle recipients wake immediately", nil
 	case "end_subagent":
-		if err := r.EndSubagent(agentID, value(a.Values, "agent_id")); err != nil {
+		if err := r.endSubagent(agentID, value(a.Values, "agent_id")); err != nil {
 			return "", err
 		}
 		return "stopped", nil
@@ -176,7 +228,72 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 	}
 }
 
-func (r *Runtime) EndSubagent(requester, target string) error {
+func (r *Runtime) executeSeatTool(name string, values map[string]any) (string, error) {
+	if r.orgStore == nil {
+		return "", fmt.Errorf("org store is unavailable")
+	}
+	switch name {
+	case "report_to_secretary":
+		text := strings.TrimSpace(value(values, "text"))
+		if text == "" {
+			return "", fmt.Errorf("text is required")
+		}
+		invalidates, err := stringSliceValue(values, "invalidates")
+		if err != nil {
+			return "", err
+		}
+		report, err := r.orgStore.AppendReport("seat", text, invalidates, boolValue(values, "invalidates_none"))
+		if err != nil {
+			return "", err
+		}
+		pending, err := r.orgStore.Pending()
+		if err != nil {
+			return "", err
+		}
+		if r.Config().SecretaryWake {
+			message := secretarywake.InboxMessage(len(pending))
+			go func() {
+				_, wakeErr := secretarywake.Wake(r.ctx, secretarywake.Options{CodexCommand: r.codexCommand, SessionName: r.Config().SecretarySession}, message)
+				if wakeErr != nil {
+					r.emitStatus("secretary_wake", wakeErr.Error())
+				}
+			}()
+		}
+		return jsonString(report)
+	case "org_requests":
+		requests, err := r.orgStore.Requests()
+		if err != nil {
+			return "", err
+		}
+		if boolValue(values, "open_only") {
+			open := requests[:0]
+			for _, request := range requests {
+				if request.Status == orgstore.StatusQueued || request.Status == orgstore.StatusAccepted {
+					open = append(open, request)
+				}
+			}
+			requests = open
+		}
+		if requests == nil {
+			requests = []orgstore.Request{}
+		}
+		return jsonString(requests)
+	case "update_request":
+		id, err := uint64Value(values, "id")
+		if err != nil {
+			return "", err
+		}
+		change, err := r.orgStore.UpdateRequestStatus(id, orgstore.Status(value(values, "status")), value(values, "note"))
+		if err != nil {
+			return "", err
+		}
+		return jsonString(change)
+	default:
+		return "", fmt.Errorf("unknown Seat tool %q", name)
+	}
+}
+
+func (r *Runtime) endSubagent(requester, target string) error {
 	r.mu.RLock()
 	child, ok := r.agents[target]
 	requesterAgent, requesterOK := r.agents[requester]
@@ -188,7 +305,7 @@ func (r *Runtime) EndSubagent(requester, target string) error {
 		return fmt.Errorf("agent is not your child")
 	}
 	child.stop()
-	r.emit(Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "status", Text: "stopped"})
+	r.emit(seam.Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "status", Text: "stopped"})
 	return nil
 }
 
@@ -208,6 +325,39 @@ func intValue(values map[string]any, key string) int {
 	}
 	return 0
 }
+
+func boolValue(values map[string]any, key string) bool {
+	value, _ := values[key].(bool)
+	return value
+}
+
+func uint64Value(values map[string]any, key string) (uint64, error) {
+	value, ok := values[key].(float64)
+	if !ok || value < 1 || value != float64(uint64(value)) {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return uint64(value), nil
+}
+
+func stringSliceValue(values map[string]any, key string) ([]string, error) {
+	raw, present := values[key]
+	if !present {
+		return nil, nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s must be an array of strings", key)
+	}
+	result := make([]string, len(items))
+	for index, item := range items {
+		text, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s must be an array of strings", key)
+		}
+		result[index] = text
+	}
+	return result, nil
+}
 func jsonString(value any) (string, error) {
 	b, err := json.MarshalIndent(value, "", "  ")
 	return string(b), err
@@ -225,274 +375,6 @@ func (r *Runtime) resolvePath(base, path string) (string, error) {
 		return "", err
 	}
 	return clean, nil
-}
-
-// maxGlobMatches bounds a glob result. A `**` pattern over a large tree can name
-// thousands of files, and a listing that long costs more context than it is worth
-// in a 48k-96k window; the count in the truncation line tells the model to narrow.
-const maxGlobMatches = 400
-
-// globSkipDirs are never descended into for a `**` pattern. They hold no material a
-// task is about, and a single `.git` or `node_modules` would fill the match budget
-// with noise before a `**` pattern reached the tree the model asked about.
-var globSkipDirs = map[string]bool{
-	".git": true, "__pycache__": true, ".pytest_cache": true,
-	"node_modules": true, ".venv": true, ".mypy_cache": true, ".tox": true,
-}
-
-// glob answers a pattern with the paths that match it.
-//
-// Two things here are not filepath.Glob's behaviour, and both were measured rather than
-// assumed. filepath.Glob has NO recursive wildcard: `**` is an ordinary `*` to it, matching
-// within one path segment, so `**/*.py` silently means `*/*.py` and finds nothing three
-// levels down. Models trained on ripgrep and on every other agent harness write `**/` as a
-// matter of course, and on 2026-09-13 a one-turn probe on fox did exactly that -- glob
-// "**/*.py" over a tree holding sub/deep/b.py returned the empty string, and the model
-// answered "no .py files were found" and stopped. So `**` matches any number of segments,
-// including none.
-//
-// And an empty result is now a sentence rather than an empty string. A tool that returns ""
-// is indistinguishable from a tool that returned nothing to say: the model cannot tell "this
-// directory has no .py files" from "this call did not work", and the transcripts show it
-// guessing rather than re-querying. Directories carry a trailing separator for the same
-// reason -- a bare name cannot say whether the next call should be read_file or another glob.
-func (r *Runtime) glob(base, pattern string) (string, error) {
-	if pattern == "" {
-		return "", fmt.Errorf("pattern is required")
-	}
-	original := pattern
-	absolute := filepath.IsAbs(pattern)
-	pattern, err := r.resolvePath(base, pattern)
-	if err != nil {
-		return "", err
-	}
-	var matches []string
-	if strings.Contains(pattern, "**") {
-		matches, err = walkGlob(pattern)
-	} else {
-		matches, err = filepath.Glob(pattern)
-	}
-	if err != nil {
-		return "", err
-	}
-	sort.Strings(matches)
-	truncated := 0
-	if len(matches) > maxGlobMatches {
-		truncated = len(matches) - maxGlobMatches
-		matches = matches[:maxGlobMatches]
-	}
-	lines := make([]string, 0, len(matches))
-	for _, match := range matches {
-		display := match
-		if !absolute {
-			if rel, relErr := filepath.Rel(base, match); relErr == nil {
-				display = rel
-			}
-		}
-		if info, statErr := os.Stat(match); statErr == nil && info.IsDir() {
-			display += string(filepath.Separator)
-		}
-		lines = append(lines, display)
-	}
-	if len(lines) == 0 {
-		return fmt.Sprintf("no files match %q (searched from %s). `**` matches any number of directories; try a broader pattern such as **/* to list the tree.", original, globSearchRoot(pattern)), nil
-	}
-	out := strings.Join(lines, "\n")
-	if truncated > 0 {
-		out += fmt.Sprintf("\n[%d more matches not shown; narrow the pattern]", truncated)
-	}
-	return out, nil
-}
-
-// globSearchRoot is the longest leading run of literal path segments in a pattern: the
-// directory a walk would start from, and the only part of the pattern worth naming back
-// to a model whose call found nothing.
-func globSearchRoot(pattern string) string {
-	segments := strings.Split(filepath.ToSlash(pattern), "/")
-	root := ""
-	for _, segment := range segments {
-		if strings.ContainsAny(segment, "*?[") {
-			break
-		}
-		root += segment + "/"
-	}
-	if root == "" {
-		return string(filepath.Separator)
-	}
-	return filepath.FromSlash(strings.TrimSuffix(root, "/"))
-}
-
-// walkGlob answers a pattern containing `**` by walking from its literal prefix.
-func walkGlob(pattern string) ([]string, error) {
-	root := globSearchRoot(pattern)
-	if root == "" {
-		root = string(filepath.Separator)
-	}
-	patternSegments := strings.Split(filepath.ToSlash(pattern), "/")
-	var matches []string
-	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			if path == root {
-				return walkErr
-			}
-			return nil
-		}
-		if info.IsDir() && path != root && globSkipDirs[info.Name()] {
-			return filepath.SkipDir
-		}
-		if matchSegments(patternSegments, strings.Split(filepath.ToSlash(path), "/")) {
-			matches = append(matches, path)
-		}
-		return nil
-	})
-	if err != nil && len(matches) == 0 {
-		return nil, err
-	}
-	return matches, nil
-}
-
-// matchSegments is filepath.Match extended over whole path segments, with `**` matching
-// any number of them including none. The recursion is bounded by the path's own depth.
-func matchSegments(pattern, name []string) bool {
-	for len(pattern) > 0 {
-		if pattern[0] == "**" {
-			for i := 0; i <= len(name); i++ {
-				if matchSegments(pattern[1:], name[i:]) {
-					return true
-				}
-			}
-			return false
-		}
-		if len(name) == 0 {
-			return false
-		}
-		ok, err := filepath.Match(pattern[0], name[0])
-		if err != nil || !ok {
-			return false
-		}
-		pattern, name = pattern[1:], name[1:]
-	}
-	return len(name) == 0
-}
-
-func (r *Runtime) grep(base, pattern, path string) (string, error) {
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return "", err
-	}
-	absolute := filepath.IsAbs(path)
-	walkPath, err := r.resolvePath(base, path)
-	if err != nil {
-		return "", err
-	}
-	var out strings.Builder
-	err = filepath.Walk(walkPath, func(file string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if info.IsDir() {
-			return nil
-		}
-		if info.Size() > 2*1024*1024 {
-			return nil
-		}
-		f, err := os.Open(file)
-		if err != nil {
-			return nil
-		}
-		defer f.Close()
-		scanner := bufio.NewScanner(f)
-		line := 0
-		for scanner.Scan() {
-			line++
-			if re.MatchString(scanner.Text()) {
-				display := file
-				if !absolute {
-					display, _ = filepath.Rel(base, file)
-				}
-				fmt.Fprintf(&out, "%s:%d:%s\n", display, line, scanner.Text())
-			}
-		}
-		return scanner.Err()
-	})
-	return out.String(), err
-}
-
-func (r *Runtime) readFile(base, path string) (string, error) {
-	file, err := r.resolvePath(base, path)
-	if err != nil {
-		return "", err
-	}
-	info, err := os.Stat(file)
-	if err != nil {
-		return "", err
-	}
-	if info.Size() > 100*1024 {
-		data, _ := os.ReadFile(file)
-		return "", fmt.Errorf("file is %d bytes, %d lines, type %s; use read_lines or read_bytes instead", info.Size(), bytes.Count(data, []byte{'\n'})+1, detectType(file))
-	}
-	b, err := os.ReadFile(file)
-	return string(b), err
-}
-
-func (r *Runtime) readBytes(base, path string, start, end int) (string, error) {
-	if start < 0 || end < start || end-start+1 > 100*1024 {
-		return "", fmt.Errorf("byte range must be zero-based, inclusive, and at most 100k bytes")
-	}
-	file, err := r.resolvePath(base, path)
-	if err != nil {
-		return "", err
-	}
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return "", err
-	}
-	if start >= len(data) {
-		return "", fmt.Errorf("byte start %d is past file size %d", start, len(data))
-	}
-	if end >= len(data) {
-		end = len(data) - 1
-	}
-	return string(data[start : end+1]), nil
-}
-
-func detectType(path string) string {
-	file, err := os.Open(path)
-	if err != nil {
-		return "unknown"
-	}
-	defer file.Close()
-	var header [512]byte
-	n, _ := file.Read(header[:])
-	return http.DetectContentType(header[:n])
-}
-
-func (r *Runtime) readLines(base, path string, start, end int) (string, error) {
-	if start < 1 || end < start {
-		return "", fmt.Errorf("line range must be one-based and inclusive")
-	}
-	file, err := r.resolvePath(base, path)
-	if err != nil {
-		return "", err
-	}
-	f, err := os.Open(file)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	s := bufio.NewScanner(f)
-	var out strings.Builder
-	line := 0
-	for s.Scan() {
-		line++
-		if line >= start && line <= end {
-			fmt.Fprintf(&out, "%d:%s\n", line, s.Text())
-		}
-		if line > end {
-			break
-		}
-	}
-	return out.String(), s.Err()
 }
 
 func (r *Runtime) editFile(base, path, old, replacement string) (string, error) {

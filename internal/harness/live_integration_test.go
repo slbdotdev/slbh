@@ -160,7 +160,7 @@ func TestLiveTranscriptReplayAndCache(t *testing.T) {
 	}
 	defer runtime.Close()
 
-	seat := runtime.Seat()
+	seat := runtime.seat()
 	transcriptPath, err := runtime.TranscriptPath(seat.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -248,9 +248,9 @@ func TestLiveTranscriptReplayAndCache(t *testing.T) {
 	t.Logf("second inference reported cached input tokens: %d", mustCachedTokens(t, live.usages()[1]))
 }
 
-func TestLiveNativeSeatCodexLeafContinuation(t *testing.T) {
+func TestLiveNativeSeatManagerCodexLeafContinuation(t *testing.T) {
 	if os.Getenv("SLBH_RUN_NATIVE_CODEX_TESTS") != "1" {
-		t.Skip("set SLBH_RUN_NATIVE_CODEX_TESTS=1 to run the billed native-seat/Codex-leaf acceptance test")
+		t.Skip("set SLBH_RUN_NATIVE_CODEX_TESTS=1 to run the billed Seat/Manager/Codex-leaf acceptance test")
 	}
 	cfg := config.Load()
 	if model := os.Getenv("SLBH_LIVE_TEST_MODEL"); model != "" {
@@ -277,8 +277,8 @@ func TestLiveNativeSeatCodexLeafContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	seat := runtime.Seat()
-	prompt := fmt.Sprintf("Launch one Codex leaf using harness codex and model %s. Give it this brief: reply with exactly NATIVE_CODEX_LEAF_OK and nothing else. After the leaf reports back, reply with exactly NATIVE_CODEX_LEAF_OK and nothing else.", codexModel)
+	seat := runtime.seat()
+	prompt := fmt.Sprintf("Launch one native Manager using harness native and model %s. Give it this brief: launch one Codex leaf using harness codex and model %s; tell that leaf to reply with exactly NATIVE_CODEX_LEAF_OK and nothing else; after the leaf reports back, reply with exactly NATIVE_CODEX_LEAF_OK and nothing else. After the Manager reports back, reply with exactly NATIVE_CODEX_LEAF_OK and nothing else.", cfg.SeatModel, codexModel)
 	if err := seat.Send(prompt); err != nil {
 		t.Fatal(err)
 	}
@@ -286,9 +286,9 @@ func TestLiveNativeSeatCodexLeafContinuation(t *testing.T) {
 	defer deadline.Stop()
 	for {
 		select {
-		case event := <-runtime.Events():
+		case event := <-testEvents(runtime):
 			if event.Kind == "error" {
-				t.Fatalf("native seat/Codex leaf inference failed: %s", event.Text)
+				t.Fatalf("Seat/Manager/Codex leaf inference failed: %s", event.Text)
 			}
 			if event.AgentID == seat.ID && event.Kind == "turn_done" {
 				for _, message := range seat.History() {
@@ -298,7 +298,7 @@ func TestLiveNativeSeatCodexLeafContinuation(t *testing.T) {
 				}
 			}
 		case <-deadline.C:
-			t.Fatal("native seat/Codex leaf continuation did not finish")
+			t.Fatal("Seat/Manager/Codex leaf continuation did not finish")
 		}
 	}
 }
@@ -309,7 +309,7 @@ func waitLiveTurn(t *testing.T, runtime *Runtime, count int) {
 	defer deadline.Stop()
 	for count > 0 {
 		select {
-		case event := <-runtime.Events():
+		case event := <-testEvents(runtime):
 			if event.Kind == "error" {
 				t.Fatalf("live inference failed: %s", event.Text)
 			}
