@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/slbdotdev/slbh/internal/config"
@@ -11,7 +10,7 @@ import (
 
 // Do dispatches the seam's closed command set. The command event is emitted
 // before execution so failures remain part of the ordered runtime record.
-func (r *Runtime) Do(ctx context.Context, command seam.Command) (seam.Reply, error) {
+func (r *Runtime) Do(command seam.Command) (seam.Reply, error) {
 	if command == nil {
 		return seam.Reply{}, fmt.Errorf("unknown command %q", "<nil>")
 	}
@@ -20,10 +19,6 @@ func (r *Runtime) Do(ctx context.Context, command seam.Command) (seam.Reply, err
 	if !seam.IsCommandName(name) {
 		return seam.Reply{}, fmt.Errorf("unknown command %q", name)
 	}
-	if err := ctx.Err(); err != nil {
-		return seam.Reply{Command: name}, err
-	}
-
 	reply := seam.Reply{Command: name}
 	switch command := command.(type) {
 	case seam.SendPromptCommand:

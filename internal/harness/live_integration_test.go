@@ -286,7 +286,7 @@ func TestLiveNativeSeatManagerCodexLeafContinuation(t *testing.T) {
 	defer deadline.Stop()
 	for {
 		select {
-		case event := <-runtime.Events():
+		case event := <-testEvents(runtime):
 			if event.Kind == "error" {
 				t.Fatalf("Seat/Manager/Codex leaf inference failed: %s", event.Text)
 			}
@@ -309,7 +309,7 @@ func waitLiveTurn(t *testing.T, runtime *Runtime, count int) {
 	defer deadline.Stop()
 	for count > 0 {
 		select {
-		case event := <-runtime.Events():
+		case event := <-testEvents(runtime):
 			if event.Kind == "error" {
 				t.Fatalf("live inference failed: %s", event.Text)
 			}

@@ -36,19 +36,6 @@ type agentSession struct {
 	log  *logx.JSONL
 }
 
-type queuedEvent struct {
-	event     seam.Event
-	delivered chan struct{}
-	sequence  uint64
-}
-
-type eventSubscriber struct {
-	events chan seam.Event
-	after  uint64
-}
-
-const subscriberEventBuffer = 1024
-
 type Runtime struct {
 	mu         sync.RWMutex
 	id         string
@@ -64,35 +51,28 @@ type Runtime struct {
 	// pending holds a session opened by Clear while the agent was still
 	// mid-turn. It becomes current at that turn's end, so the turn that issued
 	// a request keeps its own transcript through its last event.
-	pending           map[string]*agentSession
-	sessions          []*agentSession
-	redactor          *secretRedactor
-	events            chan seam.Event
-	eventMu           sync.Mutex
-	eventQueue        []queuedEvent
-	eventWake         chan struct{}
-	eventStop         chan struct{}
-	eventDone         chan struct{}
-	eventsClosed      bool
-	eventSequence     uint64
-	subscribers       map[uint64]eventSubscriber
-	nextSubscriber    uint64
-	subscribersClosed bool
-	provider          func(model string) (provider.Provider, error)
-	codexCommand      string
-	claudeCommand     string
-	catalog           []provider.Catalog
-	closeOnce         sync.Once
-	orgStore          *orgstore.Store
-	requestWatchStop  chan struct{}
-	requestWatchDone  chan struct{}
-	requestPoll       time.Duration
+	pending          map[string]*agentSession
+	sessions         []*agentSession
+	redactor         *secretRedactor
+	eventMu          sync.Mutex
+	eventLog         []seam.Event
+	eventNotify      chan struct{}
+	eventsClosed     bool
+	eventSequence    seam.EventCursor
+	provider         func(model string) (provider.Provider, error)
+	codexCommand     string
+	claudeCommand    string
+	catalog          []provider.Catalog
+	closeOnce        sync.Once
+	orgStore         *orgstore.Store
+	requestWatchStop chan struct{}
+	requestWatchDone chan struct{}
+	requestPoll      time.Duration
 }
 
 type Options struct {
 	Config        config.Config
 	Provider      func(model string) (provider.Provider, error)
-	Events        chan seam.Event
 	CodexCommand  string
 	ClaudeCommand string
 	// RequestPollInterval defaults to two seconds. Tests and embedders may use
@@ -122,11 +102,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	if poll <= 0 {
 		poll = 2 * time.Second
 	}
-	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), events: options.Events, eventWake: make(chan struct{}, 1), eventStop: make(chan struct{}), eventDone: make(chan struct{}), subscribers: make(map[uint64]eventSubscriber), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand, orgStore: store, requestWatchStop: make(chan struct{}), requestWatchDone: make(chan struct{}), requestPoll: poll}
-	if r.events == nil {
-		r.events = make(chan seam.Event, 1024)
-	}
-	go r.dispatchEvents()
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), eventNotify: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand, orgStore: store, requestWatchStop: make(chan struct{}), requestWatchDone: make(chan struct{}), requestPoll: poll}
 	if r.provider == nil {
 		// The current config is read per call rather than captured, so a policy
 		// authored from /models on an unmanaged host takes effect on the next
@@ -169,36 +145,9 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	return r, nil
 }
 
-func (r *Runtime) ID() string                { return r.id }
-func (r *Runtime) Dir() string               { return r.runtimeDir }
-func (r *Runtime) Home() string              { return r.config.Home }
-func (r *Runtime) Events() <-chan seam.Event { return r.events }
-
-func (r *Runtime) Subscribe() (<-chan seam.Event, func()) {
-	events := make(chan seam.Event, subscriberEventBuffer)
-	r.eventMu.Lock()
-	if r.subscribersClosed {
-		close(events)
-		r.eventMu.Unlock()
-		return events, func() {}
-	}
-	r.nextSubscriber++
-	id := r.nextSubscriber
-	r.subscribers[id] = eventSubscriber{events: events, after: r.eventSequence}
-	r.eventMu.Unlock()
-
-	var once sync.Once
-	return events, func() {
-		once.Do(func() {
-			r.eventMu.Lock()
-			if subscriber, ok := r.subscribers[id]; ok {
-				delete(r.subscribers, id)
-				close(subscriber.events)
-			}
-			r.eventMu.Unlock()
-		})
-	}
-}
+func (r *Runtime) ID() string   { return r.id }
+func (r *Runtime) Dir() string  { return r.runtimeDir }
+func (r *Runtime) Home() string { return r.config.Home }
 
 func (r *Runtime) Config() config.Config {
 	r.mu.RLock()
@@ -688,14 +637,10 @@ func (r *Runtime) promotePending(agentID string) {
 }
 
 func (r *Runtime) emit(event seam.Event) {
-	r.emitQueued(event, nil)
+	r.queueEvent(event, false)
 }
 
-func (r *Runtime) emitQueued(event seam.Event, delivered chan struct{}) {
-	r.queueEvent(event, delivered, false)
-}
-
-func (r *Runtime) queueEvent(event seam.Event, delivered chan struct{}, closeEvents bool) {
+func (r *Runtime) queueEvent(event seam.Event, closeEvents bool) {
 	r.eventMu.Lock()
 	if r.eventsClosed {
 		r.eventMu.Unlock()
@@ -741,119 +686,85 @@ func (r *Runtime) queueEvent(event seam.Event, delivered chan struct{}, closeEve
 		r.eventsClosed = true
 	}
 	r.eventSequence++
-	r.eventQueue = append(r.eventQueue, queuedEvent{event: event, delivered: delivered, sequence: r.eventSequence})
+	event.Cursor = r.eventSequence
+	event = serializableEvent(event)
+	r.eventLog = append(r.eventLog, event)
+	close(r.eventNotify)
+	r.eventNotify = make(chan struct{})
 	r.eventMu.Unlock()
-	select {
-	case r.eventWake <- struct{}{}:
-	default:
-		// The wake channel is only a notification. Events stay in the FIFO
-		// queue until the dispatcher hands them to the UI.
-	}
 }
 
-func (r *Runtime) dispatchEvents() {
-	defer close(r.eventDone)
-	for {
-		select {
-		case <-r.eventWake:
-			r.flushEvents()
-		case <-r.eventStop:
-			return
-		case <-r.ctx.Done():
-			return
-		}
+// PollEvents implements the seam's cursor-based stream. The runtime retains
+// the ordered log for its lifetime; a slow consumer therefore delays nobody
+// and loses nothing. eventNotify is private wake-up machinery only and never
+// crosses the seam.
+func (r *Runtime) PollEvents(query seam.EventQuery) seam.EventBatch {
+	wait := time.Duration(query.WaitMilliseconds) * time.Millisecond
+	if wait < 0 {
+		wait = 0
 	}
-}
-
-func (r *Runtime) flushEvents() {
+	deadline := time.Now().Add(wait)
 	for {
 		r.eventMu.Lock()
-		if len(r.eventQueue) == 0 {
-			r.eventMu.Unlock()
-			return
+		start := sort.Search(len(r.eventLog), func(i int) bool {
+			return r.eventLog[i].Cursor > query.After
+		})
+		end := len(r.eventLog)
+		if query.Limit > 0 && start+query.Limit < end {
+			end = start + query.Limit
 		}
-		queued := r.eventQueue[0]
-		r.eventQueue[0] = queuedEvent{}
-		r.eventQueue = r.eventQueue[1:]
-		r.eventMu.Unlock()
-		r.dispatchSubscribers(queued)
-		select {
-		case r.events <- queued.event:
-			if queued.delivered != nil {
-				close(queued.delivered)
+		batch := seam.EventBatch{Cursor: query.After}
+		if start < end {
+			batch.Events = make([]seam.Event, end-start)
+			for i, event := range r.eventLog[start:end] {
+				batch.Events[i] = serializableEvent(event)
 			}
-		case <-r.eventStop:
-			return
-		case <-r.ctx.Done():
-			return
+			batch.Cursor = batch.Events[len(batch.Events)-1].Cursor
 		}
-	}
-}
-
-func (r *Runtime) dispatchSubscribers(queued queuedEvent) {
-	r.eventMu.Lock()
-	defer r.eventMu.Unlock()
-	for _, subscriber := range r.subscribers {
-		if queued.sequence <= subscriber.after {
-			continue
+		batch.End = r.eventsClosed && end == len(r.eventLog)
+		notify := r.eventNotify
+		r.eventMu.Unlock()
+		if len(batch.Events) > 0 || batch.End || wait == 0 {
+			return batch
 		}
-		deliverSubscriberEvent(subscriber.events, queued.event)
-	}
-}
-
-func deliverSubscriberEvent(events chan seam.Event, event seam.Event) {
-	select {
-	case events <- event:
-		return
-	default:
-	}
-
-	buffered := make([]seam.Event, 0, cap(events))
-	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return batch
+		}
+		timer := time.NewTimer(remaining)
 		select {
-		case existing := <-events:
-			buffered = append(buffered, existing)
-		default:
-			goto drained
+		case <-notify:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+			return batch
 		}
-	}
-
-drained:
-	markerCount, hasMarker := subscriberDropCount(buffered)
-	if hasMarker {
-		payload := append(buffered[1:], event)
-		dropped := len(payload) - (cap(events) - 1)
-		if dropped < 0 {
-			dropped = 0
-		}
-		markerCount += dropped
-		events <- seam.Event{Kind: "dropped", Metadata: map[string]any{"count": markerCount}}
-		for _, retained := range payload[dropped:] {
-			events <- retained
-		}
-		return
-	}
-
-	payload := append(buffered, event)
-	if len(payload) <= cap(events) {
-		for _, retained := range payload {
-			events <- retained
-		}
-		return
-	}
-	dropped := len(payload) - (cap(events) - 1)
-	events <- seam.Event{Kind: "dropped", Metadata: map[string]any{"count": dropped}}
-	for _, retained := range payload[dropped:] {
-		events <- retained
 	}
 }
 
-func subscriberDropCount(events []seam.Event) (int, bool) {
-	if len(events) == 0 || events[0].Kind != "dropped" || !events[0].Time.IsZero() || events[0].RuntimeID != "" || events[0].AgentID != "" || events[0].Text != "" {
-		return 0, false
+// serializableEvent makes the event independent of its producer and confines
+// metadata to JSON values. An invalid metadata value is replaced with a
+// serializable diagnostic instead of allowing a channel, function, or live
+// pointer to cross the seam.
+func serializableEvent(event seam.Event) seam.Event {
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		event.Metadata = map[string]any{"serialization_error": err.Error()}
+		encoded, _ = json.Marshal(event)
 	}
-	count, ok := events[0].Metadata["count"].(int)
-	return count, ok
+	var copied seam.Event
+	if err := json.Unmarshal(encoded, &copied); err != nil {
+		return seam.Event{
+			Cursor:    event.Cursor,
+			Time:      event.Time,
+			RuntimeID: event.RuntimeID,
+			AgentID:   event.AgentID,
+			Kind:      "serialization_error",
+			Text:      err.Error(),
+		}
+	}
+	return copied
 }
 
 func (r *Runtime) recordInferenceRequest(agent *Agent, round int, req provider.Request, p provider.Provider) {
@@ -999,26 +910,7 @@ func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
 		close(r.requestWatchStop)
 		<-r.requestWatchDone
-		delivered := make(chan struct{})
-		r.queueEvent(seam.Event{Kind: "runtime", Text: "runtime stopping"}, delivered, true)
-		// Shutdown is learned from the event stream, not from a second lifecycle
-		// channel. Give the dispatcher a bounded opportunity to hand off this
-		// marker and every earlier event. If the consumer is not reading, stopping
-		// the dispatcher drops the remaining backlog so Close still returns.
-		select {
-		case <-delivered:
-		case <-time.After(250 * time.Millisecond):
-		}
-		close(r.eventStop)
-		<-r.eventDone
-		r.eventMu.Lock()
-		for id, subscriber := range r.subscribers {
-			close(subscriber.events)
-			delete(r.subscribers, id)
-		}
-		r.subscribersClosed = true
-		r.eventMu.Unlock()
-		close(r.events)
+		r.queueEvent(seam.Event{Kind: "runtime", Text: "runtime stopping"}, true)
 		r.cancel()
 		r.mu.RLock()
 		agents := make([]*Agent, 0, len(r.agents))

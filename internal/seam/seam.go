@@ -3,7 +3,6 @@
 package seam
 
 import (
-	"context"
 	"time"
 
 	"github.com/slbdotdev/slbh/internal/config"
@@ -12,6 +11,7 @@ import (
 
 // Event is one ordered record emitted by a runtime.
 type Event struct {
+	Cursor     EventCursor    `json:"cursor"`
 	Time       time.Time      `json:"time"`
 	RuntimeID  string         `json:"runtime"`
 	AgentID    string         `json:"agent"`
@@ -19,6 +19,28 @@ type Event struct {
 	Kind       string         `json:"kind"`
 	Text       string         `json:"text,omitempty"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
+}
+
+// EventCursor is a consumer's position in the runtime's ordered event stream.
+// Zero names the position before the first event.
+type EventCursor uint64
+
+// EventQuery asks for events emitted after After. Limit zero means no limit.
+// WaitMilliseconds enables a bounded long poll when no event is immediately
+// available; it is ignored after the runtime reaches end of stream.
+type EventQuery struct {
+	After            EventCursor `json:"after"`
+	Limit            int         `json:"limit,omitempty"`
+	WaitMilliseconds int         `json:"wait_ms,omitempty"`
+}
+
+// EventBatch is a copied, serializable view of one position in the event
+// stream. Cursor is the last returned event cursor (or After when Events is
+// empty). End is true only when no event remains after Cursor.
+type EventBatch struct {
+	Events []Event     `json:"events"`
+	Cursor EventCursor `json:"cursor"`
+	End    bool        `json:"end"`
 }
 
 // AgentSnapshot is a copy of an agent's externally observable state.
@@ -63,13 +85,10 @@ type Reply struct {
 
 // Runtime is the in-process boundary consumed by front ends.
 type Runtime interface {
-	Do(context.Context, Command) (Reply, error)
-	// Events returns the ordered event stream. The channel is closed when the
-	// runtime stops; closure is the definitive end-of-stream signal.
-	Events() <-chan Event
-	// Subscribe returns an independent ordered event stream and an idempotent
-	// unsubscribe function. The stream contains events emitted after Subscribe.
-	Subscribe() (<-chan Event, func())
+	Do(Command) (Reply, error)
+	// PollEvents returns copied events emitted after the supplied cursor. Each
+	// front end advances its own cursor, so consumers are independent.
+	PollEvents(EventQuery) EventBatch
 	Agents() []AgentSnapshot
 	JobSnapshots() []JobSnapshot
 	Config() config.Config

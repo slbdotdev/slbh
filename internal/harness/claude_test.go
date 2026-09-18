@@ -113,7 +113,7 @@ func waitForClaudeEvent(t *testing.T, r *Runtime, agentID, kind string) string {
 	defer deadline.Stop()
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.AgentID == agentID && event.Kind == "error" {
 				t.Fatalf("Claude leaf failed: %s", event.Text)
 			}
@@ -158,7 +158,7 @@ func TestClaudeLeafArgvEnvironmentAndParentDelivery(t *testing.T) {
 	deadline := time.After(5 * time.Second)
 	for !gotTurn || !gotParent {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			switch {
 			case event.AgentID == child.ID && event.Kind == "error":
 				t.Fatalf("Claude leaf failed: %s", event.Text)
@@ -374,7 +374,7 @@ func TestClaudeStreamFixtureMapsRuntimeEvents(t *testing.T) {
 			return
 		}
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.AgentID == agent.ID {
 				if _, ok := want[event.Kind]; ok {
 					want[event.Kind] = true

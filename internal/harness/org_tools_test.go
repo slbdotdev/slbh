@@ -135,7 +135,7 @@ func TestFailedAndDisabledSecretaryWake(t *testing.T) {
 		deadline := time.After(2 * time.Second)
 		for {
 			select {
-			case event := <-r.Events():
+			case event := <-testEvents(r):
 				if event.Kind == "secretary_wake" {
 					if !strings.Contains(event.Text, "codex queue failed") {
 						t.Fatalf("wake failure event = %#v", event)
@@ -263,9 +263,9 @@ func TestRequestWatcherDeliversStartupAndExternalAppendsOnceAndStops(t *testing.
 	deadline := time.After(2 * time.Second)
 	for len(counts) < 2 {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.Kind == "org_request" {
-				id, _ := event.Metadata["request"].(uint64)
+				id := uint64(event.Metadata["request"].(float64))
 				counts[id]++
 				if !strings.Contains(event.Text, "proposal to be judged against the tree") || !strings.Contains(event.Text, strconv.FormatUint(id, 10)) {
 					t.Fatalf("delivery text = %q", event.Text)
@@ -281,7 +281,7 @@ func TestRequestWatcherDeliversStartupAndExternalAppendsOnceAndStops(t *testing.
 	time.Sleep(50 * time.Millisecond)
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.Kind == "org_request" {
 				t.Fatalf("duplicate request delivery: %#v", event)
 			}
@@ -332,7 +332,7 @@ func TestOrgEndToEndThroughCLI(t *testing.T) {
 	deadline := time.After(2 * time.Second)
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.Kind == "org_request" && strings.Contains(event.Text, "judge this") {
 				goto delivered
 			}

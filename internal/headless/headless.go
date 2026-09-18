@@ -9,7 +9,6 @@
 package headless
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -91,16 +90,10 @@ func Run(rt seam.Runtime, opts Options) (Result, error) {
 		res.Transcript = path
 	}
 
+	cursor := rt.PollEvents(seam.EventQuery{}).Cursor
 	start := time.Now()
-	if _, err := rt.Do(context.Background(), seam.SendPromptCommand{AgentID: seat.ID, Prompt: opts.Prompt}); err != nil {
+	if _, err := rt.Do(seam.SendPromptCommand{AgentID: seat.ID, Prompt: opts.Prompt}); err != nil {
 		return res, fmt.Errorf("headless: send: %w", err)
-	}
-
-	var deadline <-chan time.Time
-	if opts.Timeout > 0 {
-		timer := time.NewTimer(opts.Timeout)
-		defer timer.Stop()
-		deadline = timer.C
 	}
 
 	// The seat's reply streams as deltas; Final is the whole of the last one.
@@ -111,14 +104,21 @@ func Run(rt seam.Runtime, opts Options) (Result, error) {
 		return res, nil
 	}
 
-	events := rt.Events()
 	for {
-		select {
-		case ev, ok := <-events:
-			if !ok {
-				res.StopReason = "shutdown"
+		wait := 250 * time.Millisecond
+		if opts.Timeout > 0 {
+			remaining := opts.Timeout - time.Since(start)
+			if remaining <= 0 {
+				res.StopReason = "wall_cap"
 				return finish()
 			}
+			if remaining < wait {
+				wait = remaining
+			}
+		}
+		batch := rt.PollEvents(seam.EventQuery{After: cursor, WaitMilliseconds: max(1, int(wait/time.Millisecond))})
+		cursor = batch.Cursor
+		for _, ev := range batch.Events {
 			emit(out, opts.JSON, ev)
 			if ev.Kind == "runtime" && ev.Text == "runtime stopping" {
 				res.StopReason = "shutdown"
@@ -170,8 +170,9 @@ func Run(rt seam.Runtime, opts Options) (Result, error) {
 					return finish()
 				}
 			}
-		case <-deadline:
-			res.StopReason = "wall_cap"
+		}
+		if batch.End {
+			res.StopReason = "shutdown"
 			return finish()
 		}
 	}

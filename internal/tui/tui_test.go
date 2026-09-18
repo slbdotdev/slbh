@@ -56,6 +56,22 @@ func endTestSubagent(t *testing.T, runtime *harness.Runtime, childID string) {
 	}
 }
 
+func waitForRuntimeKind(t *testing.T, runtime seam.Runtime, cursor *seam.EventCursor, kind string) seam.Event {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		batch := runtime.PollEvents(seam.EventQuery{After: *cursor, WaitMilliseconds: 50})
+		*cursor = batch.Cursor
+		for _, event := range batch.Events {
+			if event.Kind == kind {
+				return event
+			}
+		}
+	}
+	t.Fatalf("runtime event %q did not arrive", kind)
+	return seam.Event{}
+}
+
 func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
 	if err != nil {
@@ -515,19 +531,9 @@ func TestClearCommandKeepsSubsequentMessagesVisible(t *testing.T) {
 	m := New(runtime)
 	m.width = 40
 	seatID := seatID(runtime)
-	_, _ = runtime.Do(context.Background(), seam.SendPromptCommand{AgentID: seatID, Prompt: "old prompt"})
-	deadline := time.After(time.Second)
-	for {
-		select {
-		case event := <-runtime.Events():
-			if event.Kind == "turn_done" {
-				goto initialTurnDone
-			}
-		case <-deadline:
-			t.Fatal("initial turn did not finish")
-		}
-	}
-initialTurnDone:
+	cursor := runtime.PollEvents(seam.EventQuery{}).Cursor
+	_, _ = runtime.Do(seam.SendPromptCommand{AgentID: seatID, Prompt: "old prompt"})
+	waitForRuntimeKind(t, runtime, &cursor, "turn_done")
 	m.events = []seam.Event{
 		{AgentID: seatID, Kind: "user", Text: "old prompt"},
 		{AgentID: seatID, Kind: "assistant", Text: "old answer"},
@@ -553,19 +559,8 @@ initialTurnDone:
 		t.Fatalf("cleared messages remain visible: %q", content)
 	}
 
-	_, _ = runtime.Do(context.Background(), seam.SendPromptCommand{AgentID: seatID, Prompt: "new prompt"})
-	deadline = time.After(time.Second)
-	for {
-		select {
-		case event := <-runtime.Events():
-			if event.Kind == "turn_done" {
-				goto newTurnDone
-			}
-		case <-deadline:
-			t.Fatal("post-clear turn did not finish")
-		}
-	}
-newTurnDone:
+	_, _ = runtime.Do(seam.SendPromptCommand{AgentID: seatID, Prompt: "new prompt"})
+	waitForRuntimeKind(t, runtime, &cursor, "turn_done")
 	data, err = os.ReadFile(transcript)
 	if err != nil {
 		t.Fatal(err)

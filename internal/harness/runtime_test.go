@@ -125,6 +125,36 @@ func testRuntime(t *testing.T) *Runtime {
 	return r
 }
 
+var testEventStreams sync.Map
+
+// testEvents adapts the serializable polling contract for older behavioral
+// tests whose assertion shape is naturally a select on a local test channel.
+// The channel belongs to the test process; only EventQuery and EventBatch
+// cross the seam.
+func testEvents(runtime seam.Runtime) <-chan seam.Event {
+	created := make(chan seam.Event, 1024)
+	actual, loaded := testEventStreams.LoadOrStore(runtime.ID(), created)
+	if loaded {
+		return actual.(chan seam.Event)
+	}
+	go func() {
+		defer close(created)
+		defer testEventStreams.Delete(runtime.ID())
+		var cursor seam.EventCursor
+		for {
+			batch := runtime.PollEvents(seam.EventQuery{After: cursor, Limit: 128, WaitMilliseconds: 100})
+			cursor = batch.Cursor
+			for _, event := range batch.Events {
+				created <- event
+			}
+			if batch.End {
+				return
+			}
+		}
+	}()
+	return created
+}
+
 func launchTestManager(t *testing.T, r *Runtime) *Agent {
 	t.Helper()
 	manager, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "native-manager", Harness: "native", Model: "test-manager"})
@@ -287,7 +317,7 @@ func TestRuntimeStreamsAndLogs(t *testing.T) {
 	var sawDone bool
 	for !sawDone {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.Kind == "turn_done" {
 				sawDone = true
 			}
@@ -331,71 +361,42 @@ func TestRuntimeStreamsAndLogs(t *testing.T) {
 
 func TestRuntimeDoesNotDropStreamEventsWhenUIFallsBehind(t *testing.T) {
 	r := testRuntime(t)
+	baseline := r.PollEvents(seam.EventQuery{}).Cursor
 	const count = 4096
 	for i := 0; i < count; i++ {
 		r.emit(seam.Event{AgentID: r.seat().ID, AgentTitle: "seat", Kind: "assistant", Text: "stream-event"})
 	}
-	received := 0
-	deadline := time.After(5 * time.Second)
-	for received < count {
-		select {
-		case event := <-r.Events():
-			if event.Text == "stream-event" {
-				received++
-			}
-		case <-deadline:
-			t.Fatalf("received %d/%d stream events", received, count)
-		}
+	batch := r.PollEvents(seam.EventQuery{After: baseline})
+	if len(batch.Events) != count {
+		t.Fatalf("received %d/%d stream events", len(batch.Events), count)
 	}
 }
 
 func TestRuntimeCloseDeliversStoppingEventThenClosesStream(t *testing.T) {
 	r := testRuntime(t)
-	events := r.Events()
-	received := make(chan []seam.Event, 1)
-	go func() {
-		var all []seam.Event
-		for event := range events {
-			all = append(all, event)
-		}
-		received <- all
-	}()
-
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case all := <-received:
-		if len(all) == 0 {
-			t.Fatal("event stream closed without a runtime stopping event")
-		}
-		last := all[len(all)-1]
-		if last.Kind != "runtime" || last.Text != "runtime stopping" {
-			t.Fatalf("last event = %#v, want runtime stopping", last)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("reader did not observe the event stream closing")
+	batch := r.PollEvents(seam.EventQuery{})
+	if !batch.End || len(batch.Events) == 0 {
+		t.Fatalf("closed stream batch = %#v", batch)
+	}
+	last := batch.Events[len(batch.Events)-1]
+	if last.Kind != "runtime" || last.Text != "runtime stopping" {
+		t.Fatalf("last event = %#v, want runtime stopping", last)
 	}
 }
 
 func TestRuntimeCloseReturnsAndClosesFullUnreadStream(t *testing.T) {
-	events := make(chan seam.Event, 1024)
 	r, err := New(
 		config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"},
-		Options{Events: events, Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }},
+		Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < cap(events); i++ {
+	for i := 0; i < 4096; i++ {
 		r.emit(seam.Event{Kind: "status", Text: "fill"})
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for len(events) < cap(events) && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if len(events) != cap(events) {
-		t.Fatalf("event buffer length = %d, want full capacity %d", len(events), cap(events))
 	}
 
 	started := time.Now()
@@ -405,15 +406,9 @@ func TestRuntimeCloseReturnsAndClosesFullUnreadStream(t *testing.T) {
 	if elapsed := time.Since(started); elapsed >= 2*time.Second {
 		t.Fatalf("Close took %v with a full unread stream", elapsed)
 	}
-	for {
-		select {
-		case _, ok := <-events:
-			if !ok {
-				return
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("full event stream was not closed")
-		}
+	batch := r.PollEvents(seam.EventQuery{})
+	if !batch.End || len(batch.Events) != 4098 {
+		t.Fatalf("closed unread stream = %d events, end=%v; want 4098 and true", len(batch.Events), batch.End)
 	}
 }
 
@@ -422,11 +417,10 @@ func TestRuntimeEmitAfterCloseIsNoOp(t *testing.T) {
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for range r.Events() {
-	}
+	final := r.PollEvents(seam.EventQuery{})
 	r.emit(seam.Event{Kind: "status", Text: "after close"})
-	if _, ok := <-r.Events(); ok {
-		t.Fatal("event stream reopened after emit following Close")
+	if after := r.PollEvents(seam.EventQuery{After: final.Cursor}); len(after.Events) != 0 || !after.End {
+		t.Fatalf("event stream changed after Close: %#v", after)
 	}
 }
 
@@ -504,7 +498,7 @@ func waitAgentTurn(t *testing.T, r *Runtime, agentID string) {
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.AgentID == agentID && event.Kind == "turn_done" {
 				return
 			}
@@ -533,7 +527,7 @@ func TestAgentTracksContextAndCacheStats(t *testing.T) {
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.Kind == "turn_done" {
 				snapshot := r.seat().Snapshot()
 				if snapshot.ContextWindow != provider.FallbackContextWindow {
@@ -567,7 +561,7 @@ func TestDepthAndSteerIsolation(t *testing.T) {
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.AgentID == child.ID && event.Kind == "steer" {
 				return
 			}
@@ -806,7 +800,7 @@ func TestProviderToolCallsExecuteAndContinue(t *testing.T) {
 	var sawResult, sawDone bool
 	for !sawDone {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.Kind == "tool_result" {
 				sawResult = true
 			}
@@ -1056,7 +1050,7 @@ func TestChildResultReachesParent(t *testing.T) {
 	var childResultTitle string
 	for !sawParentResult {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.AgentID == r.seat().ID && event.Kind == "child_result" {
 				childResultTitle = event.AgentTitle
 			}

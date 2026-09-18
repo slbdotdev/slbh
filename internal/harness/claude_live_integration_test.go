@@ -37,7 +37,7 @@ func TestLiveClaudeCodeLeafRoundTrip(t *testing.T) {
 	defer deadline.Stop()
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.AgentID == child.ID && event.Kind == "error" {
 				t.Fatal(event.Text)
 			}

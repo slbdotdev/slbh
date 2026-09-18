@@ -167,7 +167,7 @@ func waitForCodexReady(t *testing.T, r *Runtime, agentID string) {
 	defer deadline.Stop()
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.AgentID == agentID && event.Kind == "codex_ready" {
 				return
 			}
@@ -317,7 +317,7 @@ func TestCodexLeafSteersActiveTurnAndReturnsResult(t *testing.T) {
 	var sawParent, sawDone bool
 	for !sawParent || !sawDone {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.AgentID == child.ID && event.Kind == "turn_done" {
 				sawDone = true
 			}
@@ -359,7 +359,7 @@ func TestCodexLeafSteersActiveTurnAndReturnsResult(t *testing.T) {
 	deadline = time.After(3 * time.Second)
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.AgentID == child.ID && event.Kind == "turn_done" && strings.Contains(event.Text, "followed") {
 				return
 			}
@@ -418,7 +418,7 @@ func TestCodexLeafParentToolAndNoDelegation(t *testing.T) {
 	deadline := time.After(3 * time.Second)
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.Kind == "child_message" {
 				goto childMessageRecorded
 			}
@@ -483,7 +483,7 @@ func TestCodexLeafSteerRaceIsRequeuedAfterTurnCompletion(t *testing.T) {
 	deadline := time.After(3 * time.Second)
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.AgentID == child.ID && event.Kind == "turn_done" && strings.Contains(event.Text, "recovered") {
 				return
 			}
@@ -554,7 +554,7 @@ func TestCodexLeafClearStartsFreshThread(t *testing.T) {
 	deadline := time.After(3 * time.Second)
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.AgentID == child.ID && event.Kind == "compact" {
 				return
 			}

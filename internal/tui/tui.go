@@ -63,6 +63,8 @@ var slashCommands = []string{
 
 type eventMsg seam.Event
 
+type eventBatchMsg seam.EventBatch
+
 // markdownTickMsg catches up a block the render throttle held back.
 type markdownTickMsg time.Time
 
@@ -97,6 +99,7 @@ type Model struct {
 	viewport           viewport.Model
 	input              textarea.Model
 	events             []seam.Event
+	eventCursor        seam.EventCursor
 	agents             []seam.AgentSnapshot
 	viewAgentID        string
 	selected           int
@@ -158,16 +161,12 @@ func New(runtime seam.Runtime) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, waitEvent(m.runtime))
+	return tea.Batch(textarea.Blink, waitEvents(m.runtime, m.eventCursor))
 }
 
-func waitEvent(runtime seam.Runtime) tea.Cmd {
+func waitEvents(runtime seam.Runtime, cursor seam.EventCursor) tea.Cmd {
 	return func() tea.Msg {
-		event, ok := <-runtime.Events()
-		if !ok {
-			return nil
-		}
-		return eventMsg(event)
+		return eventBatchMsg(runtime.PollEvents(seam.EventQuery{After: cursor, Limit: 128, WaitMilliseconds: 250}))
 	}
 }
 
@@ -199,7 +198,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case modelCatalogMsg:
 		m.modelsLoading = false
 		m.modelCatalog = msg.catalog
-		if _, err := m.runtime.Do(context.Background(), seam.SetModelCatalogCommand{Catalog: msg.catalog}); err != nil && msg.err == nil {
+		if _, err := m.runtime.Do(seam.SetModelCatalogCommand{Catalog: msg.catalog}); err != nil && msg.err == nil {
 			msg.err = err
 		}
 		if msg.err != nil {
@@ -220,24 +219,17 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.markdownTicking = false
 		m.refreshView()
 		return m, nil
+	case eventBatchMsg:
+		batch := seam.EventBatch(msg)
+		m.eventCursor = batch.Cursor
+		m.receiveEvents(batch.Events)
+		if batch.End {
+			return m, nil
+		}
+		return m, waitEvents(m.runtime, m.eventCursor)
 	case eventMsg:
-		m.events = append(m.events, seam.Event(msg))
-		m.agents = activeAgents(m.runtime.Agents())
-		if !containsAgent(m.agents, m.viewAgentID) {
-			m.viewAgentID = seatID(m.runtime)
-			m.userScrolled = false
-		}
-		if m.selected >= len(m.agents) {
-			m.selected = max(0, len(m.agents)-1)
-		}
-		// Agent and job events can change the footer height. Reflow the chat
-		// viewport before rendering so newly spawned agents cannot push the
-		// last panel row below the terminal.
-		m.resize()
-		if m.width < 1 || m.height < 1 {
-			m.refreshView()
-		}
-		return m, waitEvent(m.runtime)
+		m.receiveEvents([]seam.Event{seam.Event(msg)})
+		return m, waitEvents(m.runtime, m.eventCursor)
 	case tea.MouseMsg:
 		return m.updateMouse(msg)
 	case tea.KeyPressMsg:
@@ -251,10 +243,29 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *Model) receiveEvents(events []seam.Event) {
+	m.events = append(m.events, events...)
+	m.agents = activeAgents(m.runtime.Agents())
+	if !containsAgent(m.agents, m.viewAgentID) {
+		m.viewAgentID = seatID(m.runtime)
+		m.userScrolled = false
+	}
+	if m.selected >= len(m.agents) {
+		m.selected = max(0, len(m.agents)-1)
+	}
+	// Agent and job events can change the footer height. Reflow the chat
+	// viewport before rendering so newly spawned agents cannot push the last
+	// panel row below the terminal.
+	m.resize()
+	if m.width < 1 || m.height < 1 {
+		m.refreshView()
+	}
+}
+
 func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if isControlKey(msg, 'c') || isControlKey(msg, 'q') {
 		m.quitting = true
-		_, _ = m.runtime.Do(context.Background(), seam.CloseCommand{})
+		_, _ = m.runtime.Do(seam.CloseCommand{})
 		return m, tea.Quit
 	}
 	if m.focusAgents {
@@ -384,12 +395,12 @@ func (m *Model) submit() tea.Cmd {
 	}
 	var err error
 	if a.ID == seatID(m.runtime) {
-		_, err = m.runtime.Do(context.Background(), seam.SendPromptCommand{AgentID: a.ID, Prompt: text})
+		_, err = m.runtime.Do(seam.SendPromptCommand{AgentID: a.ID, Prompt: text})
 	} else {
-		_, err = m.runtime.Do(context.Background(), seam.SteerAgentCommand{AgentID: a.ID, Message: text})
+		_, err = m.runtime.Do(seam.SteerAgentCommand{AgentID: a.ID, Message: text})
 	}
 	if err != nil {
-		_, _ = m.runtime.Do(context.Background(), seam.EmitStatusCommand{Kind: "error", Text: err.Error()})
+		_, _ = m.runtime.Do(seam.EmitStatusCommand{Kind: "error", Text: err.Error()})
 	}
 	return nil
 }
@@ -505,10 +516,10 @@ func (m *Model) handleCommand(command string) tea.Cmd {
 	switch name {
 	case "/exit", "/quit", "/q":
 		m.quitting = true
-		_, _ = m.runtime.Do(context.Background(), seam.CloseCommand{})
+		_, _ = m.runtime.Do(seam.CloseCommand{})
 		return nil
 	case "/clear":
-		if _, err := m.runtime.Do(context.Background(), seam.ClearCommand{AgentID: m.viewAgentID}); err != nil {
+		if _, err := m.runtime.Do(seam.ClearCommand{AgentID: m.viewAgentID}); err != nil {
 			m.addLocal("error", err.Error())
 			return nil
 		}
@@ -525,7 +536,7 @@ func (m *Model) handleCommand(command string) tea.Cmd {
 			if !containsModel(approved, arg) {
 				approved = append(approved, arg)
 			}
-			if _, err := m.runtime.Do(context.Background(), seam.ConfigureModelsCommand{SeatModel: arg, SubagentModel: cfg.SubagentModel, Approved: approved}); err != nil {
+			if _, err := m.runtime.Do(seam.ConfigureModelsCommand{SeatModel: arg, SubagentModel: cfg.SubagentModel, Approved: approved}); err != nil {
 				m.addLocal("error", "save model configuration: "+err.Error())
 			} else {
 				m.addLocal("status", "seat model set to "+arg)
@@ -534,7 +545,7 @@ func (m *Model) handleCommand(command string) tea.Cmd {
 	case "/effort":
 		if arg != "" {
 			if id := seatID(m.runtime); id != "" {
-				if _, err := m.runtime.Do(context.Background(), seam.SetAgentEffortCommand{AgentID: id, Effort: arg, Persist: true}); err != nil {
+				if _, err := m.runtime.Do(seam.SetAgentEffortCommand{AgentID: id, Effort: arg, Persist: true}); err != nil {
 					m.addLocal("error", err.Error())
 					return nil
 				}
@@ -553,7 +564,7 @@ func (m *Model) handleCommand(command string) tea.Cmd {
 			m.addLocal("status", "mouse capture off: drag to select text; PgUp/PgDn and Ctrl-U/Ctrl-D scroll")
 		}
 	case "/compact":
-		reply, err := m.runtime.Do(context.Background(), seam.CompactCommand{AgentID: m.viewAgentID, Keep: 24})
+		reply, err := m.runtime.Do(seam.CompactCommand{AgentID: m.viewAgentID, Keep: 24})
 		if err != nil {
 			m.addLocal("error", err.Error())
 		} else {
@@ -692,7 +703,7 @@ func (m *Model) authorLocalPolicy() {
 		m.modelNoticeOK = false
 		return
 	}
-	reply, err := m.runtime.Do(context.Background(), seam.AuthorLocalPolicyCommand{Policy: policy})
+	reply, err := m.runtime.Do(seam.AuthorLocalPolicyCommand{Policy: policy})
 	if err != nil {
 		m.modelNotice = "author local policy: " + err.Error()
 		m.modelNoticeErr = true
@@ -767,7 +778,7 @@ func (m *Model) assignModel(node modelTreeNode, slot string) {
 	default:
 		return
 	}
-	if _, err := m.runtime.Do(context.Background(), seam.ConfigureModelSlotsCommand{SeatModel: m.modelSeat, SubagentModel: m.modelSubagent, LeafModel: m.modelLeaf, Approved: approvedSlots(m.modelSeat, m.modelSubagent, m.modelLeaf)}); err != nil {
+	if _, err := m.runtime.Do(seam.ConfigureModelSlotsCommand{SeatModel: m.modelSeat, SubagentModel: m.modelSubagent, LeafModel: m.modelLeaf, Approved: approvedSlots(m.modelSeat, m.modelSubagent, m.modelLeaf)}); err != nil {
 		m.modelNotice = "save failed: " + err.Error()
 		m.modelNoticeErr = true
 		m.modelNoticeOK = false
@@ -779,7 +790,7 @@ func (m *Model) assignModel(node modelTreeNode, slot string) {
 }
 
 func (m *Model) saveAndCloseModelMenu() {
-	if _, err := m.runtime.Do(context.Background(), seam.ConfigureModelSlotsCommand{SeatModel: m.modelSeat, SubagentModel: m.modelSubagent, LeafModel: m.modelLeaf, Approved: approvedSlots(m.modelSeat, m.modelSubagent, m.modelLeaf)}); err != nil {
+	if _, err := m.runtime.Do(seam.ConfigureModelSlotsCommand{SeatModel: m.modelSeat, SubagentModel: m.modelSubagent, LeafModel: m.modelLeaf, Approved: approvedSlots(m.modelSeat, m.modelSubagent, m.modelLeaf)}); err != nil {
 		m.modelNotice = "save failed: " + err.Error()
 		m.modelNoticeErr = true
 		m.modelNoticeOK = false

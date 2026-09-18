@@ -8,12 +8,12 @@ import (
 	"testing"
 )
 
-func TestSeamAndHeadlessDoNotDependOnHarness(t *testing.T) {
+func TestSeamConsumersDoNotDependOnHarness(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command("go", "list", "-deps", "./internal/headless", "./internal/seam")
+	command := exec.Command("go", "list", "-deps", "./internal/headless", "./internal/intern", "./internal/seam", "./internal/tui")
 	command.Dir = root
 	command.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.0")
 	output, err := command.CombinedOutput()
@@ -23,7 +23,7 @@ func TestSeamAndHeadlessDoNotDependOnHarness(t *testing.T) {
 	wanted := "github.com/slbdotdev/slbh/internal/harness"
 	for _, dependency := range strings.Fields(string(output)) {
 		if dependency == wanted {
-			t.Fatalf("headless or seam depends on %s", wanted)
+			t.Fatalf("a seam consumer depends on %s", wanted)
 		}
 	}
 }

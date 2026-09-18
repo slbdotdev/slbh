@@ -21,11 +21,16 @@ type fakeRuntime struct {
 	config   config.Config
 	agents   []seam.AgentSnapshot
 	jobs     []seam.JobSnapshot
-	events   chan seam.Event
 	commands chan seam.Command
 
-	mu       sync.Mutex
-	received []seam.Command
+	mu          sync.Mutex
+	received    []seam.Command
+	events      []seam.Event
+	eventCursor seam.EventCursor
+	eventEnd    bool
+	eventNotify chan struct{}
+	started     chan struct{}
+	startOnce   sync.Once
 }
 
 func newFakeRuntime(t *testing.T) *fakeRuntime {
@@ -42,31 +47,101 @@ func newFakeRuntime(t *testing.T) *fakeRuntime {
 			{ID: "seat", Title: "Seat", Depth: 0, WorkDir: dir},
 			{ID: "leaf", Title: "Leaf", ParentID: "seat", Depth: 1, WorkDir: dir},
 		},
-		events:   make(chan seam.Event, 64),
-		commands: make(chan seam.Command, 64),
+		commands:    make(chan seam.Command, 64),
+		eventNotify: make(chan struct{}),
+		started:     make(chan struct{}),
 	}
 }
 
-func (r *fakeRuntime) Do(_ context.Context, command seam.Command) (seam.Reply, error) {
+func (r *fakeRuntime) Do(command seam.Command) (seam.Reply, error) {
 	r.mu.Lock()
 	r.received = append(r.received, command)
 	r.mu.Unlock()
 	r.commands <- command
 	if steer, ok := command.(seam.SteerAgentCommand); ok {
-		r.events <- seam.Event{AgentID: steer.AgentID, Kind: "steer", Text: steer.Message}
+		r.emit(seam.Event{AgentID: steer.AgentID, Kind: "steer", Text: steer.Message})
 	}
 	return seam.Reply{Command: command.CommandName()}, nil
 }
 
-func (r *fakeRuntime) Events() <-chan seam.Event              { return r.events }
-func (r *fakeRuntime) Subscribe() (<-chan seam.Event, func()) { return r.events, func() {} }
+func (r *fakeRuntime) PollEvents(query seam.EventQuery) seam.EventBatch {
+	deadline := time.Now().Add(time.Duration(query.WaitMilliseconds) * time.Millisecond)
+	for {
+		r.mu.Lock()
+		start := 0
+		for start < len(r.events) && r.events[start].Cursor <= query.After {
+			start++
+		}
+		end := len(r.events)
+		if query.Limit > 0 && start+query.Limit < end {
+			end = start + query.Limit
+		}
+		batch := seam.EventBatch{Cursor: query.After, Events: append([]seam.Event(nil), r.events[start:end]...)}
+		if len(batch.Events) > 0 {
+			batch.Cursor = batch.Events[len(batch.Events)-1].Cursor
+		}
+		batch.End = r.eventEnd && end == len(r.events)
+		notify := r.eventNotify
+		r.mu.Unlock()
+		if len(batch.Events) > 0 || batch.End || query.WaitMilliseconds <= 0 {
+			r.startOnce.Do(func() { close(r.started) })
+			return copyEventBatch(batch)
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			r.startOnce.Do(func() { close(r.started) })
+			return copyEventBatch(batch)
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-notify:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+			r.startOnce.Do(func() { close(r.started) })
+			return copyEventBatch(batch)
+		}
+	}
+}
+
+func copyEventBatch(batch seam.EventBatch) seam.EventBatch {
+	encoded, _ := json.Marshal(batch)
+	var copied seam.EventBatch
+	_ = json.Unmarshal(encoded, &copied)
+	return copied
+}
+
+func (r *fakeRuntime) emit(event seam.Event) {
+	r.mu.Lock()
+	r.eventCursor++
+	event.Cursor = r.eventCursor
+	r.events = append(r.events, event)
+	close(r.eventNotify)
+	r.eventNotify = make(chan struct{})
+	r.mu.Unlock()
+}
+
+func (r *fakeRuntime) closeEvents() {
+	r.mu.Lock()
+	r.eventEnd = true
+	close(r.eventNotify)
+	r.eventNotify = make(chan struct{})
+	r.mu.Unlock()
+}
+
 func (r *fakeRuntime) Agents() []seam.AgentSnapshot {
 	return append([]seam.AgentSnapshot(nil), r.agents...)
 }
 func (r *fakeRuntime) JobSnapshots() []seam.JobSnapshot {
 	return append([]seam.JobSnapshot(nil), r.jobs...)
 }
-func (r *fakeRuntime) Config() config.Config                 { return r.config }
+func (r *fakeRuntime) Config() config.Config {
+	encoded, _ := json.Marshal(r.config)
+	var copied config.Config
+	_ = json.Unmarshal(encoded, &copied)
+	return copied
+}
 func (r *fakeRuntime) ID() string                            { return "runtime" }
 func (r *fakeRuntime) Home() string                          { return r.config.Home }
 func (r *fakeRuntime) Dir() string                           { return r.agents[0].WorkDir }
@@ -112,12 +187,22 @@ func startIntern(t *testing.T, rt *fakeRuntime, p provider.Provider) chan error 
 	t.Helper()
 	done := make(chan error, 1)
 	go func() { done <- Run(context.Background(), rt, Options{Provider: p}) }()
+	select {
+	case <-rt.started:
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatal("Intern stopped before opening its event cursor")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Intern did not open its event cursor")
+	}
 	return done
 }
 
 func finishIntern(t *testing.T, rt *fakeRuntime, done chan error) {
 	t.Helper()
-	close(rt.events)
+	rt.closeEvents()
 	select {
 	case err := <-done:
 		if err != nil {
@@ -153,10 +238,10 @@ func TestInferenceRunsOnlyAtSeatTurnBoundaries(t *testing.T) {
 	p := newScriptedProvider(nil)
 	done := startIntern(t, rt, p)
 
-	rt.events <- seam.Event{AgentID: "seat", Kind: "assistant", Text: "working"}
-	rt.events <- seam.Event{AgentID: "leaf", Kind: "turn_done", Text: "leaf finished"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "assistant", Text: "working"})
+	rt.emit(seam.Event{AgentID: "leaf", Kind: "turn_done", Text: "leaf finished"})
 	requireNoCall(t, p)
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done"})
 	if got := waitCall(t, p); got != 0 {
 		t.Fatalf("provider call = %d, want 0", got)
 	}
@@ -180,7 +265,7 @@ func TestInternSystemPromptListsInternSkills(t *testing.T) {
 	}}
 	p := newScriptedProvider(nil)
 	done := startIntern(t, rt, p)
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done"})
 	waitCall(t, p)
 	request := p.request(0)
 	for _, want := range []string{
@@ -205,7 +290,7 @@ func TestAskSeatSendsSignedSteerWithoutWaitingForAnswer(t *testing.T) {
 		return nil
 	})
 	done := startIntern(t, rt, p)
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done"})
 	waitCall(t, p)
 	waitCall(t, p)
 
@@ -239,10 +324,10 @@ func TestBoundariesCoalesceWhileInferenceRuns(t *testing.T) {
 		}
 	})
 	done := startIntern(t, rt, p)
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done", Text: "first"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done", Text: "first"})
 	waitCall(t, p)
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done", Text: "second"}
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done", Text: "third"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done", Text: "second"})
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done", Text: "third"})
 	close(release)
 	if got := waitCall(t, p); got != 1 {
 		t.Fatalf("follow-up call = %d, want 1", got)
@@ -264,8 +349,8 @@ func TestOwnSteersAreIgnored(t *testing.T) {
 	rt := newFakeRuntime(t)
 	p := newScriptedProvider(nil)
 	done := startIntern(t, rt, p)
-	rt.events <- seam.Event{AgentID: "seat", Kind: "steer", Text: "[intern] Is this recursive?"}
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "steer", Text: "[intern] Is this recursive?"})
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done"})
 	waitCall(t, p)
 	request := p.request(0)
 	if strings.Contains(request.Messages[0].Content, "Is this recursive?") {
@@ -287,7 +372,7 @@ func TestExactToolListAndUnknownToolRefusal(t *testing.T) {
 		return nil
 	})
 	done := startIntern(t, rt, p)
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done"})
 	waitCall(t, p)
 	waitCall(t, p)
 	second := p.request(1)
@@ -325,7 +410,7 @@ func TestEveryRequestCarriesMediumEffortAndRouteOutputBound(t *testing.T) {
 		return nil
 	})
 	done := startIntern(t, rt, p)
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done"})
 	waitCall(t, p)
 	waitCall(t, p)
 	for index := 0; index < 2; index++ {
@@ -352,7 +437,7 @@ func TestOutputLimitEndsInferenceWithoutAskingAndNextBoundaryRuns(t *testing.T) 
 		return nil
 	})
 	done := startIntern(t, rt, p)
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done", Text: "first"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done", Text: "first"})
 	waitCall(t, p)
 	select {
 	case command := <-rt.commands:
@@ -370,7 +455,7 @@ func TestOutputLimitEndsInferenceWithoutAskingAndNextBoundaryRuns(t *testing.T) 
 		}
 	default:
 	}
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done", Text: "second"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done", Text: "second"})
 	if got := waitCall(t, p); got != 1 {
 		t.Fatalf("call after length stop = %d, want 1", got)
 	}
@@ -431,7 +516,7 @@ func TestProviderErrorEmitsStatusAndLoopContinues(t *testing.T) {
 		return nil
 	})
 	done := startIntern(t, rt, p)
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done", Text: "first"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done", Text: "first"})
 	waitCall(t, p)
 	select {
 	case command := <-rt.commands:
@@ -442,7 +527,7 @@ func TestProviderErrorEmitsStatusAndLoopContinues(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("provider error did not emit intern status")
 	}
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done", Text: "second"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done", Text: "second"})
 	if got := waitCall(t, p); got != 1 {
 		t.Fatalf("call after provider error = %d, want 1", got)
 	}
@@ -454,7 +539,7 @@ func TestMissingModelEmitsStatusAndLoopContinues(t *testing.T) {
 	rt.config.InternModel = ""
 	p := newScriptedProvider(nil)
 	done := startIntern(t, rt, p)
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done", Text: "first"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done", Text: "first"})
 	select {
 	case command := <-rt.commands:
 		status, ok := command.(seam.EmitStatusCommand)
@@ -464,7 +549,7 @@ func TestMissingModelEmitsStatusAndLoopContinues(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("missing model did not emit intern status")
 	}
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done", Text: "second"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done", Text: "second"})
 	select {
 	case command := <-rt.commands:
 		status, ok := command.(seam.EmitStatusCommand)
@@ -568,7 +653,7 @@ func TestUnfittablePromptIsNotSent(t *testing.T) {
 	}}
 	p := newScriptedProvider(nil)
 	done := startIntern(t, rt, p)
-	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done", Text: "cannot fit"}
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done", Text: "cannot fit"})
 	select {
 	case command := <-rt.commands:
 		status, ok := command.(seam.EmitStatusCommand)

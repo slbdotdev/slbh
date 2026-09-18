@@ -68,8 +68,6 @@ func Run(ctx context.Context, rt seam.Runtime, opts Options) error {
 	contextWindow, maxOutputTokens := routeLimits(cfg, model)
 	promptBudget := contextWindow - maxOutputTokens - promptSafetyTokens
 
-	events, unsubscribe := rt.Subscribe()
-	defer unsubscribe()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -88,6 +86,7 @@ func Run(ctx context.Context, rt seam.Runtime, opts Options) error {
 	}
 	done := make(chan error, 1)
 	var pending []seam.Event
+	cursor := rt.PollEvents(seam.EventQuery{}).Cursor
 	running := false
 	pendingBoundary := false
 
@@ -117,30 +116,45 @@ func Run(ctx context.Context, rt seam.Runtime, opts Options) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case event, ok := <-events:
-			if !ok {
-				return nil
-			}
+		default:
+		}
+
+		wait := 100
+		if running {
+			wait = 25
+		}
+		batch := rt.PollEvents(seam.EventQuery{After: cursor, WaitMilliseconds: wait})
+		cursor = batch.Cursor
+		for _, event := range batch.Events {
 			accumulate(event)
+		}
+		if batch.End {
+			return nil
+		}
+		if !running {
+			continue
+		}
+
+		select {
 		case inferErr := <-done:
-			// Events already waiting in the subscription arrived before this
-			// inference finished. Consume them while it is still marked running
-			// so all of their boundaries coalesce into the same follow-up.
-			draining := true
-			for draining {
-				select {
-				case event, ok := <-events:
-					if !ok {
-						return nil
-					}
+			// Drain events already visible at this cursor while inference is
+			// still marked running, so adjacent Seat boundaries coalesce.
+			for {
+				more := rt.PollEvents(seam.EventQuery{After: cursor})
+				cursor = more.Cursor
+				for _, event := range more.Events {
 					accumulate(event)
-				default:
-					draining = false
+				}
+				if more.End {
+					return nil
+				}
+				if len(more.Events) == 0 {
+					break
 				}
 			}
 			running = false
 			if inferErr != nil && runCtx.Err() == nil {
-				watcher.emitError(runCtx, inferErr)
+				watcher.emitError(inferErr)
 			}
 			if pendingBoundary && runCtx.Err() == nil {
 				batch := pending
@@ -148,6 +162,7 @@ func Run(ctx context.Context, rt seam.Runtime, opts Options) error {
 				pendingBoundary = false
 				start(batch)
 			}
+		default:
 		}
 	}
 }
@@ -443,8 +458,8 @@ func estimatePromptTokens(system string, messages []provider.Message, tools []pr
 	return (len(encoded)*4 + 6) / 7
 }
 
-func (w *watcher) emitError(ctx context.Context, err error) {
-	_, _ = w.rt.Do(ctx, seam.EmitStatusCommand{Kind: "intern", Text: err.Error()})
+func (w *watcher) emitError(err error) {
+	_, _ = w.rt.Do(seam.EmitStatusCommand{Kind: "intern", Text: err.Error()})
 }
 
 func toolDefinitions() []provider.Tool {
@@ -513,7 +528,7 @@ func (w *watcher) executeTool(ctx context.Context, name, raw string) (string, er
 		if question == "" {
 			return "", fmt.Errorf("question is required")
 		}
-		_, err := w.rt.Do(ctx, seam.SteerAgentCommand{AgentID: w.seatID, Message: "[intern] " + question})
+		_, err := w.rt.Do(seam.SteerAgentCommand{AgentID: w.seatID, Message: "[intern] " + question})
 		if err != nil {
 			return "", err
 		}

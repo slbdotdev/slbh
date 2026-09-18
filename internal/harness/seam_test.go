@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -26,12 +25,12 @@ func TestCommandNamesMatchDo(t *testing.T) {
 		if !ok {
 			t.Fatalf("enumerated command %q has no concrete value", name)
 		}
-		_, err := r.Do(context.Background(), command)
+		_, err := r.Do(command)
 		if err != nil && (strings.Contains(err.Error(), "unknown command") || strings.Contains(err.Error(), "unsupported command")) {
 			t.Fatalf("Do rejected enumerated %q as outside the command set: %v", name, err)
 		}
 	}
-	if _, err := r.Do(context.Background(), disguisedCommand{}); err == nil || !strings.Contains(err.Error(), seam.CommandSendPrompt) {
+	if _, err := r.Do(disguisedCommand{}); err == nil || !strings.Contains(err.Error(), seam.CommandSendPrompt) {
 		t.Fatalf("Do accepted an unregistered concrete command or failed to name it: %v", err)
 	}
 }
@@ -39,20 +38,22 @@ func TestCommandNamesMatchDo(t *testing.T) {
 func TestDoRejectsUnknownCommandByName(t *testing.T) {
 	r := testRuntime(t)
 	const name = "invented_command"
-	if _, err := r.Do(context.Background(), unknownCommand{name: name}); err == nil || !strings.Contains(err.Error(), name) {
+	if _, err := r.Do(unknownCommand{name: name}); err == nil || !strings.Contains(err.Error(), name) {
 		t.Fatalf("Do unknown command error = %v, want it to name %q", err, name)
 	}
 }
 
 func TestDoEmitsCommandEvent(t *testing.T) {
 	r := testRuntime(t)
-	if _, err := r.Do(context.Background(), seam.EmitStatusCommand{Kind: "status", Text: "ready"}); err != nil {
+	cursor := r.PollEvents(seam.EventQuery{}).Cursor
+	if _, err := r.Do(seam.EmitStatusCommand{Kind: "status", Text: "ready"}); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.After(5 * time.Second)
-	for {
-		select {
-		case event := <-r.Events():
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		batch := r.PollEvents(seam.EventQuery{After: cursor, WaitMilliseconds: 100})
+		cursor = batch.Cursor
+		for _, event := range batch.Events {
 			if event.Kind == "command" {
 				if event.Text != seam.CommandEmitStatus {
 					t.Fatalf("command event text = %q, want %q", event.Text, seam.CommandEmitStatus)
@@ -62,10 +63,9 @@ func TestDoEmitsCommandEvent(t *testing.T) {
 				}
 				return
 			}
-		case <-deadline:
-			t.Fatal("command event was not emitted")
 		}
 	}
+	t.Fatal("command event was not emitted")
 }
 
 func TestSeamQueriesReturnDeepCopies(t *testing.T) {

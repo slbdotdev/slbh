@@ -251,14 +251,14 @@ type blockedAfterDoRuntime struct {
 	release chan struct{}
 }
 
-func (r *blockedAfterDoRuntime) Do(ctx context.Context, command seam.Command) (seam.Reply, error) {
-	reply, err := r.Runtime.Do(ctx, command)
+func (r *blockedAfterDoRuntime) Do(command seam.Command) (seam.Reply, error) {
+	reply, err := r.Runtime.Do(command)
 	close(r.afterDo)
 	<-r.release
 	return reply, err
 }
 
-func TestRunReturnsOnClosedFullEventStream(t *testing.T) {
+func TestRunReturnsAfterShutdownWithAnUnreadEventBacklog(t *testing.T) {
 	rt := newRuntime(t, stalling{})
 	blocked := &blockedAfterDoRuntime{
 		Runtime: rt,
@@ -282,16 +282,8 @@ func TestRunReturnsOnClosedFullEventStream(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not send the prompt")
 	}
-	events := rt.Events()
-	for i := 0; i < cap(events); i++ {
-		_, _ = rt.Do(context.Background(), seam.EmitStatusCommand{Kind: "status", Text: "fill"})
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for len(events) < cap(events) && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if len(events) != cap(events) {
-		t.Fatalf("event buffer length = %d, want full capacity %d", len(events), cap(events))
+	for i := 0; i < 128; i++ {
+		_, _ = rt.Do(seam.EmitStatusCommand{Kind: "status", Text: "fill"})
 	}
 	if err := rt.Close(); err != nil {
 		t.Fatal(err)

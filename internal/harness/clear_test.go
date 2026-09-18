@@ -94,7 +94,7 @@ func waitForKind(t *testing.T, r *Runtime, kind string) {
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.Kind == kind {
 				return
 			}

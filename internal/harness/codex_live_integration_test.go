@@ -38,7 +38,7 @@ func TestLiveCodexLeafRoundTrip(t *testing.T) {
 	var answer string
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.AgentID == child.ID && event.Kind == "error" {
 				t.Fatal(event.Text)
 			}
@@ -82,7 +82,7 @@ func TestLiveCodexLeafBidirectionalSteer(t *testing.T) {
 	parentMessage := false
 	for {
 		select {
-		case event := <-r.Events():
+		case event := <-testEvents(r):
 			if event.AgentID == child.ID && event.Kind == "error" {
 				t.Fatal(event.Text)
 			}
