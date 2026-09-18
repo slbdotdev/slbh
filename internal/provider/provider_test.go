@@ -353,7 +353,7 @@ func TestPinnedContextWindowComesFromPolicy(t *testing.T) {
 
 	// Both spellings that address the plan route resolve to one key and so to
 	// one pin: that is what deriving the key in one place buys.
-	for _, model := range []string{"zai/glm-5.3-flash", "glm-5.3-flash", "  glm-5.3-flash  "} {
+	for _, model := range []string{"zai/glm-5.3-flash", "glm-5.3-flash", "  glm-5.3-flash  ", "zai/glm-5.3-flashx", "glm-5.3-flashx", "  glm-5.3-flashx  "} {
 		p := forModelHTTP(t, model, OpenRouterEndpoint, false, testPolicy())
 		window, ok := p.PinnedContextWindow()
 		if !ok || window != 1000000 {
@@ -389,6 +389,9 @@ func TestRouteKeyNormalizesEverySpellingOfARoute(t *testing.T) {
 		{"zai/glm-5.3-flash", "zai/glm-5.3-flash"},
 		{"glm-5.3-flash", "zai/glm-5.3-flash"},
 		{"  glm-5.3-flash  ", "zai/glm-5.3-flash"},
+		{"zai/glm-5.3-flashx", "zai/glm-5.3-flashx"},
+		{"glm-5.3-flashx", "zai/glm-5.3-flashx"},
+		{"  glm-5.3-flashx  ", "zai/glm-5.3-flashx"},
 		{"glm-5.3", "zai/glm-5.3"},
 		{LocalModelID, LocalModelID},
 		{localWireModelID, LocalModelID},
@@ -440,12 +443,15 @@ func TestRouteKeyAndWireModelAreInverse(t *testing.T) {
 	// route puts on the wire. The plan route sends the bare slug (fact 11),
 	// and OpenRouter sends its own namespaced spelling.
 	t.Setenv("ZAI_API_KEY", "test-key-not-a-credential")
-	p := forModelHTTP(t, "glm-5.3-flash", OpenRouterEndpoint, false, testPolicy())
-	if p.Route.Key != "zai/glm-5.3-flash" {
-		t.Fatalf("route key = %q, want zai/glm-5.3-flash", p.Route.Key)
-	}
-	if got := p.modelID(p.Route.Key); got != "glm-5.3-flash" {
-		t.Fatalf("plan wire model = %q, want glm-5.3-flash", got)
+	for _, model := range []string{"glm-5.3-flash", "glm-5.3-flashx"} {
+		p := forModelHTTP(t, model, OpenRouterEndpoint, false, testPolicy())
+		wantKey := "zai/" + model
+		if p.Route.Key != wantKey {
+			t.Fatalf("route key = %q, want %s", p.Route.Key, wantKey)
+		}
+		if got := p.modelID(p.Route.Key); got != model {
+			t.Fatalf("plan wire model = %q, want %s", got, model)
+		}
 	}
 	if got := (&HTTPProvider{Flavor: "openrouter"}).modelID("deepseek-v4-flash"); got != "deepseek/deepseek-v4-flash" {
 		t.Fatalf("openrouter wire model = %q, want deepseek/deepseek-v4-flash", got)

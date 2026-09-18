@@ -24,7 +24,46 @@ func anthropicPolicy() Policy {
 			ContextWindow:   1000000,
 			Effort:          EffortDescriptor{Field: "output_config.effort", Levels: identityLevels()},
 		},
+		"zai/glm-5.3-flashx": {
+			Endpoint:        "https://api.z.ai/api/anthropic/v1/messages",
+			Wire:            WireAnthropicMessages,
+			CatalogEndpoint: "https://api.z.ai/api/anthropic/v1/models",
+			ContextWindow:   1000000,
+			Effort:          EffortDescriptor{Field: "output_config.effort", Levels: identityLevels()},
+		},
 	}}
+}
+
+func TestFlashXUsesTheZAIPlanRoute(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "test-key-not-a-credential")
+	p := forModelHTTP(t, "glm-5.3-flashx", OpenRouterEndpoint, false, committedManagedPolicy(t))
+	if p.Route.Key != "zai/glm-5.3-flashx" || p.Flavor != "zai" {
+		t.Fatalf("resolved route = %#v", p.Route)
+	}
+	if p.Wire() != WireAnthropicMessages || p.Endpoint != "https://api.z.ai/api/anthropic/v1/messages" {
+		t.Fatalf("transport = wire %q endpoint %q", p.Wire(), p.Endpoint)
+	}
+	if got := p.modelID(p.Route.Key); got != "glm-5.3-flashx" {
+		t.Fatalf("wire model = %q, want glm-5.3-flashx", got)
+	}
+	if window, ok := p.PinnedContextWindow(); !ok || window != 1000000 {
+		t.Fatalf("context window = %d (ok=%v), want 1000000", window, ok)
+	}
+	payload, err := p.RequestPayload(Request{Model: "glm-5.3-flashx", Effort: "high", System: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["model"] != "glm-5.3-flashx" {
+		t.Fatalf("payload model = %v, want glm-5.3-flashx", body["model"])
+	}
+	outputConfig, ok := body["output_config"].(map[string]any)
+	if !ok || outputConfig["effort"] != "high" {
+		t.Fatalf("payload effort = %v, want output_config.effort=high", body["output_config"])
+	}
 }
 
 // sampleRequest is the one Request both wires are asked to encode, so the two

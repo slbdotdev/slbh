@@ -55,6 +55,11 @@ Provider routing is automatic:
 - Other models use `SLBH_ENDPOINT` with `OPENROUTER_API_KEY`. The endpoint
   defaults to the OpenRouter chat-completions endpoint.
 
+The synchronized Z.ai Coding Plan policy exposes both
+`zai/glm-5.3-flash` and `zai/glm-5.3-flashx` on the Anthropic Messages wire.
+FlashX is available when approved; it does not replace the Seat or Manager
+default.
+
 A matching native route takes precedence over the configured endpoint,
 including when the same model is also listed by OpenRouter. A custom
 OpenAI-compatible endpoint uses `OPENROUTER_API_KEY` unless a native route
@@ -271,13 +276,13 @@ request and compacts history at 70% of the active model's context window. That
 window is resolved in three steps: a pinned window for the route if it has one,
 otherwise the model's discovered context length, otherwise a 128,000-token
 fallback. A route is pinned when its provider catalog cannot report a length —
-`zai/glm-5.3-flash` is pinned at 1,000,000 tokens, measured, because neither
-Z.ai catalog publishes one and the fallback understates it eightfold. A pin
-therefore beats discovery as well as the fallback. The pin comes from the
-routing policy above, and from the resolved provider instance rather than from
-a lookup by model name: only the instance knows which endpoint the request will
-really reach, so a name-keyed pin could size the window for a route this
-request is not taking.
+`zai/glm-5.3-flash` and `zai/glm-5.3-flashx` are pinned at 1,000,000 tokens by
+the synchronized policy because neither Z.ai catalog publishes a context
+length. A pin therefore beats discovery as well as the fallback. The pin comes
+from the routing policy above, and from the resolved provider instance rather
+than from a lookup by model name: only the instance knows which endpoint the
+request will really reach, so a name-keyed pin could size the window for a
+route this request is not taking.
 Automatic compaction keeps the most recent 24 messages and writes a durable
 marker; `/compact` does the same on demand. Requests stream responses and
 include tool definitions, reasoning options where supported, usage, and a

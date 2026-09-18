@@ -53,11 +53,12 @@ func testPolicy() Policy {
 	orr := openai(OpenRouterEndpoint, 0)
 	orr.Provider = &ProviderPosture{ZDR: BoolPtr(true), DataCollection: "deny", Sort: "throughput"}
 	return Policy{Version: PolicyVersion, Routes: map[string]RoutePolicy{
-		"zai/glm-5.3-flash": openai("https://api.z.ai/api/coding/paas/v4/chat/completions", 1000000),
-		"zai/glm-5.3":       openai("https://api.z.ai/api/coding/paas/v4/chat/completions", 1000000),
-		"deepseek-v4-flash": openai("https://api.deepseek.com/chat/completions", 0),
-		LocalModelID:        openai("http://fractal.wyvern-temperature.ts.net:11434/v1/chat/completions", 0),
-		"vendor/model":      orr,
+		"zai/glm-5.3-flash":  openai("https://api.z.ai/api/coding/paas/v4/chat/completions", 1000000),
+		"zai/glm-5.3-flashx": openai("https://api.z.ai/api/coding/paas/v4/chat/completions", 1000000),
+		"zai/glm-5.3":        openai("https://api.z.ai/api/coding/paas/v4/chat/completions", 1000000),
+		"deepseek-v4-flash":  openai("https://api.deepseek.com/chat/completions", 0),
+		LocalModelID:         openai("http://fractal.wyvern-temperature.ts.net:11434/v1/chat/completions", 0),
+		"vendor/model":       orr,
 	}}
 }
 
@@ -333,12 +334,14 @@ func TestCommittedPolicyArtifactsValidate(t *testing.T) {
 	policy := committedManagedPolicy(t)
 	// The managed shape is the one phase 2 is required for: it routes the plan
 	// to anthropic-messages with output_config.effort and a measured pin.
-	plan := policy.Routes["zai/glm-5.3-flash"]
-	if plan.Wire != WireAnthropicMessages || plan.Effort.Field != "output_config.effort" || plan.ContextWindow != 1000000 {
-		t.Fatalf("managed plan route = %#v", plan)
-	}
-	if plan.CatalogEndpoint == "" {
-		t.Fatal("managed plan route has no catalogEndpoint; modelsEndpoint cannot derive it on that wire")
+	for _, key := range []string{"zai/glm-5.3-flash", "zai/glm-5.3-flashx"} {
+		plan := policy.Routes[key]
+		if plan.Wire != WireAnthropicMessages || plan.Effort.Field != "output_config.effort" || plan.ContextWindow != 1000000 {
+			t.Fatalf("managed plan route %q = %#v", key, plan)
+		}
+		if plan.CatalogEndpoint == "" {
+			t.Fatalf("managed plan route %q has no catalogEndpoint; modelsEndpoint cannot derive it on that wire", key)
+		}
 	}
 	orr := policy.Routes["z-ai/glm-5.3-flash"]
 	if err := orr.Provider.Complete(); err != nil || !*orr.Provider.ZDR || orr.Provider.DataCollection != "deny" {

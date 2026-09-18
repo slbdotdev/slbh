@@ -52,8 +52,9 @@ type catalogSpec struct {
 // impractical.
 //
 // Routes are grouped by provider family, because several route keys share one
-// catalog — `zai/glm-5.3-flash` and `zai/glm-5.3` are two routes and one
-// endpoint — and fetching it twice would be two round trips for one answer.
+// catalog — `zai/glm-5.3-flash`, `zai/glm-5.3-flashx` and `zai/glm-5.3` are
+// three routes and one endpoint — and fetching it three times would be three
+// round trips for one answer.
 func DiscoverCatalog(ctx context.Context, policy Policy) ([]Catalog, error) {
 	catalogs := []Catalog{localCatalog(policy)}
 
