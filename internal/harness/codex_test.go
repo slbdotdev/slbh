@@ -81,7 +81,7 @@ func fakeCodexLeafWithEffort(t *testing.T, r *Runtime, parent *Agent, effort str
 		_ = client.Close()
 		return nil
 	})
-	leaf := &codexLeaf{agent: agent, runtime: r, rpc: rpc, answers: make(map[string]string), completed: make(map[string]bool), wake: make(chan struct{}, 1), done: make(chan struct{})}
+	leaf := &codexLeaf{agent: agent, runtime: r, rpc: rpc, answers: make(map[string]string), finals: make(map[string]bool), completed: make(map[string]bool), wake: make(chan struct{}, 1), done: make(chan struct{})}
 	agent.codexMu.Lock()
 	agent.codex = leaf
 	agent.codexMu.Unlock()
@@ -489,6 +489,55 @@ func TestCodexLeafSteerRaceIsRequeuedAfterTurnCompletion(t *testing.T) {
 			}
 		case <-deadline:
 			t.Fatal("requeued turn did not finish")
+		}
+	}
+}
+
+// TestCodexLeafReturnsTheFinalAnswerNotTheStream replays the wire shape
+// codex-cli 0.155.0's app-server sends, read on 2026-09-18: item/completed
+// carries threadId and turnId beside the item rather than inside it, and a
+// turn can complete a commentary message before its final answer. The leaf
+// used to read turnId from inside the item, file the completed text under an
+// empty key, and hand the parent the deltas of both messages run together.
+func TestCodexLeafReturnsTheFinalAnswerNotTheStream(t *testing.T) {
+	r, err := New(config.Config{Home: t.TempDir()}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	manager := launchTestManager(t, r)
+	child, server := fakeCodexLeaf(t, r, manager)
+	reader, writer := bufio.NewReader(server), bufio.NewWriter(server)
+	if err := child.Send("brief"); err != nil {
+		t.Fatal(err)
+	}
+	initialize := readCodexWire(t, reader)
+	respondCodex(t, writer, initialize, map[string]any{})
+	_ = readCodexWire(t, reader)
+	thread := readCodexWire(t, reader)
+	respondCodex(t, writer, thread, map[string]any{"thread": map[string]any{"id": "t"}})
+	start := readCodexWire(t, reader)
+	respondCodex(t, writer, start, map[string]any{"turn": map[string]any{"id": "u", "status": "inProgress"}})
+	writeCodexWire(t, writer, map[string]any{"method": "turn/started", "params": map[string]any{"threadId": "t", "turn": map[string]any{"id": "u"}}})
+	message := func(item, phase, text string) {
+		writeCodexWire(t, writer, map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": "t", "turnId": "u", "itemId": item, "delta": text}})
+		writeCodexWire(t, writer, map[string]any{"method": "item/completed", "params": map[string]any{"threadId": "t", "turnId": "u", "item": map[string]any{"type": "agentMessage", "id": item, "phase": phase, "text": text}}})
+	}
+	message("c", "commentary", "Checking the file first.")
+	message("f", "final_answer", "delta624 0")
+	writeCodexWire(t, writer, map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "t", "turn": map[string]any{"id": "u", "status": "completed"}}})
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case event := <-testEvents(r):
+			if event.AgentID == child.ID && event.Kind == "turn_done" {
+				if event.Text != "delta624 0" {
+					t.Fatalf("turn_done text = %q, want only the final answer", event.Text)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("turn did not finish")
 		}
 	}
 }

@@ -204,6 +204,7 @@ type codexLeaf struct {
 	activeTurn     string
 	pending        []string
 	answers        map[string]string
+	finals         map[string]bool
 	completed      map[string]bool
 	wake           chan struct{}
 	done           chan struct{}
@@ -238,7 +239,7 @@ func (a *Agent) startCodex(command string) error {
 		_ = stdin.Close()
 		return stdout.Close()
 	})
-	leaf := &codexLeaf{agent: a, runtime: a.runtime, rpc: rpc, cmd: cmd, cancel: cancel, answers: make(map[string]string), completed: make(map[string]bool), wake: make(chan struct{}, 1), done: make(chan struct{})}
+	leaf := &codexLeaf{agent: a, runtime: a.runtime, rpc: rpc, cmd: cmd, cancel: cancel, answers: make(map[string]string), finals: make(map[string]bool), completed: make(map[string]bool), wake: make(chan struct{}, 1), done: make(chan struct{})}
 	a.codexMu.Lock()
 	a.codex = leaf
 	a.codexMu.Unlock()
@@ -419,6 +420,7 @@ func (c *codexLeaf) reset(ctx context.Context) {
 	c.threadID = ""
 	c.activeTurn = ""
 	c.answers = make(map[string]string)
+	c.finals = make(map[string]bool)
 	c.completed = make(map[string]bool)
 	c.mu.Unlock()
 	if oldThread != "" && oldTurn != "" {
@@ -647,23 +649,37 @@ func (c *codexLeaf) handle(message codexWire) {
 			return
 		}
 		c.mu.Lock()
-		c.answers[params.TurnID] += params.Delta
+		if !c.finals[params.TurnID] {
+			c.answers[params.TurnID] += params.Delta
+		}
 		c.mu.Unlock()
 		c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "assistant", Text: params.Delta, Metadata: map[string]any{"thread": params.ThreadID, "turn": params.TurnID, "item": params.ItemID, "harness": "codex"}})
 	case "item/completed":
+		// The thread and turn ride on the notification, not inside the item.
+		// A turn can complete several agent messages — commentary while it
+		// works, then its final answer — and the streamed deltas run them
+		// together, so the completed text replaces them: the final answer
+		// wins, and commentary stands only until one arrives.
 		var params struct {
-			Item map[string]json.RawMessage `json:"item"`
+			ThreadID string                     `json:"threadId"`
+			TurnID   string                     `json:"turnId"`
+			Item     map[string]json.RawMessage `json:"item"`
 		}
-		if json.Unmarshal(message.Params, &params) != nil {
+		if json.Unmarshal(message.Params, &params) != nil || params.ThreadID != c.threadID {
 			return
 		}
-		var typ, turnID, text string
+		var typ, phase, text string
 		_ = json.Unmarshal(params.Item["type"], &typ)
+		_ = json.Unmarshal(params.Item["phase"], &phase)
 		_ = json.Unmarshal(params.Item["text"], &text)
-		_ = json.Unmarshal(params.Item["turnId"], &turnID)
 		if typ == "agentMessage" && text != "" {
 			c.mu.Lock()
-			c.answers[turnID] = text
+			if phase == "final_answer" || !c.finals[params.TurnID] {
+				c.answers[params.TurnID] = text
+			}
+			if phase == "final_answer" {
+				c.finals[params.TurnID] = true
+			}
 			c.mu.Unlock()
 		}
 	case "turn/completed":
