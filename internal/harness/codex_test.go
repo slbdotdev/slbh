@@ -54,8 +54,12 @@ func runCodexTestHelper() {
 }
 
 func fakeCodexLeaf(t *testing.T, r *Runtime, parent *Agent) (*Agent, net.Conn) {
+	return fakeCodexLeafWithEffort(t, r, parent, "high")
+}
+
+func fakeCodexLeafWithEffort(t *testing.T, r *Runtime, parent *Agent, effort string) (*Agent, net.Conn) {
 	t.Helper()
-	agent, err := r.newAgent("codex", parent.ID, 1, "gpt-test", "high")
+	agent, err := r.newAgent("codex", parent.ID, 1, "gpt-test", effort)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +80,49 @@ func fakeCodexLeaf(t *testing.T, r *Runtime, parent *Agent) (*Agent, net.Conn) {
 		_ = server.Close()
 	})
 	return agent, server
+}
+
+func TestCodexLeafTurnStartEffort(t *testing.T) {
+	tests := []struct {
+		name       string
+		effort     string
+		want       string
+		wantEffort bool
+	}{
+		{name: "mapped", effort: "max", want: "max", wantEffort: true},
+		{name: "empty", effort: "", wantEffort: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r, err := New(config.Config{Home: t.TempDir()}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			child, server := fakeCodexLeafWithEffort(t, r, r.Seat(), test.effort)
+			reader, writer := bufio.NewReader(server), bufio.NewWriter(server)
+			if err := child.Send("brief"); err != nil {
+				t.Fatal(err)
+			}
+			initialize := readCodexWire(t, reader)
+			respondCodex(t, writer, initialize, map[string]any{})
+			_ = readCodexWire(t, reader) // initialized
+			thread := readCodexWire(t, reader)
+			respondCodex(t, writer, thread, map[string]any{"thread": map[string]any{"id": "effort-thread"}})
+			turn := readCodexWire(t, reader)
+			if turn.Method != "turn/start" {
+				t.Fatalf("request = %q, want turn/start", turn.Method)
+			}
+			var params map[string]any
+			if err := json.Unmarshal(turn.Params, &params); err != nil {
+				t.Fatal(err)
+			}
+			got, present := params["effort"]
+			if present != test.wantEffort || (present && got != test.want) {
+				t.Fatalf("turn/start effort = %#v (present %v), want %q (present %v)", got, present, test.want, test.wantEffort)
+			}
+		})
+	}
 }
 
 func readCodexWire(t *testing.T, reader *bufio.Reader) codexWire {

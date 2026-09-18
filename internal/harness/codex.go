@@ -24,6 +24,13 @@ const codexParentTool = "slbh_message_parent"
 
 const codexCallTimeout = 30 * time.Second
 
+// codexReasoningEffort passes slbh's effort through unchanged: every slbh
+// level is one the app-server accepts for the roster's Codex models, and its
+// ReasoningEffort is an open string. Empty means inherit Codex's default.
+func codexReasoningEffort(level string) string {
+	return strings.TrimSpace(level)
+}
+
 type codexWire struct {
 	ID     json.RawMessage `json:"id,omitempty"`
 	Method string          `json:"method,omitempty"`
@@ -534,7 +541,14 @@ func (c *codexLeaf) pump(ctx context.Context) {
 		if turn != "" {
 			result, err = c.call(ctx, "turn/steer", map[string]any{"threadId": c.threadID, "input": []any{map[string]any{"type": "text", "text": message}}, "expectedTurnId": turn})
 		} else {
-			result, err = c.call(ctx, "turn/start", map[string]any{"threadId": c.threadID, "input": []any{map[string]any{"type": "text", "text": message}}})
+			params := map[string]any{"threadId": c.threadID, "input": []any{map[string]any{"type": "text", "text": message}}}
+			c.agent.mu.RLock()
+			effort := codexReasoningEffort(c.agent.Effort)
+			c.agent.mu.RUnlock()
+			if effort != "" {
+				params["effort"] = effort
+			}
+			result, err = c.call(ctx, "turn/start", params)
 		}
 		if err != nil {
 			c.mu.Lock()
