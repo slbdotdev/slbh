@@ -51,14 +51,15 @@ func (s PolicySource) Describe() string {
 }
 
 type Config struct {
-	Home           string
-	SeatModel      string
-	SeatEffort     string
-	InternModel    string
-	SubagentModel  string
-	LeafModel      string
-	SubagentEffort string
-	Endpoint       string
+	Home             string
+	SecretarySession string
+	SeatModel        string
+	SeatEffort       string
+	InternModel      string
+	SubagentModel    string
+	LeafModel        string
+	SubagentEffort   string
+	Endpoint         string
 	// EndpointExplicit records that Endpoint came from SLBH_ENDPOINT rather
 	// than from the default. Routing needs the provenance, not just the value:
 	// an endpoint the operator set deliberately overrides a native route,
@@ -96,7 +97,8 @@ func Load() Config {
 		}
 	}
 	cfg := Config{
-		Home: home,
+		Home:             home,
+		SecretarySession: getenv("SLBH_SECRETARY_SESSION", "secretary"),
 		// The seat default is `high`, and deliberately not `xhigh`. Two
 		// separate reasons, either of which is enough.
 		//
@@ -125,6 +127,9 @@ func Load() Config {
 	}
 	cfg.EndpointExplicit = strings.TrimSpace(os.Getenv("SLBH_ENDPOINT")) != ""
 	if persisted, ok := loadFile(home); ok {
+		if os.Getenv("SLBH_SECRETARY_SESSION") == "" && persisted.SecretarySession != "" {
+			cfg.SecretarySession = persisted.SecretarySession
+		}
 		if os.Getenv("SLBH_MODEL") == "" {
 			seatModel := persisted.SeatModel
 			if seatModel == "" {
@@ -236,15 +241,16 @@ func (c *Config) ApplyLocalPolicy(policy provider.Policy) error {
 }
 
 type fileConfig struct {
-	SeatModel      string   `json:"seat_model,omitempty"`
-	SeatEffort     string   `json:"seat_effort,omitempty"`
-	InternModel    string   `json:"intern_model,omitempty"`
-	RootModel      string   `json:"root_model,omitempty"`
-	RootEffort     string   `json:"root_effort,omitempty"`
-	SubagentModel  string   `json:"subagent_model,omitempty"`
-	LeafModel      string   `json:"leaf_model,omitempty"`
-	SubagentEffort string   `json:"subagent_effort,omitempty"`
-	ApprovedModels []string `json:"approved_models"`
+	SecretarySession string   `json:"secretary_session,omitempty"`
+	SeatModel        string   `json:"seat_model,omitempty"`
+	SeatEffort       string   `json:"seat_effort,omitempty"`
+	InternModel      string   `json:"intern_model,omitempty"`
+	RootModel        string   `json:"root_model,omitempty"`
+	RootEffort       string   `json:"root_effort,omitempty"`
+	SubagentModel    string   `json:"subagent_model,omitempty"`
+	LeafModel        string   `json:"leaf_model,omitempty"`
+	SubagentEffort   string   `json:"subagent_effort,omitempty"`
+	ApprovedModels   []string `json:"approved_models"`
 	// LocalPolicy is the app-owned half of the split. slbh writes it here and
 	// never into the managed policy.json, which it only ever reads.
 	LocalPolicy *provider.Policy `json:"local_policy,omitempty"`
@@ -261,7 +267,8 @@ func (c Config) Save() error {
 	// /model save would drop the policy the user authored to make an unmanaged
 	// host work, and the next launch would refuse every route.
 	payload, err := json.MarshalIndent(fileConfig{
-		SeatModel: c.SeatModel, SeatEffort: c.SeatEffort,
+		SecretarySession: c.SecretarySession,
+		SeatModel:        c.SeatModel, SeatEffort: c.SeatEffort,
 		InternModel:   c.InternModel,
 		SubagentModel: c.SubagentModel, LeafModel: c.LeafModel, SubagentEffort: c.SubagentEffort,
 		ApprovedModels: unique(c.ApprovedModels),
