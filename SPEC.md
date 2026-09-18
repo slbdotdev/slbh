@@ -103,7 +103,13 @@ question when it believes the Seat is making a mistake.
 - It is a front end on the runtime, not an agent in the Seat's tree. The
   depth cap does not apply to it and it launches nothing.
 - Its tools are **read-only**, supplied by slbh as a harness feature rather
-  than assembled per run.
+  than assembled per run: `glob`, `grep` and the file reads, plus the
+  runtime's own state — agent snapshots, job states, the event stream.
+- **Nothing executes.** There is no shell, whitelisted or otherwise. A
+  restricted shell is a convention wearing a mechanism's clothes on an
+  unsandboxed fleet, and the Intern's one safety property is that it cannot
+  act. Reaching the runtime's state directly is both better evidence than a
+  command and no capability at all.
 - It asks. It does not instruct, direct, correct, or assert. It has no
   authority, which is the property being bought and not a limitation.
 - Its questions are not rationed and the Seat's answers are not bounded.
@@ -223,7 +229,6 @@ Measured at `ce9fe49` on `main`. `internal/harness` is 7,713 lines;
 ## 12. Open
 
 1. Whether a queued message starts a turn in an idle Codex session.
-2. The read-only tool set the Intern gets, named tool by tool.
-3. Whether `Jobs()` and `Seat()` become data-returning or command-shaped.
-4. Whether the org inbox lives in `$SLBH_HOME` or in a path the Secretary
+2. Whether `Jobs()` and `Seat()` become data-returning or command-shaped.
+3. Whether the org inbox lives in `$SLBH_HOME` or in a path the Secretary
    can also reach directly.
