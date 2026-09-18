@@ -55,27 +55,29 @@ type Runtime struct {
 	// pending holds a session opened by Clear while the agent was still
 	// mid-turn. It becomes current at that turn's end, so the turn that issued
 	// a request keeps its own transcript through its last event.
-	pending      map[string]*agentSession
-	sessions     []*agentSession
-	redactor     *secretRedactor
-	events       chan seam.Event
-	eventMu      sync.Mutex
-	eventQueue   []queuedEvent
-	eventWake    chan struct{}
-	eventStop    chan struct{}
-	eventDone    chan struct{}
-	eventsClosed bool
-	provider     func(model string) (provider.Provider, error)
-	codexCommand string
-	catalog      []provider.Catalog
-	closeOnce    sync.Once
+	pending       map[string]*agentSession
+	sessions      []*agentSession
+	redactor      *secretRedactor
+	events        chan seam.Event
+	eventMu       sync.Mutex
+	eventQueue    []queuedEvent
+	eventWake     chan struct{}
+	eventStop     chan struct{}
+	eventDone     chan struct{}
+	eventsClosed  bool
+	provider      func(model string) (provider.Provider, error)
+	codexCommand  string
+	claudeCommand string
+	catalog       []provider.Catalog
+	closeOnce     sync.Once
 }
 
 type Options struct {
-	Config       config.Config
-	Provider     func(model string) (provider.Provider, error)
-	Events       chan seam.Event
-	CodexCommand string
+	Config        config.Config
+	Provider      func(model string) (provider.Provider, error)
+	Events        chan seam.Event
+	CodexCommand  string
+	ClaudeCommand string
 }
 
 var _ seam.Runtime = (*Runtime)(nil)
@@ -91,7 +93,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), events: options.Events, eventWake: make(chan struct{}, 1), eventStop: make(chan struct{}), eventDone: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand}
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), events: options.Events, eventWake: make(chan struct{}, 1), eventStop: make(chan struct{}), eventDone: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand}
 	if r.events == nil {
 		r.events = make(chan seam.Event, 1024)
 	}
@@ -277,7 +279,7 @@ func (r *Runtime) ModelGuidance() string {
 		branches = append(branches, "no provider catalog loaded; use the configured default or honor an explicit user model request")
 	}
 	defaults := fmt.Sprintf("defaults are seat=%q, subagent=%q, leaf=%q", cfg.SeatModel, cfg.SubagentModel, cfg.LeafModel)
-	return "Model guidance: approved models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". Use the configured subagent default for level-one children and the leaf default for level-two children when no model is requested. A model explicitly requested by the user may override the approved list; do not invent model IDs. Codex leaves use the headless Codex app-server and ChatGPT model slugs, independent of the native approval list. To launch one from a native seat or level-one agent, set harness to \"codex\" and pass the exact ChatGPT model slug in model; never substitute a native default for a Codex leaf."
+	return "Model guidance: approved models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". Use the configured subagent default for level-one children and the leaf default for level-two children when no model is requested. A model explicitly requested by the user may override the approved list; do not invent model IDs. Codex leaves use the headless Codex app-server and ChatGPT model slugs, independent of the native approval list. To launch one from a native seat or level-one agent, set harness to \"codex\" and pass the exact ChatGPT model slug in model; never substitute a native default for a Codex leaf. Claude Code leaves use the host's claude.ai login. Set harness to \"claude_code\" and pass the exact Claude model slug in model; never substitute a native default or provider route for a Claude Code leaf."
 }
 func (r *Runtime) seat() *Agent {
 	r.mu.RLock()
@@ -345,11 +347,11 @@ func (r *Runtime) TranscriptPath(agentID string) (string, error) {
 	return session.path, nil
 }
 
-func (r *Runtime) LaunchSubagent(parentID, title, brief string) (*Agent, error) {
-	return r.LaunchSubagentSpec(parentID, LaunchSpec{Title: title, Brief: brief})
+func (r *Runtime) launchSubagent(parentID, title, brief string) (*Agent, error) {
+	return r.launchSubagentSpec(parentID, LaunchSpec{Title: title, Brief: brief})
 }
 
-func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, error) {
+func (r *Runtime) launchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, error) {
 	r.mu.RLock()
 	parent, ok := r.agents[parentID]
 	r.mu.RUnlock()
@@ -365,7 +367,7 @@ func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	if spec.Title == "" {
 		return nil, fmt.Errorf("subagent title is required")
 	}
-	if spec.Harness != "" && spec.Harness != "native" && spec.Harness != "codex" {
+	if spec.Harness != "" && spec.Harness != "native" && spec.Harness != "codex" && spec.Harness != "claude_code" {
 		return nil, fmt.Errorf("unsupported harness %q", spec.Harness)
 	}
 	model, effort := strings.TrimSpace(spec.Model), strings.TrimSpace(spec.Effort)
@@ -375,6 +377,9 @@ func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	if model == "" {
 		if spec.Harness == "codex" {
 			return nil, fmt.Errorf("Codex leaves require an explicit ChatGPT model in launch_subagent.model")
+		}
+		if spec.Harness == "claude_code" {
+			return nil, fmt.Errorf("Claude Code leaves require an explicit Claude model in launch_subagent.model")
 		}
 		model = cfg.SubagentModel
 		if parent.Depth >= 1 && cfg.LeafModel != "" {
@@ -413,6 +418,11 @@ func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	agent.WorkDir = workingDir
 	if agent.Harness == "codex" {
 		if err := agent.startCodex(r.codexCommand); err != nil {
+			r.discardAgent(agent.ID)
+			return nil, err
+		}
+	} else if agent.Harness == "claude_code" {
+		if err := agent.startClaude(r.claudeCommand); err != nil {
 			r.discardAgent(agent.ID)
 			return nil, err
 		}
@@ -544,14 +554,16 @@ func (r *Runtime) clear(agentID string) error {
 	// file would open mid-answer to a question it does not contain. The swap
 	// therefore waits for the turn boundary; an idle agent has no turn in
 	// flight, so for it the boundary is now.
-	// Both backends defer. An earlier version excepted Codex on the grounds
+	// Native and Codex defer. An earlier version excepted Codex on the grounds
 	// that its clear interrupts the turn, but clear() only sets `resetting` and
 	// signals `wake`: the turn/interrupt RPC happens later, in reset(), when
 	// the leaf's run loop next services that signal. In the gap the
 	// app-server's already-queued deltas still pass the threadID guard and
 	// would land in the new transcript — the very defect this defers to avoid.
-	// reset() promotes explicitly once the interrupt has returned.
-	idle := agent.codexBackend() == nil && agent.Snapshot().Status != "thinking"
+	// reset() promotes explicitly once the interrupt has returned. Claude Code
+	// clear synchronously stops its old stream, promotes at that boundary, and
+	// starts a fresh process with fresh conversation history.
+	idle := agent.codexBackend() == nil && agent.claudeBackend() == nil && agent.Snapshot().Status != "thinking"
 	r.mu.Lock()
 	if superseded, ok := r.pending[agentID]; ok {
 		_ = superseded.log.Close()

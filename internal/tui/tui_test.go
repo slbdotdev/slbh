@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,36 @@ import (
 type quietProvider struct{}
 
 func (quietProvider) Stream(context.Context, provider.Request, provider.StreamSink) error { return nil }
+
+func launchTestSubagent(t *testing.T, runtime *harness.Runtime, title string) seam.AgentSnapshot {
+	t.Helper()
+	input, err := json.Marshal(map[string]string{"title": title, "brief": ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := runtime.ExecuteTool(seatID(runtime), "launch_subagent", string(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, agent := range runtime.Agents() {
+		if agent.ID == id {
+			return agent
+		}
+	}
+	t.Fatalf("launch_subagent returned unknown agent %q", id)
+	return seam.AgentSnapshot{}
+}
+
+func endTestSubagent(t *testing.T, runtime *harness.Runtime, childID string) {
+	t.Helper()
+	input, err := json.Marshal(map[string]string{"agent_id": childID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.ExecuteTool(seatID(runtime), "end_subagent", string(input)); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
@@ -75,10 +106,7 @@ func TestAgentPanelKeepsAllAgentsInsideTerminal(t *testing.T) {
 	m := New(runtime)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = updated.(Model)
-	child, err := runtime.LaunchSubagent(seatID(runtime), "child", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	child := launchTestSubagent(t, runtime, "child")
 	updated, _ = m.Update(eventMsg(seam.Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "status", Text: "subagent launched"}))
 	m = updated.(Model)
 
@@ -175,19 +203,14 @@ func TestEndedSubagentLeavesActivePanelButKeepsTranscript(t *testing.T) {
 	m := New(runtime)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = updated.(Model)
-	child, err := runtime.LaunchSubagent(seatID(runtime), "child", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	child := launchTestSubagent(t, runtime, "child")
 	updated, _ = m.Update(eventMsg(seam.Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "status", Text: "subagent launched"}))
 	m = updated.(Model)
 	m.viewAgentID = child.ID
 	m.focusAgents = true
 	m.selected = 1
 
-	if err := runtime.EndSubagent(seatID(runtime), child.ID); err != nil {
-		t.Fatal(err)
-	}
+	endTestSubagent(t, runtime, child.ID)
 	updated, _ = m.Update(eventMsg(seam.Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "status", Text: "stopped"}))
 	m = updated.(Model)
 

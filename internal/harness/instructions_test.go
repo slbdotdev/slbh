@@ -62,7 +62,7 @@ func agentAtDepth(t *testing.T, r *Runtime, depth int) *Agent {
 	t.Helper()
 	agent := r.seat()
 	for i := 0; i < depth; i++ {
-		child, err := r.LaunchSubagent(agent.ID, "child-agent-here", "")
+		child, err := r.launchSubagent(agent.ID, "child-agent-here", "")
 		if err != nil {
 			t.Fatal(err)
 		}

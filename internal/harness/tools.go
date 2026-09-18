@@ -43,10 +43,10 @@ func ToolDefinitions() []provider.Tool {
 		{Name: "read_job", Description: "Read current stdout and stderr for a job.", Parameters: stringArg("job_id")},
 		{Name: "kill_job", Description: "Kill a job owned by the calling agent.", Parameters: stringArg("job_id")},
 		{Name: "list_subagents", Description: "List this runtime's agent tree.", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
-		{Name: "launch_subagent", Description: "Launch a child agent up to depth two; returns immediately. The parent chooses a relevant title made of three words joined by hyphens (for example inspect-api-cache); this is guidance only and is not enforced. Omit model for a native child to use its configured default. For a Codex leaf, set harness to codex and pass the exact ChatGPT model slug in model; Codex does not use the native approval list. Honor an explicit user model request. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.", Parameters: map[string]any{"type": "object", "properties": map[string]any{
+		{Name: "launch_subagent", Description: "Launch a child agent up to depth two; returns immediately. The parent chooses a relevant title made of three words joined by hyphens (for example inspect-api-cache); this is guidance only and is not enforced. Omit model for a native child to use its configured default. For a Codex leaf, set harness to codex and pass the exact ChatGPT model slug in model. For an Opus leaf, set harness to claude_code and pass the exact Claude model slug in model. Native harness leaves alone use native defaults. Honor an explicit user model request. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.", Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"title":              map[string]any{"type": "string", "description": "A relevant three-word dashed title chosen by the parent, such as inspect-api-cache. Guidance only; not enforced."},
-			"harness":            map[string]any{"type": "string", "enum": []string{"native", "codex"}, "description": "Harness for the child. Omit for native; use codex for a headless Codex ChatGPT leaf."},
-			"model":              map[string]any{"type": "string", "description": "Model ID. For harness codex, pass the exact ChatGPT model slug (for example gpt-5.6-luna); it may be any model available to the Codex account."},
+			"harness":            map[string]any{"type": "string", "enum": []string{"native", "codex", "claude_code"}, "description": "Harness for the child. Omit for native; use codex for a headless Codex ChatGPT leaf or claude_code for a headless Claude Code leaf."},
+			"model":              map[string]any{"type": "string", "description": "Model ID. For codex or claude_code, pass the exact model slug available to that harness; do not use a native default."},
 			"effort":             map[string]any{"type": "string"},
 			"brief":              map[string]any{"type": "string"},
 			"warn_after_seconds": map[string]any{"type": "integer"},
@@ -145,7 +145,7 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 	case "list_subagents":
 		return jsonString(r.Agents())
 	case "launch_subagent":
-		child, err := r.LaunchSubagentSpec(agentID, LaunchSpec{Title: value(a.Values, "title"), Harness: value(a.Values, "harness"), Model: value(a.Values, "model"), Effort: value(a.Values, "effort"), Brief: value(a.Values, "brief"), WarnAfterSeconds: intValue(a.Values, "warn_after_seconds"), WorkingDir: value(a.Values, "working_dir")})
+		child, err := r.launchSubagentSpec(agentID, LaunchSpec{Title: value(a.Values, "title"), Harness: value(a.Values, "harness"), Model: value(a.Values, "model"), Effort: value(a.Values, "effort"), Brief: value(a.Values, "brief"), WarnAfterSeconds: intValue(a.Values, "warn_after_seconds"), WorkingDir: value(a.Values, "working_dir")})
 		if err != nil {
 			return "", err
 		}
@@ -168,7 +168,7 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 		}
 		return "accepted for delivery at the next API/tool call boundary; idle recipients wake immediately", nil
 	case "end_subagent":
-		if err := r.EndSubagent(agentID, value(a.Values, "agent_id")); err != nil {
+		if err := r.endSubagent(agentID, value(a.Values, "agent_id")); err != nil {
 			return "", err
 		}
 		return "stopped", nil
@@ -177,7 +177,7 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 	}
 }
 
-func (r *Runtime) EndSubagent(requester, target string) error {
+func (r *Runtime) endSubagent(requester, target string) error {
 	r.mu.RLock()
 	child, ok := r.agents[target]
 	requesterAgent, requesterOK := r.agents[requester]

@@ -58,6 +58,8 @@ type Agent struct {
 	historyEpoch  uint64
 	codexMu       sync.RWMutex
 	codex         *codexLeaf
+	claudeMu      sync.RWMutex
+	claude        *claudeLeaf
 }
 
 func newAgent(runtime *Runtime, agentID, title, parentID string, depth int, model, effort string) *Agent {
@@ -78,6 +80,9 @@ func (a *Agent) Send(prompt string) error {
 	if codex := a.codexBackend(); codex != nil {
 		return codex.send(prompt, "user")
 	}
+	if claude := a.claudeBackend(); claude != nil {
+		return claude.send(prompt, "user")
+	}
 	return a.deliver(agentMessage{prompt: prompt, kind: "user", text: prompt})
 }
 
@@ -89,6 +94,9 @@ func (a *Agent) Steer(message string) error {
 	}
 	if codex := a.codexBackend(); codex != nil {
 		return codex.send(message, "steer")
+	}
+	if claude := a.claudeBackend(); claude != nil {
+		return claude.send(message, "steer")
 	}
 	return a.deliver(agentMessage{prompt: "[steer] " + message, kind: "steer", text: message})
 }
@@ -105,6 +113,9 @@ func (a *Agent) steerFrom(sender *Agent, message string) error {
 	}
 	if codex := a.codexBackend(); codex != nil {
 		return codex.send(fmt.Sprintf("[steer] [from %s (%s)] %s", sender.Title, sender.ID, message), "steer")
+	}
+	if claude := a.claudeBackend(); claude != nil {
+		return claude.send(fmt.Sprintf("[steer] [from %s (%s)] %s", sender.Title, sender.ID, message), "steer")
 	}
 	return a.deliver(agentMessage{
 		prompt:      fmt.Sprintf("[steer] [from %s (%s)] %s", sender.Title, sender.ID, message),
@@ -207,6 +218,15 @@ func (a *Agent) ClearHistory() {
 		codex.clear()
 		return
 	}
+	if claude := a.claudeBackend(); claude != nil {
+		a.mu.Lock()
+		a.history = nil
+		a.contextUsed = 0
+		a.historyEpoch++
+		a.mu.Unlock()
+		claude.clear()
+		return
+	}
 	a.mu.Lock()
 	a.history = nil
 	a.contextUsed = 0
@@ -218,6 +238,10 @@ func (a *Agent) stop() {
 	a.stopOnce.Do(func() {
 		if codex := a.codexBackend(); codex != nil {
 			codex.stop()
+			return
+		}
+		if claude := a.claudeBackend(); claude != nil {
+			claude.stop()
 			return
 		}
 		a.mu.Lock()
@@ -237,6 +261,12 @@ func (a *Agent) codexBackend() *codexLeaf {
 	a.codexMu.RLock()
 	defer a.codexMu.RUnlock()
 	return a.codex
+}
+
+func (a *Agent) claudeBackend() *claudeLeaf {
+	a.claudeMu.RLock()
+	defer a.claudeMu.RUnlock()
+	return a.claude
 }
 
 func (a *Agent) loop(ctx context.Context) {
@@ -587,6 +617,10 @@ func formatJobResult(snapshot job.Snapshot, stdout, stderr string) string {
 func (a *Agent) Compact(keep int) int {
 	if codex := a.codexBackend(); codex != nil {
 		codex.compact()
+		return 0
+	}
+	if claude := a.claudeBackend(); claude != nil {
+		claude.compact()
 		return 0
 	}
 	if keep < 4 {

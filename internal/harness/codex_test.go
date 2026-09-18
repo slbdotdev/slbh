@@ -21,6 +21,10 @@ func TestMain(m *testing.M) {
 		runCodexTestHelper()
 		return
 	}
+	if os.Getenv("SLBH_CLAUDE_HELPER") == "1" {
+		runClaudeTestHelper()
+		return
+	}
 	os.Exit(m.Run())
 }
 
@@ -191,7 +195,7 @@ func TestCodexLaunchPreservesExplicitChatGPTModelAtSeatAndLevelOne(t *testing.T)
 	}{
 		{name: "seat", parent: r.seat(), model: "gpt-5.6-luna"},
 	}
-	levelOne, err := r.LaunchSubagentSpec(r.seat().ID, LaunchSpec{Title: "native parent", Model: "native-child"})
+	levelOne, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "native parent", Model: "native-child"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +239,7 @@ func TestCodexLaunchPreservesExplicitChatGPTModelAtSeatAndLevelOne(t *testing.T)
 			if snapshot := child.Snapshot(); snapshot.Harness != "codex" || snapshot.Model != test.model {
 				t.Fatalf("Codex snapshot = %#v", snapshot)
 			}
-			r.EndSubagent(test.parent.ID, child.ID)
+			r.endSubagent(test.parent.ID, child.ID)
 		})
 	}
 }
@@ -421,7 +425,7 @@ func TestCodexLeafParentToolAndNoDelegation(t *testing.T) {
 		}
 	}
 childMessageRecorded:
-	if _, err := r.LaunchSubagentSpec(child.ID, LaunchSpec{Title: "nested", Harness: "codex"}); err == nil {
+	if _, err := r.launchSubagentSpec(child.ID, LaunchSpec{Title: "nested", Harness: "codex"}); err == nil {
 		t.Fatal("Codex leaf was allowed to launch another leaf")
 	}
 }

@@ -418,7 +418,7 @@ func TestAgentSessionsHaveSeparateTranscriptsAndClearRotatesSelectedAgent(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := r.LaunchSubagent(seat.ID, "child", "")
+	child, err := r.launchSubagent(seat.ID, "child", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,15 +537,15 @@ func TestAgentTracksContextAndCacheStats(t *testing.T) {
 func TestDepthAndSteerIsolation(t *testing.T) {
 	r := testRuntime(t)
 	seat := r.seat()
-	child, err := r.LaunchSubagent(seat.ID, "child", "brief")
+	child, err := r.launchSubagent(seat.ID, "child", "brief")
 	if err != nil {
 		t.Fatal(err)
 	}
-	grandchild, err := r.LaunchSubagent(child.ID, "grandchild", "brief")
+	grandchild, err := r.launchSubagent(child.ID, "grandchild", "brief")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.LaunchSubagent(grandchild.ID, "too-deep", "brief"); err == nil {
+	if _, err := r.launchSubagent(grandchild.ID, "too-deep", "brief"); err == nil {
 		t.Fatal("expected depth error")
 	}
 	child.Steer("change emphasis")
@@ -854,7 +854,7 @@ func TestEmptyApprovalPolicyDoesNotCallProviderButExplicitLaunchModelWorks(t *te
 	if got := r.seat().Snapshot().Model; got != "" {
 		t.Fatalf("seat model = %q, want fail-closed empty model", got)
 	}
-	child, err := r.LaunchSubagentSpec(r.seat().ID, LaunchSpec{Title: "explicit", Model: "user-requested"})
+	child, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "explicit", Model: "user-requested"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -875,11 +875,11 @@ func TestLeafSubagentUsesLeafDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	levelOne, err := r.LaunchSubagentSpec(r.seat().ID, LaunchSpec{Title: "level one"})
+	levelOne, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "level one"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	levelTwo, err := r.LaunchSubagentSpec(levelOne.ID, LaunchSpec{Title: "level two"})
+	levelTwo, err := r.launchSubagentSpec(levelOne.ID, LaunchSpec{Title: "level two"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -900,7 +900,7 @@ func TestCodexLeafStartFailureDoesNotLeaveOrphanAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if _, err := r.LaunchSubagentSpec(r.seat().ID, LaunchSpec{Title: "broken codex", Harness: "codex", Model: "gpt-test"}); err == nil {
+	if _, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "broken codex", Harness: "codex", Model: "gpt-test"}); err == nil {
 		t.Fatal("missing Codex executable unexpectedly launched")
 	}
 	agents := r.Agents()
@@ -921,14 +921,14 @@ func TestCodexLeafRequiresExplicitChatGPTModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if _, err := r.LaunchSubagentSpec(r.seat().ID, LaunchSpec{Title: "missing model", Harness: "codex"}); err == nil || !strings.Contains(err.Error(), "explicit ChatGPT model") {
+	if _, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "missing model", Harness: "codex"}); err == nil || !strings.Contains(err.Error(), "explicit ChatGPT model") {
 		t.Fatalf("Codex launch error = %v, want explicit-model validation", err)
 	}
-	levelOne, err := r.LaunchSubagentSpec(r.seat().ID, LaunchSpec{Title: "native parent", Model: "native-child"})
+	levelOne, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "native parent", Model: "native-child"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.LaunchSubagentSpec(levelOne.ID, LaunchSpec{Title: "missing model", Harness: "codex"}); err == nil || !strings.Contains(err.Error(), "explicit ChatGPT model") {
+	if _, err := r.launchSubagentSpec(levelOne.ID, LaunchSpec{Title: "missing model", Harness: "codex"}); err == nil || !strings.Contains(err.Error(), "explicit ChatGPT model") {
 		t.Fatalf("level-one Codex launch error = %v, want explicit-model validation", err)
 	}
 	if got := len(r.Agents()); got != 2 {
@@ -936,17 +936,17 @@ func TestCodexLeafRequiresExplicitChatGPTModel(t *testing.T) {
 	}
 }
 
-func TestModelGuidanceDescribesCodexModelSelection(t *testing.T) {
+func TestModelGuidanceDescribesExternalLeafModelSelection(t *testing.T) {
 	r := testRuntime(t)
 	guidance := r.ModelGuidance()
-	for _, want := range []string{"headless Codex app-server", `harness to "codex"`, "exact ChatGPT model slug", "independent of the native approval list"} {
+	for _, want := range []string{"headless Codex app-server", `harness to "codex"`, "exact ChatGPT model slug", "independent of the native approval list", "host's claude.ai login", `harness to "claude_code"`, "exact Claude model slug"} {
 		if !strings.Contains(guidance, want) {
 			t.Fatalf("model guidance missing %q: %s", want, guidance)
 		}
 	}
 }
 
-func TestLaunchSubagentToolAdvertisesCodexModelFields(t *testing.T) {
+func TestLaunchSubagentToolAdvertisesLeafHarnessModelFields(t *testing.T) {
 	var launch provider.Tool
 	for _, tool := range ToolDefinitions() {
 		if tool.Name == "launch_subagent" {
@@ -966,12 +966,12 @@ func TestLaunchSubagentToolAdvertisesCodexModelFields(t *testing.T) {
 		t.Fatalf("harness schema = %#v", properties["harness"])
 	}
 	enum, ok := harness["enum"].([]string)
-	if !ok || len(enum) != 2 || enum[0] != "native" || enum[1] != "codex" {
+	if !ok || len(enum) != 3 || enum[0] != "native" || enum[1] != "codex" || enum[2] != "claude_code" {
 		t.Fatalf("harness enum = %#v", harness["enum"])
 	}
 	model, ok := properties["model"].(map[string]any)
 	description, _ := model["description"].(string)
-	if !ok || !strings.Contains(description, "exact ChatGPT model slug") {
+	if !ok || !strings.Contains(description, "exact model slug") {
 		t.Fatalf("model schema = %#v", properties["model"])
 	}
 }

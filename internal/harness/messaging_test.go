@@ -146,15 +146,15 @@ func TestMessagesReachEveryAgentAtInferenceBoundary(t *testing.T) {
 		t.Run(direction, func(t *testing.T) {
 			r, p := messagingRuntime(t)
 			seat := r.seat()
-			child, err := r.LaunchSubagent(seat.ID, "child", "")
+			child, err := r.launchSubagent(seat.ID, "child", "")
 			if err != nil {
 				t.Fatal(err)
 			}
-			leaf, err := r.LaunchSubagent(child.ID, "leaf", "")
+			leaf, err := r.launchSubagent(child.ID, "leaf", "")
 			if err != nil {
 				t.Fatal(err)
 			}
-			sibling, err := r.LaunchSubagent(seat.ID, "sibling", "")
+			sibling, err := r.launchSubagent(seat.ID, "sibling", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -211,7 +211,7 @@ func TestOneInboxPreservesFIFOBurstAndDoesNotBlockOnBusyAgentOrUI(t *testing.T) 
 	r, p := messagingRuntime(t)
 	a := r.seat()
 	a.SetModel("active")
-	child, err := r.LaunchSubagent(a.ID, "child", "")
+	child, err := r.launchSubagent(a.ID, "child", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestAutomaticChildResultEntersBusyParentTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := p.next(t)
-	child, err := r.LaunchSubagent(seat.ID, "child", "do the work")
+	child, err := r.launchSubagent(seat.ID, "child", "do the work")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,14 +488,14 @@ func TestToolInFlightFinishesAndDeliversBeforeNextTool(t *testing.T) {
 
 func TestStoppedRecipientsAndEmptyMessagesFailExplicitly(t *testing.T) {
 	r, _ := messagingRuntime(t)
-	child, err := r.LaunchSubagent(r.seat().ID, "child", "")
+	child, err := r.launchSubagent(r.seat().ID, "child", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := child.Steer("  "); err == nil {
 		t.Fatal("empty message accepted")
 	}
-	if err := r.EndSubagent(r.seat().ID, child.ID); err != nil {
+	if err := r.endSubagent(r.seat().ID, child.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := child.Send("late"); err == nil {
