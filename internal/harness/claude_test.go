@@ -150,24 +150,32 @@ func TestClaudeLeafArgvEnvironmentAndParentDelivery(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_USE_VERTEX", "1")
 	r := newClaudeTestRuntime(t, captureFile)
 	child := launchFakeClaude(t, r, "xhigh", "do the tiny task")
-	if got := waitForClaudeEvent(t, r, child.ID, "turn_done"); got != "fake: do the tiny task" {
-		t.Fatalf("Claude result = %q", got)
-	}
-	parentDeadline := time.After(3 * time.Second)
-	for {
+	// The leaf's turn_done and the parent's child_result race; wait for both
+	// in one loop so neither is consumed while waiting for the other.
+	const want = "fake: do the tiny task"
+	var gotTurn, gotParent bool
+	deadline := time.After(5 * time.Second)
+	for !gotTurn || !gotParent {
 		select {
 		case event := <-r.Events():
-			if event.AgentID == r.seat().ID && event.Kind == "child_result" {
-				if event.Text != "fake: do the tiny task" {
+			switch {
+			case event.AgentID == child.ID && event.Kind == "error":
+				t.Fatalf("Claude leaf failed: %s", event.Text)
+			case event.AgentID == child.ID && event.Kind == "turn_done":
+				if event.Text != want {
+					t.Fatalf("Claude result = %q", event.Text)
+				}
+				gotTurn = true
+			case event.AgentID == r.seat().ID && event.Kind == "child_result":
+				if event.Text != want {
 					t.Fatalf("parent received Claude result %q", event.Text)
 				}
-				goto parentReceived
+				gotParent = true
 			}
-		case <-parentDeadline:
-			t.Fatal("Claude turn result did not reach the parent")
+		case <-deadline:
+			t.Fatalf("turn_done=%v child_result=%v: Claude turn result did not reach both", gotTurn, gotParent)
 		}
 	}
-parentReceived:
 
 	capture := readClaudeCapture(t, captureFile)
 	joined := strings.Join(capture.Args, "\x00")
