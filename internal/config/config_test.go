@@ -135,6 +135,36 @@ func TestInternModelDefaultEnvironmentAndPersistence(t *testing.T) {
 	}
 }
 
+func TestSecretaryWakeAndInternEffortDefaultsEnvironmentAndPersistence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SLBH_HOME", home)
+	t.Setenv("SLBH_SECRETARY_WAKE", "")
+	t.Setenv("SLBH_INTERN_EFFORT", "")
+	got := Load()
+	if !got.SecretaryWake || got.InternEffort != "medium" {
+		t.Fatalf("defaults = SecretaryWake %v, InternEffort %q", got.SecretaryWake, got.InternEffort)
+	}
+
+	t.Setenv("SLBH_SECRETARY_WAKE", "false")
+	t.Setenv("SLBH_INTERN_EFFORT", "high")
+	got = Load()
+	if got.SecretaryWake || got.InternEffort != "high" {
+		t.Fatalf("environment = SecretaryWake %v, InternEffort %q", got.SecretaryWake, got.InternEffort)
+	}
+
+	t.Setenv("SLBH_SECRETARY_WAKE", "")
+	t.Setenv("SLBH_INTERN_EFFORT", "")
+	got.SecretaryWake = false
+	got.InternEffort = "low"
+	if err := got.Save(); err != nil {
+		t.Fatal(err)
+	}
+	got = Load()
+	if got.SecretaryWake || got.InternEffort != "low" {
+		t.Fatalf("persisted = SecretaryWake %v, InternEffort %q", got.SecretaryWake, got.InternEffort)
+	}
+}
+
 // TestDefaultSeatEffortIsServableLocally pins the built-in seat effort. The
 // default has to be a level every route slbh ships with can actually serve,
 // and the local Ollama route is the narrow one: Ollama rewrites `xhigh` to

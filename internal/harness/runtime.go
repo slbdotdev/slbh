@@ -15,6 +15,7 @@ import (
 	"github.com/slbdotdev/slbh/internal/id"
 	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/logx"
+	"github.com/slbdotdev/slbh/internal/orgstore"
 	"github.com/slbdotdev/slbh/internal/provider"
 	"github.com/slbdotdev/slbh/internal/seam"
 )
@@ -82,6 +83,10 @@ type Runtime struct {
 	claudeCommand     string
 	catalog           []provider.Catalog
 	closeOnce         sync.Once
+	orgStore          *orgstore.Store
+	requestWatchStop  chan struct{}
+	requestWatchDone  chan struct{}
+	requestPoll       time.Duration
 }
 
 type Options struct {
@@ -90,6 +95,9 @@ type Options struct {
 	Events        chan seam.Event
 	CodexCommand  string
 	ClaudeCommand string
+	// RequestPollInterval defaults to two seconds. Tests and embedders may use
+	// a shorter interval; production callers should leave it zero.
+	RequestPollInterval time.Duration
 }
 
 var _ seam.Runtime = (*Runtime)(nil)
@@ -105,7 +113,16 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), events: options.Events, eventWake: make(chan struct{}, 1), eventStop: make(chan struct{}), eventDone: make(chan struct{}), subscribers: make(map[uint64]eventSubscriber), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand}
+	store, err := orgstore.Open(cfg.Home)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	poll := options.RequestPollInterval
+	if poll <= 0 {
+		poll = 2 * time.Second
+	}
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), events: options.Events, eventWake: make(chan struct{}, 1), eventStop: make(chan struct{}), eventDone: make(chan struct{}), subscribers: make(map[uint64]eventSubscriber), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand, orgStore: store, requestWatchStop: make(chan struct{}), requestWatchDone: make(chan struct{}), requestPoll: poll}
 	if r.events == nil {
 		r.events = make(chan seam.Event, 1024)
 	}
@@ -148,6 +165,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	r.mu.Unlock()
 	seat.start()
 	r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "runtime", Text: "runtime started"})
+	go r.watchOrgRequests()
 	return r, nil
 }
 
@@ -874,9 +892,65 @@ func (r *Runtime) deliverJobResult(snapshot job.Snapshot, stdout, stderr string)
 	}
 }
 
+func (r *Runtime) watchOrgRequests() {
+	defer close(r.requestWatchDone)
+	seen := make(map[uint64]struct{})
+	deliver := func() {
+		requests, err := r.orgStore.Requests()
+		if err != nil {
+			r.emitStatus("org_requests", err.Error())
+			return
+		}
+		seat, ok := r.lookupAgent(r.seatID)
+		if !ok {
+			return
+		}
+		for _, request := range requests {
+			if request.Status != orgstore.StatusQueued {
+				continue
+			}
+			if _, delivered := seen[request.ID]; delivered {
+				continue
+			}
+			if err := seat.receiveOrgRequest(request); err != nil {
+				r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"request": request.ID}})
+				continue
+			}
+			seen[request.ID] = struct{}{}
+		}
+	}
+
+	deliver()
+	state, err := r.orgStore.RequestsState()
+	if err != nil {
+		r.emitStatus("org_requests", err.Error())
+	}
+	ticker := time.NewTicker(r.requestPoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.requestWatchStop:
+			return
+		case <-ticker.C:
+			next, statErr := r.orgStore.RequestsState()
+			if statErr != nil {
+				r.emitStatus("org_requests", statErr.Error())
+				continue
+			}
+			if next.Size == state.Size && next.ModTime.Equal(state.ModTime) {
+				continue
+			}
+			state = next
+			deliver()
+		}
+	}
+}
+
 func (r *Runtime) Close() error {
 	var err error
 	r.closeOnce.Do(func() {
+		close(r.requestWatchStop)
+		<-r.requestWatchDone
 		delivered := make(chan struct{})
 		r.queueEvent(seam.Event{Kind: "runtime", Text: "runtime stopping"}, delivered, true)
 		// Shutdown is learned from the event stream, not from a second lifecycle

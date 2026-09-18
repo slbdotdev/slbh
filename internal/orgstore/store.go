@@ -37,6 +37,13 @@ type Store struct {
 	requestsLock string
 }
 
+// RequestLogState is the cheap identity used by a running runtime to notice
+// request-log appends made by a separate slbh process.
+type RequestLogState struct {
+	Size    int64
+	ModTime time.Time
+}
+
 // Report is one Seat report in the org inbox.
 type Report struct {
 	ID              uint64    `json:"id"`
@@ -309,6 +316,19 @@ func (s *Store) Requests() ([]Request, error) {
 		return nil, err
 	}
 	return requests, nil
+}
+
+// RequestsState stats the append-only request log without reading it. A
+// missing log has the zero state.
+func (s *Store) RequestsState() (RequestLogState, error) {
+	info, err := os.Stat(s.requestsLog)
+	if os.IsNotExist(err) {
+		return RequestLogState{}, nil
+	}
+	if err != nil {
+		return RequestLogState{}, fmt.Errorf("stat request queue: %w", err)
+	}
+	return RequestLogState{Size: info.Size(), ModTime: info.ModTime()}, nil
 }
 
 func validateInvalidation(invalidates []string, invalidatesNone bool) error {

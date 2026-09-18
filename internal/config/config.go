@@ -53,9 +53,11 @@ func (s PolicySource) Describe() string {
 type Config struct {
 	Home             string
 	SecretarySession string
+	SecretaryWake    bool
 	SeatModel        string
 	SeatEffort       string
 	InternModel      string
+	InternEffort     string
 	SubagentModel    string
 	LeafModel        string
 	SubagentEffort   string
@@ -99,6 +101,7 @@ func Load() Config {
 	cfg := Config{
 		Home:             home,
 		SecretarySession: getenv("SLBH_SECRETARY_SESSION", "secretary"),
+		SecretaryWake:    getenvBool("SLBH_SECRETARY_WAKE", true),
 		// The seat default is `high`, and deliberately not `xhigh`. Two
 		// separate reasons, either of which is enough.
 		//
@@ -119,6 +122,7 @@ func Load() Config {
 		SeatModel:      getenv("SLBH_MODEL", "deepseek-v4-flash"),
 		SeatEffort:     getenv("SLBH_EFFORT", "high"),
 		InternModel:    getenv("SLBH_INTERN_MODEL", provider.LocalModelID),
+		InternEffort:   getenv("SLBH_INTERN_EFFORT", "medium"),
 		SubagentModel:  getenv("SLBH_SUBAGENT_MODEL", "zai/glm-5.3-flash"),
 		LeafModel:      getenv("SLBH_LEAF_MODEL", provider.LocalModelID),
 		SubagentEffort: getenv("SLBH_SUBAGENT_EFFORT", "high"),
@@ -129,6 +133,9 @@ func Load() Config {
 	if persisted, ok := loadFile(home); ok {
 		if os.Getenv("SLBH_SECRETARY_SESSION") == "" && persisted.SecretarySession != "" {
 			cfg.SecretarySession = persisted.SecretarySession
+		}
+		if os.Getenv("SLBH_SECRETARY_WAKE") == "" && persisted.SecretaryWake != nil {
+			cfg.SecretaryWake = *persisted.SecretaryWake
 		}
 		if os.Getenv("SLBH_MODEL") == "" {
 			seatModel := persisted.SeatModel
@@ -150,6 +157,9 @@ func Load() Config {
 		}
 		if os.Getenv("SLBH_INTERN_MODEL") == "" && persisted.InternModel != "" {
 			cfg.InternModel = persisted.InternModel
+		}
+		if os.Getenv("SLBH_INTERN_EFFORT") == "" && persisted.InternEffort != "" {
+			cfg.InternEffort = persisted.InternEffort
 		}
 		if os.Getenv("SLBH_SUBAGENT_MODEL") == "" && persisted.SubagentModel != "" {
 			cfg.SubagentModel = persisted.SubagentModel
@@ -242,9 +252,11 @@ func (c *Config) ApplyLocalPolicy(policy provider.Policy) error {
 
 type fileConfig struct {
 	SecretarySession string   `json:"secretary_session,omitempty"`
+	SecretaryWake    *bool    `json:"secretary_wake,omitempty"`
 	SeatModel        string   `json:"seat_model,omitempty"`
 	SeatEffort       string   `json:"seat_effort,omitempty"`
 	InternModel      string   `json:"intern_model,omitempty"`
+	InternEffort     string   `json:"intern_effort,omitempty"`
 	RootModel        string   `json:"root_model,omitempty"`
 	RootEffort       string   `json:"root_effort,omitempty"`
 	SubagentModel    string   `json:"subagent_model,omitempty"`
@@ -266,10 +278,13 @@ func (c Config) Save() error {
 	// LocalPolicy is written back on every save. Without it a /effort or
 	// /model save would drop the policy the user authored to make an unmanaged
 	// host work, and the next launch would refuse every route.
+	secretaryWake := c.SecretaryWake
 	payload, err := json.MarshalIndent(fileConfig{
 		SecretarySession: c.SecretarySession,
+		SecretaryWake:    &secretaryWake,
 		SeatModel:        c.SeatModel, SeatEffort: c.SeatEffort,
 		InternModel:   c.InternModel,
+		InternEffort:  c.InternEffort,
 		SubagentModel: c.SubagentModel, LeafModel: c.LeafModel, SubagentEffort: c.SubagentEffort,
 		ApprovedModels: unique(c.ApprovedModels),
 		LocalPolicy:    c.LocalPolicy,
@@ -340,4 +355,12 @@ func getenv(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func getenvBool(name string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	return !strings.EqualFold(value, "false") && value != "0"
 }

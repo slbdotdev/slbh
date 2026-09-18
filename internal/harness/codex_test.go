@@ -17,6 +17,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("SLBH_WAKE_HELPER") == "1" {
+		runHarnessWakeHelper()
+		return
+	}
 	if os.Getenv("SLBH_CODEX_HELPER") == "1" {
 		runCodexTestHelper()
 		return

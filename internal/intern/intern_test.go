@@ -284,6 +284,70 @@ func TestExactToolListAndUnknownToolRefusal(t *testing.T) {
 	finishIntern(t, rt, done)
 }
 
+func TestEveryRequestCarriesMediumEffortAndRouteOutputBound(t *testing.T) {
+	rt := newFakeRuntime(t)
+	rt.config.Policy = provider.Policy{Version: provider.PolicyVersion, Routes: map[string]provider.RoutePolicy{
+		"local/test-intern": {ContextWindow: 65536, MaxOutputTokens: 1234},
+	}}
+	p := newScriptedProvider(func(index int, _ context.Context, _ provider.Request, sink provider.StreamSink) error {
+		if index == 0 {
+			return sink(provider.Event{Kind: provider.EventTool, ToolIndex: 0, ToolCallID: "state-1", ToolName: "agent_snapshots", Input: `{}`})
+		}
+		return nil
+	})
+	done := startIntern(t, rt, p)
+	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done"}
+	waitCall(t, p)
+	waitCall(t, p)
+	for index := 0; index < 2; index++ {
+		request := p.request(index)
+		if request.Effort != "medium" {
+			t.Fatalf("request %d effort = %q, want medium", index, request.Effort)
+		}
+		if request.MaxTokens == nil || *request.MaxTokens != 1234 {
+			t.Fatalf("request %d MaxTokens = %v", index, request.MaxTokens)
+		}
+	}
+	finishIntern(t, rt, done)
+}
+
+func TestOutputLimitEndsInferenceWithoutAskingAndNextBoundaryRuns(t *testing.T) {
+	rt := newFakeRuntime(t)
+	p := newScriptedProvider(func(index int, _ context.Context, _ provider.Request, sink provider.StreamSink) error {
+		if index == 0 {
+			if err := sink(provider.Event{Kind: provider.EventTool, ToolIndex: 0, ToolCallID: "ask-1", ToolName: "ask_seat", Input: `{"question":"should not send"}`}); err != nil {
+				return err
+			}
+			return sink(provider.Event{Kind: provider.EventUsage, StopReason: "length"})
+		}
+		return nil
+	})
+	done := startIntern(t, rt, p)
+	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done", Text: "first"}
+	waitCall(t, p)
+	select {
+	case command := <-rt.commands:
+		status, ok := command.(seam.EmitStatusCommand)
+		if !ok || status.Kind != "intern" || !strings.Contains(status.Text, "hit the output limit") {
+			t.Fatalf("limit command = %#v", command)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("output limit did not emit intern status")
+	}
+	select {
+	case command := <-rt.commands:
+		if _, ok := command.(seam.SteerAgentCommand); ok {
+			t.Fatalf("limit inference asked Seat: %#v", command)
+		}
+	default:
+	}
+	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done", Text: "second"}
+	if got := waitCall(t, p); got != 1 {
+		t.Fatalf("call after length stop = %d, want 1", got)
+	}
+	finishIntern(t, rt, done)
+}
+
 func TestReadToolsNeverCreateFiles(t *testing.T) {
 	rt := newFakeRuntime(t)
 	w := &watcher{rt: rt, seatID: "seat", buffer: newEventBuffer(8)}
@@ -414,16 +478,79 @@ func TestRuntimeStateToolsReturnJSON(t *testing.T) {
 }
 
 func TestConversationHistoryDropsOldestTurnsWithinBudget(t *testing.T) {
-	history := newHistory("system", 140)
+	history := newHistory("system", 100)
 	history.add([]provider.Message{{Role: "user", Content: strings.Repeat("old", 20)}})
 	history.add([]provider.Message{{Role: "user", Content: strings.Repeat("new", 20)}})
-	if history.size() > 140 {
-		t.Fatalf("history size = %d, budget 140", history.size())
+	if history.size() > 100 {
+		t.Fatalf("history size = %d tokens, budget 100", history.size())
 	}
 	messages := history.messages()
 	if len(messages) != 1 || !strings.Contains(messages[0].Content, "new") {
 		t.Fatalf("history retained wrong turns: %#v", messages)
 	}
+}
+
+func TestPromptBudgetDropsHistoryTruncatesBatchAndCapsToolResults(t *testing.T) {
+	rt := newFakeRuntime(t)
+	w := &watcher{
+		rt:              rt,
+		seatID:          "seat",
+		system:          "system",
+		promptBudget:    3852,
+		contextWindow:   6000,
+		maxOutputTokens: 100,
+		history:         newHistory("system", 3852),
+		buffer:          newEventBuffer(8),
+	}
+	w.history.add([]provider.Message{{Role: "user", Content: "old-history-" + strings.Repeat("o", 2800)}})
+	w.history.add([]provider.Message{{Role: "user", Content: "new-history-" + strings.Repeat("n", 2800)}})
+	turn := []provider.Message{
+		{Role: "user", Content: "Events since your previous inference:\n" + strings.Repeat("e", 5000)},
+		{Role: "assistant", ToolCalls: []provider.ToolCall{{ID: "call-1", Type: "function"}}},
+		{Role: "tool", ToolCallID: "call-1", Name: "read_file", Content: strings.Repeat("result", 1200)},
+	}
+	messages, fits := w.fitPrompt(turn, toolDefinitions())
+	if !fits {
+		t.Fatal("prompt did not fit after all budget reductions")
+	}
+	encoded, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if strings.Contains(text, "old-history-") {
+		t.Fatalf("oldest history was retained: %s", text)
+	}
+	if !strings.Contains(text, eventTruncationMarker) {
+		t.Fatalf("event batch was not truncated: %s", text)
+	}
+	if !strings.Contains(text, toolTruncationMarker) {
+		t.Fatalf("tool result was not capped: %s", text)
+	}
+	if tokens := estimatePromptTokens(w.system, messages, toolDefinitions()); tokens > w.promptBudget {
+		t.Fatalf("estimated prompt = %d tokens, budget %d", tokens, w.promptBudget)
+	}
+}
+
+func TestUnfittablePromptIsNotSent(t *testing.T) {
+	rt := newFakeRuntime(t)
+	rt.config.Policy = provider.Policy{Version: provider.PolicyVersion, Routes: map[string]provider.RoutePolicy{
+		"local/test-intern": {ContextWindow: 2048, MaxOutputTokens: 1024},
+	}}
+	p := newScriptedProvider(nil)
+	done := startIntern(t, rt, p)
+	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done", Text: "cannot fit"}
+	select {
+	case command := <-rt.commands:
+		status, ok := command.(seam.EmitStatusCommand)
+		if !ok || status.Kind != "intern" || !strings.Contains(status.Text, "request not sent") {
+			t.Fatalf("unfittable command = %#v", command)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("unfittable prompt did not emit status")
+	}
+	requireNoCall(t, p)
+	finishIntern(t, rt, done)
 }
 
 func TestSeatWorkDirIsUsedForReadTools(t *testing.T) {

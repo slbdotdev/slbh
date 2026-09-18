@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	maxToolRounds     = 8
-	historyBudget     = 64 * 1024
-	maxBufferedEvents = 4096
+	maxToolRounds      = 8
+	maxBufferedEvents  = 4096
+	promptSafetyTokens = 2048
 )
 
 // Options configures the Intern. Model defaults to the runtime's InternModel.
@@ -26,6 +26,7 @@ const (
 // and tests; when nil, Run resolves Model through provider.ForModel.
 type Options struct {
 	Model    string
+	Effort   string
 	Provider provider.Provider
 }
 
@@ -54,6 +55,15 @@ func Run(ctx context.Context, rt seam.Runtime, opts Options) error {
 	if model != "" && !strings.HasPrefix(model, "local/") {
 		return fmt.Errorf("intern: model %q is not a local route; the Intern runs only on local/ models so the Seat's transcript never leaves the estate", model)
 	}
+	effort := strings.TrimSpace(opts.Effort)
+	if effort == "" {
+		effort = strings.TrimSpace(cfg.InternEffort)
+	}
+	if effort == "" {
+		effort = "medium"
+	}
+	contextWindow, maxOutputTokens := routeLimits(cfg, model)
+	promptBudget := contextWindow - maxOutputTokens - promptSafetyTokens
 
 	events, unsubscribe := rt.Subscribe()
 	defer unsubscribe()
@@ -61,13 +71,17 @@ func Run(ctx context.Context, rt seam.Runtime, opts Options) error {
 	defer cancel()
 
 	watcher := &watcher{
-		rt:       rt,
-		seatID:   seat.ID,
-		model:    model,
-		system:   system,
-		provider: opts.Provider,
-		buffer:   newEventBuffer(maxBufferedEvents),
-		history:  newHistory(system, historyBudget),
+		rt:              rt,
+		seatID:          seat.ID,
+		model:           model,
+		effort:          effort,
+		system:          system,
+		provider:        opts.Provider,
+		buffer:          newEventBuffer(maxBufferedEvents),
+		history:         newHistory(system, promptBudget),
+		contextWindow:   contextWindow,
+		maxOutputTokens: maxOutputTokens,
+		promptBudget:    promptBudget,
 	}
 	done := make(chan error, 1)
 	var pending []seam.Event
@@ -136,13 +150,33 @@ func Run(ctx context.Context, rt seam.Runtime, opts Options) error {
 }
 
 type watcher struct {
-	rt       seam.Runtime
-	seatID   string
-	model    string
-	system   string
-	provider provider.Provider
-	buffer   *eventBuffer
-	history  *conversationHistory
+	rt              seam.Runtime
+	seatID          string
+	model           string
+	effort          string
+	system          string
+	provider        provider.Provider
+	buffer          *eventBuffer
+	history         *conversationHistory
+	contextWindow   int
+	maxOutputTokens int
+	promptBudget    int
+}
+
+func routeLimits(cfg config.Config, model string) (int, int) {
+	contextWindow := provider.LocalContextWindow
+	maxOutputTokens := provider.DefaultMaxOutputTokens
+	if key, ok := provider.RouteKey(model); ok {
+		if route, found := cfg.Policy.Route(key); found {
+			if route.ContextWindow > 0 {
+				contextWindow = route.ContextWindow
+			}
+			if route.MaxOutputTokens > 0 {
+				maxOutputTokens = route.MaxOutputTokens
+			}
+		}
+	}
+	return contextWindow, maxOutputTokens
 }
 
 func findSeat(agents []seam.AgentSnapshot) (seam.AgentSnapshot, error) {
@@ -196,27 +230,36 @@ func (w *watcher) infer(ctx context.Context, events []seam.Event) error {
 	if err != nil {
 		return err
 	}
-	encoded, err := json.Marshal(events)
+	turn, err := eventTurn(events)
 	if err != nil {
-		return fmt.Errorf("intern: encode events: %w", err)
+		return err
 	}
-	turn := []provider.Message{{Role: "user", Content: "Events since your previous inference:\n" + string(encoded)}}
 	tools := toolDefinitions()
 
 	for round := 0; round < maxToolRounds; round++ {
-		messages := append(w.history.messages(), turn...)
+		messages, fits := w.fitPrompt(turn, tools)
+		if !fits {
+			return fmt.Errorf("intern: prompt does not fit the %d-token context window after reserving %d output and %d safety tokens; request not sent", w.contextWindow, w.maxOutputTokens, promptSafetyTokens)
+		}
+		maxTokens := w.maxOutputTokens
 		request := provider.Request{
-			Model:    w.model,
-			System:   w.system,
-			Messages: messages,
-			Tools:    tools,
+			Model:     w.model,
+			Effort:    w.effort,
+			System:    w.system,
+			Messages:  messages,
+			Tools:     tools,
+			MaxTokens: &maxTokens,
 		}
 		request.CacheKey = provider.StablePrefixKey(request)
 
 		var answer strings.Builder
 		var reasoning strings.Builder
 		calls := make(map[int]*provider.ToolCall)
+		stopReason := ""
 		err := p.Stream(ctx, request, func(event provider.Event) error {
+			if event.StopReason != "" {
+				stopReason = event.StopReason
+			}
 			switch event.Kind {
 			case provider.EventText:
 				answer.WriteString(event.Text)
@@ -249,6 +292,13 @@ func (w *watcher) infer(ctx context.Context, events []seam.Event) error {
 
 		content := answer.String()
 		reasoningContent := reasoning.String()
+		if isOutputLimitStop(stopReason) {
+			if content != "" || reasoningContent != "" {
+				turn = append(turn, provider.Message{Role: "assistant", Content: content, ReasoningContent: reasoningContent})
+			}
+			w.history.add(turn)
+			return fmt.Errorf("intern: generation hit the output limit (%s); inference ended at this turn boundary", stopReason)
+		}
 		if len(calls) == 0 {
 			turn = append(turn, provider.Message{Role: "assistant", Content: content, ReasoningContent: reasoningContent})
 			w.history.add(turn)
@@ -280,6 +330,114 @@ func (w *watcher) infer(ctx context.Context, events []seam.Event) error {
 	}
 	w.history.add(turn)
 	return fmt.Errorf("intern: provider/tool round limit reached (%d)", maxToolRounds)
+}
+
+func eventTurn(events []seam.Event) ([]provider.Message, error) {
+	encoded, err := json.Marshal(events)
+	if err != nil {
+		return nil, fmt.Errorf("intern: encode events: %w", err)
+	}
+	return []provider.Message{{Role: "user", Content: "Events since your previous inference:\n" + string(encoded)}}, nil
+}
+
+func isOutputLimitStop(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "length", "max_tokens", "max_output_tokens", "model_length":
+		return true
+	default:
+		return false
+	}
+}
+
+const (
+	eventTruncationMarker = "[oldest events truncated to fit Intern context]"
+	toolTruncationMarker  = "[tool result truncated to fit Intern context]"
+)
+
+func (w *watcher) fitPrompt(turn []provider.Message, tools []provider.Tool) ([]provider.Message, bool) {
+	build := func() []provider.Message {
+		return append(w.history.messages(), turn...)
+	}
+	fits := func() bool {
+		return w.promptBudget > 0 && estimatePromptTokens(w.system, build(), tools) <= w.promptBudget
+	}
+	for !fits() && w.history.dropOldest() {
+	}
+	if fits() {
+		return build(), true
+	}
+
+	if len(turn) > 0 && turn[0].Role == "user" {
+		original := turn[0].Content
+		turn[0].Content = eventTruncationMarker
+		low, high := 0, len(original)
+		for low <= high {
+			keep := low + (high-low)/2
+			turn[0].Content = eventTruncationMarker + "\n" + strings.ToValidUTF8(original[len(original)-keep:], "")
+			if fits() {
+				low = keep + 1
+			} else {
+				high = keep - 1
+			}
+		}
+		keep := high
+		if keep < 0 {
+			keep = 0
+		}
+		turn[0].Content = eventTruncationMarker
+		if keep > 0 {
+			turn[0].Content += "\n" + strings.ToValidUTF8(original[len(original)-keep:], "")
+		}
+	}
+	if fits() {
+		return build(), true
+	}
+
+	for index := range turn {
+		if turn[index].Role != "tool" || turn[index].Content == "" {
+			continue
+		}
+		original := turn[index].Content
+		turn[index].Content = toolTruncationMarker
+		low, high := 0, len(original)
+		for low <= high {
+			keep := low + (high-low)/2
+			turn[index].Content = strings.ToValidUTF8(original[:keep], "") + "\n" + toolTruncationMarker
+			if fits() {
+				low = keep + 1
+			} else {
+				high = keep - 1
+			}
+		}
+		keep := high
+		if keep < 0 {
+			keep = 0
+		}
+		turn[index].Content = toolTruncationMarker
+		if keep > 0 {
+			turn[index].Content = strings.ToValidUTF8(original[:keep], "") + "\n" + toolTruncationMarker
+		}
+		if fits() {
+			return build(), true
+		}
+	}
+	return build(), fits()
+}
+
+// The local tokenizer measured roughly 1.75 bytes/token on numbered prose
+// (about 85 KiB for 48,586 tokens). bytes/1.75, rounded up, is therefore a
+// deliberately conservative estimate for preflight context accounting.
+func estimatePromptTokens(system string, messages []provider.Message, tools []provider.Tool) int {
+	prompt := struct {
+		System   string             `json:"system"`
+		Messages []provider.Message `json:"messages"`
+		Tools    []provider.Tool    `json:"tools"`
+	}{System: system, Messages: messages, Tools: tools}
+	encoded, err := json.Marshal(prompt)
+	if err != nil {
+		return int(^uint(0) >> 1)
+	}
+	return (len(encoded)*4 + 6) / 7
 }
 
 func (w *watcher) emitError(ctx context.Context, err error) {
@@ -441,11 +599,19 @@ func (h *conversationHistory) messages() []provider.Message {
 func (h *conversationHistory) add(turn []provider.Message) {
 	h.turns = append(h.turns, append([]provider.Message(nil), turn...))
 	for len(h.turns) > 0 && h.size() > h.budget {
-		h.turns = h.turns[1:]
+		h.dropOldest()
 	}
 }
 
 func (h *conversationHistory) size() int {
-	encoded, _ := json.Marshal(h.messages())
-	return len(h.system) + len(encoded)
+	return estimatePromptTokens(h.system, h.messages(), nil)
+}
+
+func (h *conversationHistory) dropOldest() bool {
+	if len(h.turns) == 0 {
+		return false
+	}
+	h.turns[0] = nil
+	h.turns = h.turns[1:]
+	return true
 }
