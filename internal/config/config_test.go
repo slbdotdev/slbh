@@ -91,7 +91,7 @@ func TestInternModelDefaultEnvironmentAndPersistence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("SLBH_HOME", home)
 	t.Setenv("SLBH_INTERN_MODEL", "")
-	if got := Load().InternModel; got != "local/q27-UD-Q2_K_XL-96k" {
+	if got := Load().InternModel; got != "local/q27-UD-Q2_K_XL-64k" {
 		t.Fatalf("default InternModel = %q", got)
 	}
 

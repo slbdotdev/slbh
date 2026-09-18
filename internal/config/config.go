@@ -116,7 +116,7 @@ func Load() Config {
 		// turn-pairs and costs about 48% more wall clock.
 		SeatModel:      getenv("SLBH_MODEL", "deepseek-v4-flash"),
 		SeatEffort:     getenv("SLBH_EFFORT", "high"),
-		InternModel:    getenv("SLBH_INTERN_MODEL", "local/q27-UD-Q2_K_XL-96k"),
+		InternModel:    getenv("SLBH_INTERN_MODEL", provider.LocalModelID),
 		SubagentModel:  getenv("SLBH_SUBAGENT_MODEL", "zai/glm-5.3-flash"),
 		LeafModel:      getenv("SLBH_LEAF_MODEL", provider.LocalModelID),
 		SubagentEffort: getenv("SLBH_SUBAGENT_EFFORT", "high"),
