@@ -149,6 +149,16 @@ the Seat's reports to the Secretary. It:
 A Seat report names the org page its change invalidates, or states that
 none is.
 
+Both the org inbox and the Secretary's request queue are files under
+`$SLBH_HOME`. slbh owns their format and their cursors; nothing else parses
+the shape on disk. The running Seat and a separate `slbh` invocation both
+touch them, so append-only writes and an atomic cursor update are load
+bearing rather than incidental.
+
+Request status is written back into the queue as the Seat works it. That is
+deliberate: anything the Secretary needs to know is made durable rather than
+made reachable in memory.
+
 ## 7. Reaching the Secretary
 
 The Secretary is a Codex session, not an slbh agent. MCP cannot start its
@@ -165,16 +175,27 @@ Whether queueing to an idle session starts a turn or merely parks the
 message is unverified. If it only parks, there is no wake and the owner's
 attention is the trigger; the org design changes, not this one.
 
-## 8. MCP
+## 8. The Secretary's interface
 
-slbh exposes an MCP server. The Secretary is its client, and it carries all
-content in both directions: read the inbox, acknowledge it, request work,
-query runtime state.
+`slbh` subcommands, invoked from the Secretary's shell. Read the inbox,
+acknowledge it, request work. There is no MCP server and no IPC.
 
-MCP is pull. It carries no wake and is not asked to.
+The Secretary is a Codex session with full shell access, and slbh is a
+binary on the same machine. MCP's only remaining job would have been pull,
+which a command does — at the price of a server, a transport, a lifecycle
+and a capability surface, for an agent whose instruction document can simply
+name the commands.
 
-The server is a front end on the seam like any other, and holds no
-privileged path into the runtime.
+**A subcommand does not construct a `harness.Runtime`.** It is file work
+against `$SLBH_HOME`, so the inbox and queue code must be usable without
+`internal/harness`. That is a package-dependency rule, not a process
+boundary, and it is what keeps the TUI and the CLI one binary.
+
+A separate invocation therefore cannot see live runtime state, and nothing
+needs it to. The Intern observes from inside; the owner observes at the tmux
+session. Should that ever change, §3's rules make a transport a marshalling
+layer rather than a redesign — which is why they hold even with no
+transport in sight.
 
 ## 9. Documents and ownership
 
@@ -235,5 +256,5 @@ Measured at `ce9fe49` on `main`. `internal/harness` is 7,713 lines;
 ## 12. Open
 
 1. Whether a queued message starts a turn in an idle Codex session.
-2. Whether the org inbox lives in `$SLBH_HOME` or in a path the Secretary
-   can also reach directly.
+2. Whether a `Manager`'s own subagent launches need any brief the Seat does
+   not already supply.
