@@ -38,7 +38,15 @@ type agentSession struct {
 type queuedEvent struct {
 	event     seam.Event
 	delivered chan struct{}
+	sequence  uint64
 }
+
+type eventSubscriber struct {
+	events chan seam.Event
+	after  uint64
+}
+
+const subscriberEventBuffer = 1024
 
 type Runtime struct {
 	mu         sync.RWMutex
@@ -55,21 +63,25 @@ type Runtime struct {
 	// pending holds a session opened by Clear while the agent was still
 	// mid-turn. It becomes current at that turn's end, so the turn that issued
 	// a request keeps its own transcript through its last event.
-	pending       map[string]*agentSession
-	sessions      []*agentSession
-	redactor      *secretRedactor
-	events        chan seam.Event
-	eventMu       sync.Mutex
-	eventQueue    []queuedEvent
-	eventWake     chan struct{}
-	eventStop     chan struct{}
-	eventDone     chan struct{}
-	eventsClosed  bool
-	provider      func(model string) (provider.Provider, error)
-	codexCommand  string
-	claudeCommand string
-	catalog       []provider.Catalog
-	closeOnce     sync.Once
+	pending           map[string]*agentSession
+	sessions          []*agentSession
+	redactor          *secretRedactor
+	events            chan seam.Event
+	eventMu           sync.Mutex
+	eventQueue        []queuedEvent
+	eventWake         chan struct{}
+	eventStop         chan struct{}
+	eventDone         chan struct{}
+	eventsClosed      bool
+	eventSequence     uint64
+	subscribers       map[uint64]eventSubscriber
+	nextSubscriber    uint64
+	subscribersClosed bool
+	provider          func(model string) (provider.Provider, error)
+	codexCommand      string
+	claudeCommand     string
+	catalog           []provider.Catalog
+	closeOnce         sync.Once
 }
 
 type Options struct {
@@ -93,7 +105,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), events: options.Events, eventWake: make(chan struct{}, 1), eventStop: make(chan struct{}), eventDone: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand}
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), events: options.Events, eventWake: make(chan struct{}, 1), eventStop: make(chan struct{}), eventDone: make(chan struct{}), subscribers: make(map[uint64]eventSubscriber), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand}
 	if r.events == nil {
 		r.events = make(chan seam.Event, 1024)
 	}
@@ -143,6 +155,32 @@ func (r *Runtime) ID() string                { return r.id }
 func (r *Runtime) Dir() string               { return r.runtimeDir }
 func (r *Runtime) Home() string              { return r.config.Home }
 func (r *Runtime) Events() <-chan seam.Event { return r.events }
+
+func (r *Runtime) Subscribe() (<-chan seam.Event, func()) {
+	events := make(chan seam.Event, subscriberEventBuffer)
+	r.eventMu.Lock()
+	if r.subscribersClosed {
+		close(events)
+		r.eventMu.Unlock()
+		return events, func() {}
+	}
+	r.nextSubscriber++
+	id := r.nextSubscriber
+	r.subscribers[id] = eventSubscriber{events: events, after: r.eventSequence}
+	r.eventMu.Unlock()
+
+	var once sync.Once
+	return events, func() {
+		once.Do(func() {
+			r.eventMu.Lock()
+			if subscriber, ok := r.subscribers[id]; ok {
+				delete(r.subscribers, id)
+				close(subscriber.events)
+			}
+			r.eventMu.Unlock()
+		})
+	}
+}
 
 func (r *Runtime) Config() config.Config {
 	r.mu.RLock()
@@ -656,7 +694,8 @@ func (r *Runtime) queueEvent(event seam.Event, delivered chan struct{}, closeEve
 	if closeEvents {
 		r.eventsClosed = true
 	}
-	r.eventQueue = append(r.eventQueue, queuedEvent{event: event, delivered: delivered})
+	r.eventSequence++
+	r.eventQueue = append(r.eventQueue, queuedEvent{event: event, delivered: delivered, sequence: r.eventSequence})
 	r.eventMu.Unlock()
 	select {
 	case r.eventWake <- struct{}{}:
@@ -691,6 +730,7 @@ func (r *Runtime) flushEvents() {
 		r.eventQueue[0] = queuedEvent{}
 		r.eventQueue = r.eventQueue[1:]
 		r.eventMu.Unlock()
+		r.dispatchSubscribers(queued)
 		select {
 		case r.events <- queued.event:
 			if queued.delivered != nil {
@@ -702,6 +742,72 @@ func (r *Runtime) flushEvents() {
 			return
 		}
 	}
+}
+
+func (r *Runtime) dispatchSubscribers(queued queuedEvent) {
+	r.eventMu.Lock()
+	defer r.eventMu.Unlock()
+	for _, subscriber := range r.subscribers {
+		if queued.sequence <= subscriber.after {
+			continue
+		}
+		deliverSubscriberEvent(subscriber.events, queued.event)
+	}
+}
+
+func deliverSubscriberEvent(events chan seam.Event, event seam.Event) {
+	select {
+	case events <- event:
+		return
+	default:
+	}
+
+	buffered := make([]seam.Event, 0, cap(events))
+	for {
+		select {
+		case existing := <-events:
+			buffered = append(buffered, existing)
+		default:
+			goto drained
+		}
+	}
+
+drained:
+	markerCount, hasMarker := subscriberDropCount(buffered)
+	if hasMarker {
+		payload := append(buffered[1:], event)
+		dropped := len(payload) - (cap(events) - 1)
+		if dropped < 0 {
+			dropped = 0
+		}
+		markerCount += dropped
+		events <- seam.Event{Kind: "dropped", Metadata: map[string]any{"count": markerCount}}
+		for _, retained := range payload[dropped:] {
+			events <- retained
+		}
+		return
+	}
+
+	payload := append(buffered, event)
+	if len(payload) <= cap(events) {
+		for _, retained := range payload {
+			events <- retained
+		}
+		return
+	}
+	dropped := len(payload) - (cap(events) - 1)
+	events <- seam.Event{Kind: "dropped", Metadata: map[string]any{"count": dropped}}
+	for _, retained := range payload[dropped:] {
+		events <- retained
+	}
+}
+
+func subscriberDropCount(events []seam.Event) (int, bool) {
+	if len(events) == 0 || events[0].Kind != "dropped" || !events[0].Time.IsZero() || events[0].RuntimeID != "" || events[0].AgentID != "" || events[0].Text != "" {
+		return 0, false
+	}
+	count, ok := events[0].Metadata["count"].(int)
+	return count, ok
 }
 
 func (r *Runtime) recordInferenceRequest(agent *Agent, round int, req provider.Request, p provider.Provider) {
@@ -783,6 +889,13 @@ func (r *Runtime) Close() error {
 		}
 		close(r.eventStop)
 		<-r.eventDone
+		r.eventMu.Lock()
+		for id, subscriber := range r.subscribers {
+			close(subscriber.events)
+			delete(r.subscribers, id)
+		}
+		r.subscribersClosed = true
+		r.eventMu.Unlock()
 		close(r.events)
 		r.cancel()
 		r.mu.RLock()

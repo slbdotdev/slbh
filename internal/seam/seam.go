@@ -67,6 +67,9 @@ type Runtime interface {
 	// Events returns the ordered event stream. The channel is closed when the
 	// runtime stops; closure is the definitive end-of-stream signal.
 	Events() <-chan Event
+	// Subscribe returns an independent ordered event stream and an idempotent
+	// unsubscribe function. The stream contains events emitted after Subscribe.
+	Subscribe() (<-chan Event, func())
 	Agents() []AgentSnapshot
 	JobSnapshots() []JobSnapshot
 	Config() config.Config
