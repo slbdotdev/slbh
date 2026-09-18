@@ -23,17 +23,22 @@ control and therefore no daemon.
 | Agent | Depth | Harness under it | Model |
 | --- | --- | --- | --- |
 | Seat | 0 | native provider | `zai/glm-5.3-flash` |
+| Manager | 1 | native provider | `zai/glm-5.3-flash` |
 | Luna | 2 | Codex leaf | `gpt-5.6-luna` |
 | Sol | 2 | Codex leaf | `gpt-5.6-sol` |
 | Opus | 2 | Claude Code leaf, headless | `claude-opus-5` |
 | Flex | 2 | native provider | named at dispatch |
 | Intern | outside the tree | native provider | `local/q27-…` |
 
-Depth 1 exists in the runtime and carries no name in v0.3. The manager
-layer document stays deployable; nothing reads it.
+All three rungs are occupied. `ConfigureModelSlots`' seat, subagent and
+leaf slots map onto them exactly, and `instructions/manager.md` has a
+reader.
 
-A leaf launches nothing. The existing depth cap enforces this and is not
-relaxed.
+A leaf launches nothing; a Manager may. The existing cap at
+`parent.Depth >= 2` is already correct and is not relaxed.
+
+Several Managers run concurrently against the Z.ai plan alongside the Seat.
+That concurrency has been tested and holds.
 
 ## 3. The seam
 
@@ -218,8 +223,7 @@ Measured at `ce9fe49` on `main`. `internal/harness` is 7,713 lines;
 ## 12. Open
 
 1. Whether a queued message starts a turn in an idle Codex session.
-2. Whether the manager layer document stays deployable or is withdrawn.
-3. The read-only tool set the Intern gets, named tool by tool.
-4. Whether `Jobs()` and `Seat()` become data-returning or command-shaped.
-5. Whether the org inbox lives in `$SLBH_HOME` or in a path the Secretary
+2. The read-only tool set the Intern gets, named tool by tool.
+3. Whether `Jobs()` and `Seat()` become data-returning or command-shaped.
+4. Whether the org inbox lives in `$SLBH_HOME` or in a path the Secretary
    can also reach directly.
