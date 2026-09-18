@@ -256,7 +256,7 @@ Intern. slbh does no filtering; the directory is the role's set.
 
 ## 11. State of the tree
 
-Measured at `89101df` on `main`, into which `v0.3-draft` merged at
+Measured at `e672775` on `main`, into which `v0.3-draft` merged at
 `ac58fab`. The code-bearing delta is built, one unit per commit, each checked with `gofmt`, build, vet, the full suite and the
 race detector. The current tip also records the role-aware TUI fixture
 migration needed by the runtime's managed roster contract:
@@ -287,6 +287,7 @@ migration needed by the runtime's managed roster contract:
 | live headless test | `de7174d` | the live check judges the streamed reply whole at `turn_done`; passed on `zai/glm-5.3-flash` and `local/q27-UD-Q2_K_XL-64k` |
 | Windows test build | `4a3089f` | the POSIX process-group test builds on POSIX alone, so `GOOS=windows go vet ./...` passes |
 | Codex final answer | `89101df` | a Codex leaf returns its turn's `final_answer` message, read with the turn id the app-server sends beside the item; commentary no longer runs into the result |
+| native Ollama wire | `e672775` | `ollama-chat` speaks `/api/chat`: NDJSON stream, effort as the `think` string, a policy `options` sampler block sent verbatim and refused on other wires or for unknown keys, `num_ctx` and `num_predict` from `contextWindow` and `maxOutputTokens`; the compiled local default moves to it. An output-limit stop on any wire raises a `warning` event into the transcript. Live against Ollama 0.34.1: reply ends `stop`, tool call round-trips, a 16-token bound ends `length`, and a seeded A/B shows `presence_penalty` reaches the sampler |
 
 `internal/tui`, `headless`, `seam`, `orgstore`, `orgcli`, `readtools`,
 `intern` and `secretarywake` import nothing from `internal/harness`; a
@@ -301,10 +302,19 @@ done, and the Intern watched that Seat and asked it a live question.
 ## 12. Open
 
 No design question is open. One operational risk is unmeasured rather than
-unanswered:
+unanswered, and what remains of it is the model's, not slbh's:
 
-- Local Ollama `/v1` fidelity and termination: nothing instruments a local
-  leaf's stream for truncation or a turn that does not end.
+- Local termination. slbh's half is closed at `e672775`: the local route
+  speaks Ollama's native `/api/chat`, so its sampler guard — the GGUF's own
+  `temperature 1.0`, `top_k 20`, `top_p 0.95` plus `presence_penalty 1.5` —
+  reaches the sampler instead of being dropped by the `/v1` shim; every
+  generation is bounded at 32,768 tokens by `num_predict`; and a generation
+  that hits the bound raises a `warning` into the transcript. Whether the
+  served tag *terminates* under that guard is not measured: as served over
+  `/v1` it failed to close its thinking block in 3 of 10 runs at `high`, the
+  guard has never been benched on `/api/chat`, and the termination bench is an
+  owner-ruled v8 campaign item that stays open. Nothing detects a loop before
+  the bound; the warning makes a runaway visible, it does not end it sooner.
 
 Codex auto-compaction on the app-server path slbh uses was measured on
 2026-09-18 with codex-cli 0.155.0: with `model_auto_compact_token_limit` set
