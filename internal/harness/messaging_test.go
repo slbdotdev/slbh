@@ -150,7 +150,7 @@ func TestMessagesReachEveryAgentAtInferenceBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			leaf, err := r.launchSubagent(child.ID, "leaf", "")
+			leaf, err := r.launchSubagentSpec(child.ID, LaunchSpec{Title: "leaf", Model: "passive"})
 			if err != nil {
 				t.Fatal(err)
 			}

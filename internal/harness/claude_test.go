@@ -82,7 +82,7 @@ func newClaudeTestRuntime(t *testing.T, captureFile string) *Runtime {
 	r, err := New(config.Config{
 		Home: t.TempDir(), SeatModel: "test", ApprovedModels: []string{"test"},
 		Instructions: config.Instructions{Layers: map[string]string{
-			config.LayerManager: "MANAGED CLAUDE LAYER",
+			config.LayerLeaf: "MANAGED CLAUDE LEAF",
 		}},
 	}, Options{
 		Provider:      func(string) (provider.Provider, error) { return fakeProvider{}, nil },
@@ -97,7 +97,8 @@ func newClaudeTestRuntime(t *testing.T, captureFile string) *Runtime {
 
 func launchFakeClaude(t *testing.T, r *Runtime, effort, brief string) *Agent {
 	t.Helper()
-	child, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{
+	manager := launchTestManager(t, r)
+	child, err := r.launchSubagentSpec(manager.ID, LaunchSpec{
 		Title: "claude-test", Harness: "claude_code", Model: "claude-opus-5", Effort: effort, Brief: brief,
 	})
 	if err != nil {
@@ -166,7 +167,7 @@ func TestClaudeLeafArgvEnvironmentAndParentDelivery(t *testing.T) {
 					t.Fatalf("Claude result = %q", event.Text)
 				}
 				gotTurn = true
-			case event.AgentID == r.seat().ID && event.Kind == "child_result":
+			case event.AgentID == child.ParentID && event.Kind == "child_result":
 				if event.Text != want {
 					t.Fatalf("parent received Claude result %q", event.Text)
 				}
@@ -212,7 +213,7 @@ func TestClaudeLeafArgvEnvironmentAndParentDelivery(t *testing.T) {
 	if !reflect.DeepEqual(capture.Args, wantArgs) {
 		t.Fatalf("Claude argv = %#v, want %#v", capture.Args, wantArgs)
 	}
-	for _, want := range []string{claudeLeafMechanics, "MANAGED CLAUDE LAYER", "your layer (manager)"} {
+	for _, want := range []string{claudeLeafMechanics, "MANAGED CLAUDE LEAF", "your layer (leaf)"} {
 		if !strings.Contains(capture.Args[promptIndex], want) {
 			t.Fatalf("Claude system prompt is missing %q: %q", want, capture.Args[promptIndex])
 		}
@@ -240,8 +241,9 @@ func TestClaudeLeafOmitsEmptyEffort(t *testing.T) {
 
 func TestClaudeLeafRequiresExplicitModel(t *testing.T) {
 	r := newClaudeTestRuntime(t, "")
+	manager := launchTestManager(t, r)
 	input := `{"title":"missing","harness":"claude_code","brief":""}`
-	if _, err := r.ExecuteTool(r.seat().ID, "launch_subagent", input); err == nil || !strings.Contains(err.Error(), "explicit Claude model") {
+	if _, err := r.ExecuteTool(manager.ID, "launch_subagent", input); err == nil || !strings.Contains(err.Error(), "non-empty explicit model") || !strings.Contains(err.Error(), "Claude Code") {
 		t.Fatalf("missing Claude model error = %v", err)
 	}
 }
@@ -295,7 +297,7 @@ func TestClaudeLeafStopKillsProcessGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.endSubagent(r.seat().ID, child.ID); err != nil {
+	if err := r.endSubagent(child.ParentID, child.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, pid := range []int{processPID, descendantPID} {
@@ -335,7 +337,8 @@ func processExists(pid int) bool {
 
 func TestClaudeStreamFixtureMapsRuntimeEvents(t *testing.T) {
 	r := newClaudeTestRuntime(t, "")
-	agent, err := r.newAgent("fixture", r.seat().ID, 1, "claude-opus-5", "low")
+	manager := launchTestManager(t, r)
+	agent, err := r.newAgent("fixture", manager.ID, 2, "claude-opus-5", "low")
 	if err != nil {
 		t.Fatal(err)
 	}

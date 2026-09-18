@@ -354,7 +354,7 @@ func (r *Runtime) ModelGuidance() string {
 		branches = append(branches, "no provider catalog loaded; use the configured default or honor an explicit user model request")
 	}
 	defaults := fmt.Sprintf("defaults are seat=%q, subagent=%q, leaf=%q", cfg.SeatModel, cfg.SubagentModel, cfg.LeafModel)
-	return "Model guidance: approved models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". Use the configured subagent default for level-one children and the leaf default for level-two children when no model is requested. A model explicitly requested by the user may override the approved list; do not invent model IDs. Codex leaves use the headless Codex app-server and ChatGPT model slugs, independent of the native approval list. To launch one from a native seat or level-one agent, set harness to \"codex\" and pass the exact ChatGPT model slug in model; never substitute a native default for a Codex leaf. Claude Code leaves use the host's claude.ai login. Set harness to \"claude_code\" and pass the exact Claude model slug in model; never substitute a native default or provider route for a Claude Code leaf."
+	return "Model guidance: approved models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". The depth-0 Seat may launch only a native depth-1 Manager; only a native depth-1 Manager may launch a depth-2 leaf. A Manager may use any supported leaf harness: native for Flex, codex for Codex, or claude_code for Claude Code. Every depth-2 launch must pass a non-empty model explicitly; neither the subagent default nor the leaf default is substituted for a leaf. The configured subagent default applies only to a native depth-1 Manager whose launch omits model. A model explicitly requested by the user may override the approved list; do not invent model IDs. Codex leaves use the headless Codex app-server and exact ChatGPT model slugs, independent of the native approval list. Claude Code leaves use the host's claude.ai login and exact Claude model slugs; never substitute a native provider route."
 }
 func (r *Runtime) seat() *Agent {
 	r.mu.RLock()
@@ -442,24 +442,25 @@ func (r *Runtime) launchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	if spec.Title == "" {
 		return nil, fmt.Errorf("subagent title is required")
 	}
-	if spec.Harness != "" && spec.Harness != "native" && spec.Harness != "codex" && spec.Harness != "claude_code" {
-		return nil, fmt.Errorf("unsupported harness %q", spec.Harness)
+	harness := strings.TrimSpace(spec.Harness)
+	if harness == "" {
+		harness = "native"
+	}
+	if harness != "native" && harness != "codex" && harness != "claude_code" {
+		return nil, fmt.Errorf("unsupported harness %q", harness)
+	}
+	if parent.Depth == 0 && harness != "native" {
+		return nil, fmt.Errorf("the depth-0 Seat may launch only a native depth-1 Manager; %s leaves must be launched by a native depth-1 Manager", leafHarnessName(harness))
 	}
 	model, effort := strings.TrimSpace(spec.Model), strings.TrimSpace(spec.Effort)
 	r.mu.RLock()
 	cfg := r.config
 	r.mu.RUnlock()
 	if model == "" {
-		if spec.Harness == "codex" {
-			return nil, fmt.Errorf("Codex leaves require an explicit ChatGPT model in launch_subagent.model")
-		}
-		if spec.Harness == "claude_code" {
-			return nil, fmt.Errorf("Claude Code leaves require an explicit Claude model in launch_subagent.model")
+		if parent.Depth == 1 {
+			return nil, fmt.Errorf("a depth-1 Manager launching a depth-2 %s leaf must pass a non-empty explicit model in launch_subagent.model; subagent and leaf defaults are not used for leaves", leafHarnessName(harness))
 		}
 		model = cfg.SubagentModel
-		if parent.Depth >= 1 && cfg.LeafModel != "" {
-			model = cfg.LeafModel
-		}
 		if !cfg.ModelApproved(model) {
 			model = ""
 		}
@@ -486,10 +487,7 @@ func (r *Runtime) launchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	if err != nil {
 		return nil, err
 	}
-	agent.Harness = spec.Harness
-	if agent.Harness == "" {
-		agent.Harness = "native"
-	}
+	agent.Harness = harness
 	agent.WorkDir = workingDir
 	if agent.Harness == "codex" {
 		if err := agent.startCodex(r.codexCommand); err != nil {
@@ -513,6 +511,17 @@ func (r *Runtime) launchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 		}
 	}
 	return agent, nil
+}
+
+func leafHarnessName(harness string) string {
+	switch harness {
+	case "codex":
+		return "Codex"
+	case "claude_code":
+		return "Claude Code"
+	default:
+		return "native/Flex"
+	}
 }
 
 func (r *Runtime) discardAgent(agentID string) {

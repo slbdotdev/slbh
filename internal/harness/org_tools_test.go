@@ -55,7 +55,7 @@ func TestSeatOrgToolSchemasAreExclusive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	leaf, err := r.launchSubagent(child.ID, "leaf", "inspect more")
+	leaf, err := r.launchSubagentSpec(child.ID, LaunchSpec{Title: "leaf", Model: "test-leaf", Brief: "inspect more"})
 	if err != nil {
 		t.Fatal(err)
 	}

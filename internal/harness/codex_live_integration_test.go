@@ -25,7 +25,8 @@ func TestLiveCodexLeafRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	child, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{
+	manager := launchTestManager(t, r)
+	child, err := r.launchSubagentSpec(manager.ID, LaunchSpec{
 		Title: "codex-live", Harness: "codex", Model: model,
 		Brief: "Reply with exactly CODEX_LEAF_OK and nothing else. Do not call tools.",
 	})
@@ -67,7 +68,8 @@ func TestLiveCodexLeafBidirectionalSteer(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	child, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{
+	manager := launchTestManager(t, r)
+	child, err := r.launchSubagentSpec(manager.ID, LaunchSpec{
 		Title: "codex-steer-live", Harness: "codex", Model: model,
 		Brief: "First run exactly `python -c \"import time; time.sleep(3)\"`. While it runs, a slbh steer will arrive. After that, call slbh_message_parent with message CODEX_PARENT_OK, then reply exactly CODEX_STEER_OK and nothing else.",
 	})

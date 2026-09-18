@@ -80,7 +80,11 @@ func agentAtDepth(t *testing.T, r *Runtime, depth int) *Agent {
 	t.Helper()
 	agent := r.seat()
 	for i := 0; i < depth; i++ {
-		child, err := r.launchSubagent(agent.ID, "child-agent-here", "")
+		spec := LaunchSpec{Title: "child-agent-here"}
+		if agent.Depth == 1 {
+			spec.Model = "explicit-leaf-model"
+		}
+		child, err := r.launchSubagentSpec(agent.ID, spec)
 		if err != nil {
 			t.Fatal(err)
 		}

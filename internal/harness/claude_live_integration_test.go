@@ -25,7 +25,8 @@ func TestLiveClaudeCodeLeafRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	child, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{
+	manager := launchTestManager(t, r)
+	child, err := r.launchSubagentSpec(manager.ID, LaunchSpec{
 		Title: "claude-live", Harness: "claude_code", Model: model, Effort: "low",
 		Brief: "Reply with exactly CLAUDE_LEAF_OK and nothing else. Do not call tools.",
 	})
