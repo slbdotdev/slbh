@@ -254,7 +254,7 @@ Intern. slbh does no filtering; the directory is the role's set.
 
 ## 11. State of the tree
 
-Measured at `7989857` on `v0.3-draft`. The code-bearing delta is built, one
+Measured at `ce9c1ca` on `v0.3-draft`. The code-bearing delta is built, one
 unit per commit, each checked with `gofmt`, build, vet, the full suite and the
 race detector. The current tip also records the role-aware TUI fixture
 migration needed by the runtime's managed roster contract:
@@ -279,6 +279,7 @@ migration needed by the runtime's managed roster contract:
 | role-aware runtime | `c70e239` | managed roster loading and role metadata; role, harness, model, depth and launcher constraints are enforced at runtime |
 | runtime documentation | `d7042f1` | README and operational defaults describe the current v0.3 roster, local model and org-sync ownership |
 | role-aware test fixtures | `7989857` | TUI launch tests provide the managed Seat/Manager roster roles required by the runtime |
+| subagent stall warnings | `ce9c1ca` | `launch_subagent.warn_after_seconds` defaults to five seconds, warns the parent once through its inbox, and cancels on child completion, error, stop or runtime shutdown |
 
 `internal/tui`, `headless`, `seam`, `orgstore`, `orgcli`, `readtools`,
 `intern` and `secretarywake` import nothing from `internal/harness`; a
