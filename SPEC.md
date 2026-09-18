@@ -108,6 +108,11 @@ question when it believes the Seat is making a mistake.
 
 - It is a front end on the runtime, not an agent in the Seat's tree. The
   depth cap does not apply to it and it launches nothing.
+- The owner starts it inside the Seat's slbh process. It cannot run as a
+  separate invocation, because a separate invocation cannot see live
+  runtime state (§8).
+- Having no depth, it takes no layer document by depth. slbh loads
+  `instructions/intern.md` by name.
 - Its tools are **read-only**, supplied by slbh as a harness feature rather
   than assembled per run: `glob`, `grep` and the file reads, plus the
   runtime's own state — agent snapshots, job states, the event stream.
@@ -176,6 +181,8 @@ turn in an idle session **43 ms** after the queue command returned. Queued
 mid-turn it did not interrupt: it waited for the active response and was
 taken up as soon as that turn completed.
 
+The Secretary's session runs on the devbox, beside the Seat.
+
 A session is addressed by UUID or by an exact name, and a name is assigned
 with `/rename` **after the session's first turn** — there is no launch-time
 flag for it. So the Secretary's session is named once at startup, and the
@@ -206,8 +213,8 @@ transport in sight.
 
 ## 9. Documents and ownership
 
-- `$SLBH_HOME/policy.json` and `$SLBH_HOME/instructions/{seat,manager,leaf}.md`
-  are org content. They live in `slb-org` and reach hosts by its sync.
+- `$SLBH_HOME/policy.json` and
+  `$SLBH_HOME/instructions/{seat,manager,leaf,intern}.md` are org content. They live in `slb-org` and reach hosts by its sync.
 - `$SLBH_HOME/config.json` stays application-owned. slbh writes it.
 - The managed policy wins over local policy. With neither, slbh refuses to
   route.
@@ -258,7 +265,8 @@ Measured at `ce9fe49` on `main`. `internal/harness` is 7,713 lines;
 - No `slbh` subcommand path, and no inbox or queue code separable from
   `internal/harness`.
 - No durable org inbox.
-- No Intern, and no read-only tool set to give one.
+- No Intern, and no read-only tool set to give one. Nothing loads
+  `instructions/intern.md`.
 
 ## 12. Open
 
