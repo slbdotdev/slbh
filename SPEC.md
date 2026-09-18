@@ -256,5 +256,3 @@ Measured at `ce9fe49` on `main`. `internal/harness` is 7,713 lines;
 ## 12. Open
 
 1. Whether a queued message starts a turn in an idle Codex session.
-2. Whether a `Manager`'s own subagent launches need any brief the Seat does
-   not already supply.
