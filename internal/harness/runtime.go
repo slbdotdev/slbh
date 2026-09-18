@@ -694,23 +694,11 @@ func (r *Runtime) clear(agentID string) error {
 	if err != nil {
 		return err
 	}
-	// ClearHistory deliberately lets an in-flight provider request run to
-	// completion, and emit resolves the session per event, so swapping the log
-	// target here would write the tail of the old turn — its deltas, its usage,
-	// its turn_done — into a transcript that never issued the request. The new
-	// file would open mid-answer to a question it does not contain. The swap
-	// therefore waits for the turn boundary; an idle agent has no turn in
-	// flight, so for it the boundary is now.
-	// Native and Codex defer. An earlier version excepted Codex on the grounds
-	// that its clear interrupts the turn, but clear() only sets `resetting` and
-	// signals `wake`: the turn/interrupt RPC happens later, in reset(), when
-	// the leaf's run loop next services that signal. In the gap the
-	// app-server's already-queued deltas still pass the threadID guard and
-	// would land in the new transcript — the very defect this defers to avoid.
-	// reset() promotes explicitly once the interrupt has returned. Claude Code
-	// clear synchronously stops its old stream, promotes at that boundary, and
-	// starts a fresh process with fresh conversation history.
-	idle := agent.codexBackend() == nil && agent.claudeBackend() == nil && agent.Snapshot().Status != "thinking"
+	// ClearHistory cancels an active native turn, and the agent promotes the
+	// pending session when that cancellation reaches its turn boundary. Codex
+	// and Claude Code promote from their harness-specific reset paths. An idle
+	// agent has no turn in flight, so its boundary is now.
+	idle := agent.codexBackend() == nil && agent.claudeBackend() == nil && !agent.hasActiveTurn()
 	r.mu.Lock()
 	if superseded, ok := r.pending[agentID]; ok {
 		_ = superseded.log.Close()

@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,37 +11,38 @@ import (
 	"github.com/slbdotdev/slbh/internal/provider"
 )
 
-// gatedProvider streams one delta, waits to be released, then streams a second
-// and finishes. It holds a turn open across a Clear, which is the only way to
-// reach the case this tests.
+// gatedProvider holds its first turn open until Clear cancels it, then lets
+// later turns finish. It records requests so the post-clear context can be
+// checked directly at the provider boundary.
 type gatedProvider struct {
-	started chan struct{}
-	release chan struct{}
+	started  chan struct{}
+	canceled chan struct{}
+	mu       sync.Mutex
+	calls    []provider.Request
 }
 
-func (p *gatedProvider) Stream(ctx context.Context, _ provider.Request, sink provider.StreamSink) error {
-	if err := sink(provider.Event{Kind: provider.EventText, Text: "before-clear "}); err != nil {
-		return err
-	}
-	close(p.started)
-	select {
-	case <-p.release:
-	case <-ctx.Done():
+func (p *gatedProvider) Stream(ctx context.Context, request provider.Request, sink provider.StreamSink) error {
+	p.mu.Lock()
+	call := len(p.calls)
+	p.calls = append(p.calls, request)
+	p.mu.Unlock()
+	if call == 0 {
+		if err := sink(provider.Event{Kind: provider.EventText, Text: "before-clear "}); err != nil {
+			return err
+		}
+		close(p.started)
+		<-ctx.Done()
+		close(p.canceled)
 		return ctx.Err()
 	}
-	if err := sink(provider.Event{Kind: provider.EventText, Text: "after-clear"}); err != nil {
+	if err := sink(provider.Event{Kind: provider.EventText, Text: "fresh"}); err != nil {
 		return err
 	}
 	return sink(provider.Event{Kind: provider.EventDone})
 }
 
-func TestClearDefersTheLogSwapUntilAnInFlightTurnEnds(t *testing.T) {
-	// Clear used to replace the log target immediately while the provider call
-	// kept streaming. emit resolves the session per event, so every later
-	// delta, the usage and the turn_done were written into a transcript that
-	// never issued the request: the new file opened mid-answer to a question it
-	// did not contain, and the old one lost its own turn's ending.
-	p := &gatedProvider{started: make(chan struct{}), release: make(chan struct{})}
+func TestClearCancelsAnInFlightTurnAndStartsWithEmptyHistory(t *testing.T) {
+	p := &gatedProvider{started: make(chan struct{}), canceled: make(chan struct{})}
 	r, err := New(
 		config.Config{Home: t.TempDir(), SeatModel: "test"},
 		Options{Provider: func(string) (provider.Provider, error) { return p, nil }},
@@ -63,29 +65,43 @@ func TestClearDefersTheLogSwapUntilAnInFlightTurnEnds(t *testing.T) {
 	if err := r.clear(seat.ID); err != nil {
 		t.Fatal(err)
 	}
-	during, err := r.TranscriptPath(seat.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if during != oldPath {
-		t.Fatalf("the log target swapped while a turn was in flight: %q", during)
+	select {
+	case <-p.canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("clear did not cancel the in-flight provider call")
 	}
 
-	close(p.release)
-	waitForKind(t, r, "turn_done")
-
-	newPath, err := r.TranscriptPath(seat.ID)
-	if err != nil {
-		t.Fatal(err)
+	deadline := time.Now().Add(5 * time.Second)
+	var newPath string
+	for time.Now().Before(deadline) {
+		newPath, err = r.TranscriptPath(seat.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if newPath != oldPath {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if newPath == oldPath {
 		t.Fatal("the cleared session never became the log target")
 	}
-	if !transcriptHasText(t, oldPath, "after-clear") {
-		t.Fatal("the turn that issued the request lost its own tail")
+	if err := seat.Send("second"); err != nil {
+		t.Fatal(err)
 	}
-	if transcriptHasText(t, newPath, "after-clear") {
-		t.Fatal("the new transcript opens with output from a turn it never issued")
+	waitForKind(t, r, "turn_done")
+
+	p.mu.Lock()
+	calls := append([]provider.Request(nil), p.calls...)
+	p.mu.Unlock()
+	if len(calls) != 2 {
+		t.Fatalf("provider calls = %d, want initial and post-clear calls", len(calls))
+	}
+	if len(calls[1].Messages) != 1 || calls[1].Messages[0].Role != "user" || calls[1].Messages[0].Content != "second" {
+		t.Fatalf("post-clear request reused old history: %#v", calls[1].Messages)
+	}
+	if transcriptHasText(t, newPath, "hello") {
+		t.Fatal("new transcript retained the cleared prompt")
 	}
 }
 

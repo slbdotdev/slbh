@@ -50,6 +50,7 @@ type Agent struct {
 	wake          chan struct{}
 	stopped       bool
 	cancel        context.CancelFunc
+	turnCancel    context.CancelFunc
 	done          chan struct{}
 	stopOnce      sync.Once
 	contextModel  string
@@ -208,33 +209,33 @@ func (a *Agent) History() []provider.Message {
 	return append([]provider.Message(nil), a.history...)
 }
 
-// ClearHistory starts the next turn with no conversation messages. A running
-// provider request keeps its local snapshot, but its result cannot restore the
-// history that was cleared while it was in flight.
+func (a *Agent) hasActiveTurn() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.turnCancel != nil
+}
+
+// ClearHistory starts the next turn with no conversation messages. An active
+// native provider request is cancelled so it cannot resume the cleared
+// session; Codex and Claude Code use their harness-specific reset paths.
 func (a *Agent) ClearHistory() {
-	if codex := a.codexBackend(); codex != nil {
-		a.mu.Lock()
-		a.history = nil
-		a.contextUsed = 0
-		a.historyEpoch++
-		a.mu.Unlock()
-		codex.clear()
-		return
-	}
-	if claude := a.claudeBackend(); claude != nil {
-		a.mu.Lock()
-		a.history = nil
-		a.contextUsed = 0
-		a.historyEpoch++
-		a.mu.Unlock()
-		claude.clear()
-		return
-	}
 	a.mu.Lock()
 	a.history = nil
 	a.contextUsed = 0
 	a.historyEpoch++
+	turnCancel := a.turnCancel
 	a.mu.Unlock()
+	if turnCancel != nil {
+		turnCancel()
+	}
+	if codex := a.codexBackend(); codex != nil {
+		codex.clear()
+		return
+	}
+	if claude := a.claudeBackend(); claude != nil {
+		claude.clear()
+		return
+	}
 }
 
 func (a *Agent) stop() {
@@ -289,11 +290,24 @@ func (a *Agent) loop(ctx context.Context) {
 }
 
 func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
-	a.setStatus("thinking")
+	turnCtx, cancelTurn := context.WithCancel(ctx)
 	a.mu.Lock()
+	a.turnCancel = cancelTurn
 	epoch := a.historyEpoch
 	history := append([]provider.Message(nil), a.history...)
 	a.mu.Unlock()
+	defer func() {
+		cleared := turnCtx.Err() != nil && ctx.Err() == nil
+		cancelTurn()
+		a.mu.Lock()
+		a.turnCancel = nil
+		a.mu.Unlock()
+		if cleared {
+			a.setStatus("idle")
+			a.runtime.promotePending(a.ID)
+		}
+	}()
+	a.setStatus("thinking")
 	history = a.appendMessages(history, messages)
 	// Preserve consumed input even when provider setup or inference fails.
 	defer func() {
@@ -316,11 +330,11 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 		a.fail(err)
 		return
 	}
-	contextWindow := a.resolveContextWindow(ctx, p)
+	contextWindow := a.resolveContextWindow(turnCtx, p)
 	system := systemPrompt(a)
 	tools := a.runtime.toolDefinitions(a.ID)
 	for round := 0; ; {
-		if ctx.Err() != nil {
+		if turnCtx.Err() != nil {
 			return
 		}
 		history = a.appendMessages(history, a.takeMessages())
@@ -332,7 +346,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 		var answer strings.Builder
 		var reasoning strings.Builder
 		calls := make(map[int]*provider.ToolCall)
-		err = provider.Retry(ctx, 3, func() error {
+		err = provider.Retry(turnCtx, 3, func() error {
 			// A failed API attempt is also a call boundary. Retain partial prose
 			// and accept new input before retrying; incomplete tool fragments stay
 			// in the transcript and cannot be executed as successful calls.
@@ -351,7 +365,10 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			req := provider.Request{Model: model, Effort: effort, System: system, Messages: history, Tools: tools, CacheKey: provider.StablePrefixKey(provider.Request{Model: model, System: system, Tools: tools})}
 			a.recordRequestContext(req, contextWindow)
 			a.runtime.recordInferenceRequest(a, round, req, p)
-			return p.Stream(ctx, req, func(event provider.Event) error {
+			return p.Stream(turnCtx, req, func(event provider.Event) error {
+				if turnCtx.Err() != nil {
+					return turnCtx.Err()
+				}
 				switch event.Kind {
 				case provider.EventText:
 					answer.WriteString(event.Text)
@@ -390,7 +407,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 				return nil
 			})
 		})
-		if ctx.Err() != nil {
+		if turnCtx.Err() != nil {
 			return
 		}
 		// Paid-for output is retained exactly once, even when new messages
@@ -444,7 +461,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			}
 		}
 		for callNumber, index := range ordered {
-			if ctx.Err() != nil {
+			if turnCtx.Err() != nil {
 				return
 			}
 			if callNumber > 0 {
