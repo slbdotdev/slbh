@@ -187,6 +187,62 @@ func TestSeatRequestToolsUseStoreRules(t *testing.T) {
 	}
 }
 
+type startupAppendStore struct {
+	stateCalls int
+	requests   []orgstore.Request
+}
+
+func (s *startupAppendStore) RequestsState() (orgstore.RequestLogState, error) {
+	if s.stateCalls == 0 {
+		s.requests = append(s.requests, orgstore.Request{
+			ID: 1, From: "secretary", Text: "arrived during startup", Status: orgstore.StatusQueued,
+		})
+	}
+	s.stateCalls++
+	return orgstore.RequestLogState{Size: int64(len(s.requests)), ModTime: time.Unix(int64(len(s.requests)), 0)}, nil
+}
+
+func (s *startupAppendStore) Requests() ([]orgstore.Request, error) {
+	return append([]orgstore.Request(nil), s.requests...), nil
+}
+
+func TestRequestWatcherBaselinesBeforeInitialScan(t *testing.T) {
+	// The fake publishes its request during the first state sample. A watcher
+	// that scans first sees an empty queue, then records the new log as its
+	// baseline and never notices the request. Sampling the baseline first makes
+	// the following scan deliver it, while still covering appends after the scan
+	// on the next poll.
+	store := &startupAppendStore{}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	delivered := make(chan orgstore.Request, 1)
+	errors := make(chan error, 1)
+	go func() {
+		defer close(done)
+		watchRequestQueue(stop, time.Hour, store, func(request orgstore.Request) bool {
+			delivered <- request
+			return true
+		}, func(err error) {
+			errors <- err
+		})
+	}()
+	t.Cleanup(func() {
+		close(stop)
+		<-done
+	})
+
+	select {
+	case request := <-delivered:
+		if request.ID != 1 || request.Text != "arrived during startup" {
+			t.Fatalf("delivered request = %#v", request)
+		}
+	case err := <-errors:
+		t.Fatalf("request watcher error: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("request appended during watcher startup was not delivered")
+	}
+}
+
 func TestRequestWatcherDeliversStartupAndExternalAppendsOnceAndStops(t *testing.T) {
 	home := t.TempDir()
 	store, err := orgstore.Open(home)

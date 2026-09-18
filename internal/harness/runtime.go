@@ -913,15 +913,32 @@ func (r *Runtime) deliverJobResult(snapshot job.Snapshot, stdout, stderr string)
 
 func (r *Runtime) watchOrgRequests() {
 	defer close(r.requestWatchDone)
-	seen := make(map[uint64]struct{})
-	deliver := func() {
-		requests, err := r.orgStore.Requests()
-		if err != nil {
-			r.emitStatus("org_requests", err.Error())
-			return
-		}
+	watchRequestQueue(r.requestWatchStop, r.requestPoll, r.orgStore, func(request orgstore.Request) bool {
 		seat, ok := r.lookupAgent(r.seatID)
 		if !ok {
+			return false
+		}
+		if err := seat.receiveOrgRequest(request); err != nil {
+			r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"request": request.ID}})
+			return false
+		}
+		return true
+	}, func(err error) {
+		r.emitStatus("org_requests", err.Error())
+	})
+}
+
+type requestQueueStore interface {
+	Requests() ([]orgstore.Request, error)
+	RequestsState() (orgstore.RequestLogState, error)
+}
+
+func watchRequestQueue(stop <-chan struct{}, poll time.Duration, store requestQueueStore, handle func(orgstore.Request) bool, reportError func(error)) {
+	seen := make(map[uint64]struct{})
+	deliver := func() {
+		requests, err := store.Requests()
+		if err != nil {
+			reportError(err)
 			return
 		}
 		for _, request := range requests {
@@ -931,29 +948,32 @@ func (r *Runtime) watchOrgRequests() {
 			if _, delivered := seen[request.ID]; delivered {
 				continue
 			}
-			if err := seat.receiveOrgRequest(request); err != nil {
-				r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"request": request.ID}})
+			if !handle(request) {
 				continue
 			}
 			seen[request.ID] = struct{}{}
 		}
 	}
 
-	deliver()
-	state, err := r.orgStore.RequestsState()
+	// Establish the baseline before the first scan. If an external append lands
+	// between these operations, the scan sees it now; if it lands after the
+	// scan, the next state check differs from this baseline. Scanning first can
+	// lose an append that lands before the baseline is sampled forever.
+	state, err := store.RequestsState()
 	if err != nil {
-		r.emitStatus("org_requests", err.Error())
+		reportError(err)
 	}
-	ticker := time.NewTicker(r.requestPoll)
+	deliver()
+	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-r.requestWatchStop:
+		case <-stop:
 			return
 		case <-ticker.C:
-			next, statErr := r.orgStore.RequestsState()
+			next, statErr := store.RequestsState()
 			if statErr != nil {
-				r.emitStatus("org_requests", statErr.Error())
+				reportError(statErr)
 				continue
 			}
 			if next.Size == state.Size && next.ModTime.Equal(state.ModTime) {
