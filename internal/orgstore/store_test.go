@@ -117,6 +117,51 @@ func TestReportRoundTripValidationAndAck(t *testing.T) {
 	}
 }
 
+func TestClearAdvancesCursorAndRetainsAppendOnlyLog(t *testing.T) {
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if _, err := store.AppendReport("seat", "report", nil, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cleared, err := store.Clear()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared != 3 {
+		t.Fatalf("cleared reports = %d, want 3", cleared)
+	}
+	pending, err := store.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending after clear = %#v", pending)
+	}
+
+	if _, err := store.AppendReport("seat", "after clear", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = store.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].ID != 4 {
+		t.Fatalf("pending after append = %#v", pending)
+	}
+	data, err := os.ReadFile(store.inboxLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Count(data, []byte{'\n'}) != 4 {
+		t.Fatalf("clear removed append-only records: %q", data)
+	}
+}
+
 func TestRequestRoundTripAndStatusRules(t *testing.T) {
 	store, err := Open(t.TempDir())
 	if err != nil {

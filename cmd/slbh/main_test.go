@@ -72,6 +72,13 @@ func TestSecretaryCommandsFromBuiltBinaryDoNotConstructRuntime(t *testing.T) {
 	if len(pending) != 0 {
 		t.Fatalf("pending reports after ack: %+v", pending)
 	}
+	if _, err := store.AppendReport("seat", "clear me", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	output = runBinary(t, bin, environment, "inbox", "--clear")
+	if output != "cleared 1 report\n" {
+		t.Fatalf("inbox --clear output = %q", output)
+	}
 
 	if _, err := os.Stat(filepath.Join(home, "runtimes")); !os.IsNotExist(err) {
 		t.Fatalf("runtime directory exists or could not be checked: %v", err)

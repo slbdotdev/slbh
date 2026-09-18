@@ -223,6 +223,41 @@ func (s *Store) Ack(id uint64) (err error) {
 	return replaceCursor(s.dir, s.inboxCursor, id)
 }
 
+// Clear acknowledges every report currently in the inbox. The append-only
+// report log is retained, and reports appended after this operation remain
+// pending.
+func (s *Store) Clear() (cleared uint64, err error) {
+	unlock, err := acquireLock(s.inboxLock)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { err = errors.Join(err, unlock()) }()
+
+	reports, err := readReports(s.inboxLog)
+	if err != nil {
+		return 0, err
+	}
+	cursor, err := readCursor(s.inboxCursor)
+	if err != nil {
+		return 0, err
+	}
+	if cursor != 0 && !hasReport(reports, cursor) {
+		return 0, fmt.Errorf("org inbox cursor references unknown report %d", cursor)
+	}
+	for _, report := range reports {
+		if report.ID > cursor {
+			cleared++
+		}
+	}
+	if len(reports) == 0 || reports[len(reports)-1].ID == cursor {
+		return cleared, nil
+	}
+	if err := replaceCursor(s.dir, s.inboxCursor, reports[len(reports)-1].ID); err != nil {
+		return 0, err
+	}
+	return cleared, nil
+}
+
 // AppendRequest appends a queued request and returns the folded value.
 func (s *Store) AppendRequest(from, text string) (request Request, err error) {
 	unlock, err := acquireLock(s.requestsLock)

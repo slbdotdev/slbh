@@ -17,7 +17,7 @@ import (
 // Usage is the help text for the Secretary commands.
 const Usage = `slbh secretary commands
 
-  slbh inbox [--json]
+  slbh inbox [--clear] [--json]
   slbh ack <id> [--json]
   slbh request <text> [--json]
   slbh request -f <file> [--json]   ("-" reads stdin)
@@ -85,8 +85,25 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 func runInbox(store *orgstore.Store, args []string, asJSON bool, stdout, stderr io.Writer) int {
-	if len(args) != 0 {
-		return usageError(stderr, asJSON, "inbox takes no arguments")
+	clear := false
+	for _, arg := range args {
+		if arg != "--clear" || clear {
+			return usageError(stderr, asJSON, "inbox accepts only one optional --clear flag")
+		}
+		clear = true
+	}
+	if clear {
+		count, err := store.Clear()
+		if err != nil {
+			return operationalError(stderr, asJSON, err)
+		}
+		if asJSON {
+			return writeJSON(stdout, stderr, struct {
+				Cleared uint64 `json:"cleared"`
+			}{Cleared: count})
+		}
+		fmt.Fprintf(stdout, "cleared %d %s\n", count, reportWord(count))
+		return 0
 	}
 	reports, err := store.Pending()
 	if err != nil {
@@ -113,6 +130,13 @@ func runInbox(store *orgstore.Store, args []string, asJSON bool, stdout, stderr 
 		}
 	}
 	return 0
+}
+
+func reportWord(count uint64) string {
+	if count == 1 {
+		return "report"
+	}
+	return "reports"
 }
 
 func runAck(store *orgstore.Store, args []string, asJSON bool, stdout, stderr io.Writer) int {

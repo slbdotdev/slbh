@@ -152,6 +152,9 @@ the Seat's reports to the Secretary. It:
 - is append-only,
 - is drained by **acknowledgement, not by reading**, through a cursor, so a
   Secretary that dies mid-drain loses nothing and repeats nothing.
+- can be explicitly cleared with `slbh inbox --clear`, which advances the
+  cursor through the reports currently present without rewriting the log;
+  reports appended after the clear remain pending.
 
 A Seat report names the org page its change invalidates, or states that
 none is.
@@ -194,7 +197,7 @@ is not an identity test.
 ## 8. The Secretary's interface
 
 `slbh` subcommands, invoked from the Secretary's shell. Read the inbox,
-acknowledge it, request work. There is no MCP server and no IPC.
+acknowledge or clear it, and request work. There is no MCP server and no IPC.
 
 The Secretary is a Codex session with full shell access, and slbh is a
 binary on the same machine. MCP's only remaining job would have been pull,

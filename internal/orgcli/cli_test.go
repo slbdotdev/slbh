@@ -56,6 +56,43 @@ func TestInboxHumanAndJSON(t *testing.T) {
 	}
 }
 
+func TestInboxClear(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SLBH_HOME", home)
+	store := openStore(t, home)
+	for range 2 {
+		if _, err := store.AppendReport("seat", "report", nil, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	code, output, errors := invoke([]string{"inbox", "--clear"}, "")
+	if code != 0 || output != "cleared 2 reports\n" || errors != "" {
+		t.Fatalf("inbox --clear: code=%d stdout=%q stderr=%q", code, output, errors)
+	}
+	code, output, errors = invoke([]string{"inbox", "--clear", "--json"}, "")
+	if code != 0 || output != "{\"cleared\":0}\n" || errors != "" {
+		t.Fatalf("inbox --clear --json: code=%d stdout=%q stderr=%q", code, output, errors)
+	}
+	pending, err := store.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending reports after clear: %#v", pending)
+	}
+	if _, err := store.AppendReport("seat", "new report", nil, true); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = store.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].ID != 3 {
+		t.Fatalf("reports appended after clear = %#v", pending)
+	}
+}
+
 func TestAckOutputErrorsAndExitCodes(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("SLBH_HOME", home)
@@ -193,6 +230,7 @@ func TestUnknownCommandAndBadUsageExitTwo(t *testing.T) {
 	tests := [][]string{
 		{"unknown"},
 		{"inbox", "extra"},
+		{"inbox", "--clear", "--clear"},
 		{"ack"},
 		{"ack", "zero"},
 		{"request"},
