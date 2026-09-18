@@ -15,6 +15,7 @@ import (
 	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/logx"
 	"github.com/slbdotdev/slbh/internal/provider"
+	"github.com/slbdotdev/slbh/internal/seam"
 )
 
 type fakeProvider struct{}
@@ -115,7 +116,7 @@ func testRuntime(t *testing.T) *Runtime {
 }
 
 func TestAgentSnapshotJSONRoundTrip(t *testing.T) {
-	want := AgentSnapshot{
+	want := seam.AgentSnapshot{
 		ID:              "agent-1234",
 		Title:           "reviewer",
 		ParentID:        "agent-parent",
@@ -134,22 +135,22 @@ func TestAgentSnapshotJSONRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got AgentSnapshot
+	var got seam.AgentSnapshot
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
 	if got != want {
-		t.Fatalf("AgentSnapshot round trip = %#v, want %#v", got, want)
+		t.Fatalf("seam.AgentSnapshot round trip = %#v, want %#v", got, want)
 	}
 	for _, key := range []string{"id", "title", "parent_id", "depth", "model", "effort", "status", "harness", "work_dir", "context_window", "context_used", "cache_hit_tokens", "cache_miss_tokens"} {
 		if !strings.Contains(string(data), `"`+key+`"`) {
-			t.Fatalf("AgentSnapshot JSON missing %q: %s", key, data)
+			t.Fatalf("seam.AgentSnapshot JSON missing %q: %s", key, data)
 		}
 	}
 }
 
 func TestJobSnapshotJSONRoundTrip(t *testing.T) {
-	want := JobSnapshot{
+	want := seam.JobSnapshot{
 		ID:          "job-1234",
 		Author:      "agent-1234",
 		Script:      "printf output",
@@ -166,16 +167,16 @@ func TestJobSnapshotJSONRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got JobSnapshot
+	var got seam.JobSnapshot
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
 	if got != want {
-		t.Fatalf("JobSnapshot round trip = %#v, want %#v", got, want)
+		t.Fatalf("seam.JobSnapshot round trip = %#v, want %#v", got, want)
 	}
 	for _, key := range []string{"id", "author", "script", "tool_name", "status", "started", "finished", "exit_code", "stdout_bytes", "stderr_bytes", "warn_after"} {
 		if !strings.Contains(string(data), `"`+key+`"`) {
-			t.Fatalf("JobSnapshot JSON missing %q: %s", key, data)
+			t.Fatalf("seam.JobSnapshot JSON missing %q: %s", key, data)
 		}
 	}
 }
@@ -199,8 +200,8 @@ func TestJobSnapshotsReturnsCopies(t *testing.T) {
 		t.Fatalf("JobSnapshots length = %d, want 1", len(first))
 	}
 	original := first[0]
-	first[0] = JobSnapshot{ID: "mutated"}
-	first = append(first, JobSnapshot{ID: "invented"})
+	first[0] = seam.JobSnapshot{ID: "mutated"}
+	first = append(first, seam.JobSnapshot{ID: "invented"})
 
 	second := r.JobSnapshots()
 	if len(second) != 1 || second[0] != original {
@@ -212,7 +213,7 @@ func TestRuntimeSetAgentEffort(t *testing.T) {
 	r := testRuntime(t)
 	seat := r.seat()
 
-	if err := r.SetAgentEffort(seat.ID, "medium"); err != nil {
+	if err := r.setAgentEffort(seat.ID, "medium"); err != nil {
 		t.Fatal(err)
 	}
 	if got := seat.Snapshot().Effort; got != "medium" {
@@ -224,7 +225,7 @@ func TestRuntimeSendPrompt(t *testing.T) {
 	r := testRuntime(t)
 	seat := r.seat()
 
-	if err := r.SendPrompt(seat.ID, "first prompt"); err != nil {
+	if err := r.sendPrompt(seat.ID, "first prompt"); err != nil {
 		t.Fatal(err)
 	}
 	waitAgentTurn(t, r, seat.ID)
@@ -241,7 +242,7 @@ func TestRuntimeSteerAgent(t *testing.T) {
 	r := testRuntime(t)
 	seat := r.seat()
 
-	if err := r.SteerAgent(seat.ID, "new direction"); err != nil {
+	if err := r.steerAgent(seat.ID, "new direction"); err != nil {
 		t.Fatal(err)
 	}
 	waitAgentTurn(t, r, seat.ID)
@@ -313,7 +314,7 @@ func TestRuntimeDoesNotDropStreamEventsWhenUIFallsBehind(t *testing.T) {
 	r := testRuntime(t)
 	const count = 4096
 	for i := 0; i < count; i++ {
-		r.emit(Event{AgentID: r.seat().ID, AgentTitle: "seat", Kind: "assistant", Text: "stream-event"})
+		r.emit(seam.Event{AgentID: r.seat().ID, AgentTitle: "seat", Kind: "assistant", Text: "stream-event"})
 	}
 	received := 0
 	deadline := time.After(5 * time.Second)
@@ -332,9 +333,9 @@ func TestRuntimeDoesNotDropStreamEventsWhenUIFallsBehind(t *testing.T) {
 func TestRuntimeCloseDeliversStoppingEventThenClosesStream(t *testing.T) {
 	r := testRuntime(t)
 	events := r.Events()
-	received := make(chan []Event, 1)
+	received := make(chan []seam.Event, 1)
 	go func() {
-		var all []Event
+		var all []seam.Event
 		for event := range events {
 			all = append(all, event)
 		}
@@ -359,7 +360,7 @@ func TestRuntimeCloseDeliversStoppingEventThenClosesStream(t *testing.T) {
 }
 
 func TestRuntimeCloseReturnsAndClosesFullUnreadStream(t *testing.T) {
-	events := make(chan Event, 1024)
+	events := make(chan seam.Event, 1024)
 	r, err := New(
 		config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"},
 		Options{Events: events, Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }},
@@ -368,7 +369,7 @@ func TestRuntimeCloseReturnsAndClosesFullUnreadStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < cap(events); i++ {
-		r.emit(Event{Kind: "status", Text: "fill"})
+		r.emit(seam.Event{Kind: "status", Text: "fill"})
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for len(events) < cap(events) && time.Now().Before(deadline) {
@@ -404,7 +405,7 @@ func TestRuntimeEmitAfterCloseIsNoOp(t *testing.T) {
 	}
 	for range r.Events() {
 	}
-	r.emit(Event{Kind: "status", Text: "after close"})
+	r.emit(seam.Event{Kind: "status", Text: "after close"})
 	if _, ok := <-r.Events(); ok {
 		t.Fatal("event stream reopened after emit following Close")
 	}
@@ -439,7 +440,7 @@ func TestAgentSessionsHaveSeparateTranscriptsAndClearRotatesSelectedAgent(t *tes
 		t.Fatalf("first session transcript lacks prompt: %#v", firstEntries)
 	}
 
-	if err := r.Clear(seat.ID); err != nil {
+	if err := r.clear(seat.ID); err != nil {
 		t.Fatal(err)
 	}
 	secondPath, err := r.TranscriptPath(seat.ID)

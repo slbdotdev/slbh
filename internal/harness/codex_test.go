@@ -508,7 +508,7 @@ func TestCodexLeafClearStartsFreshThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Clear(child.ID); err != nil {
+	if err := r.clear(child.ID); err != nil {
 		t.Fatal(err)
 	}
 	interrupt := readCodexWire(t, reader)
@@ -528,7 +528,7 @@ func TestCodexLeafClearStartsFreshThread(t *testing.T) {
 	if newPath == oldPath {
 		t.Fatalf("clear reused transcript %q", newPath)
 	}
-	if _, err := r.Compact(child.ID, 4); err != nil {
+	if _, err := r.compact(child.ID, 4); err != nil {
 		t.Fatal(err)
 	}
 	compact := readCodexWire(t, reader)

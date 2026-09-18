@@ -249,7 +249,7 @@ func TestOneInboxPreservesFIFOBurstAndDoesNotBlockOnBusyAgentOrUI(t *testing.T) 
 	}
 	// Saturate telemetry without reading Events; message transport must work.
 	for i := 0; i < 1100; i++ {
-		r.EmitStatus("status", "UI backpressure")
+		r.emitStatus("status", "UI backpressure")
 	}
 	first.finish(t, textEvent("retained"))
 	next := p.next(t)

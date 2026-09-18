@@ -16,7 +16,7 @@ func (r *Runtime) Do(ctx context.Context, command seam.Command) (seam.Reply, err
 		return seam.Reply{}, fmt.Errorf("unknown command %q", "<nil>")
 	}
 	name := command.CommandName()
-	r.emit(Event{Kind: "command", Text: name, Metadata: map[string]any{"name": name}})
+	r.emit(seam.Event{Kind: "command", Text: name, Metadata: map[string]any{"name": name}})
 	if !seam.IsCommandName(name) {
 		return seam.Reply{}, fmt.Errorf("unknown command %q", name)
 	}
@@ -27,11 +27,11 @@ func (r *Runtime) Do(ctx context.Context, command seam.Command) (seam.Reply, err
 	reply := seam.Reply{Command: name}
 	switch command := command.(type) {
 	case seam.SendPromptCommand:
-		return reply, r.SendPrompt(command.AgentID, command.Prompt)
+		return reply, r.sendPrompt(command.AgentID, command.Prompt)
 	case seam.SteerAgentCommand:
-		return reply, r.SteerAgent(command.AgentID, command.Message)
+		return reply, r.steerAgent(command.AgentID, command.Message)
 	case seam.SetAgentEffortCommand:
-		if err := r.SetAgentEffort(command.AgentID, command.Effort); err != nil {
+		if err := r.setAgentEffort(command.AgentID, command.Effort); err != nil {
 			return reply, err
 		}
 		if !command.Persist {
@@ -47,24 +47,24 @@ func (r *Runtime) Do(ctx context.Context, command seam.Command) (seam.Reply, err
 		r.mu.Unlock()
 		return reply, cfg.Save()
 	case seam.ClearCommand:
-		return reply, r.Clear(command.AgentID)
+		return reply, r.clear(command.AgentID)
 	case seam.CompactCommand:
-		dropped, err := r.Compact(command.AgentID, command.Keep)
+		dropped, err := r.compact(command.AgentID, command.Keep)
 		reply.Dropped = dropped
 		return reply, err
 	case seam.ConfigureModelsCommand:
-		return reply, r.ConfigureModels(command.SeatModel, command.SubagentModel, command.Approved)
+		return reply, r.configureModels(command.SeatModel, command.SubagentModel, command.Approved)
 	case seam.ConfigureModelSlotsCommand:
-		return reply, r.ConfigureModelSlots(command.SeatModel, command.SubagentModel, command.LeafModel, command.Approved)
+		return reply, r.configureModelSlots(command.SeatModel, command.SubagentModel, command.LeafModel, command.Approved)
 	case seam.SetModelCatalogCommand:
-		r.SetModelCatalog(command.Catalog)
+		r.setModelCatalog(command.Catalog)
 		return reply, nil
 	case seam.AuthorLocalPolicyCommand:
-		source, err := r.AuthorLocalPolicy(command.Policy)
+		source, err := r.authorLocalPolicy(command.Policy)
 		reply.PolicySource = source
 		return reply, err
 	case seam.EmitStatusCommand:
-		r.EmitStatus(command.Kind, command.Text)
+		r.emitStatus(command.Kind, command.Text)
 		return reply, nil
 	case seam.CloseCommand:
 		return reply, r.Close()

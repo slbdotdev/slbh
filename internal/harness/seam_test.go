@@ -90,7 +90,7 @@ func TestSeamQueriesReturnDeepCopies(t *testing.T) {
 		Source: config.InstructionSource{Missing: []string{config.LayerLeaf}},
 	}
 	r.mu.Unlock()
-	r.SetModelCatalog([]provider.Catalog{{Name: "test", Models: []provider.ModelInfo{{ID: "test/model"}}}})
+	r.setModelCatalog([]provider.Catalog{{Name: "test", Models: []provider.ModelInfo{{ID: "test/model"}}}})
 
 	firstConfig := r.Config()
 	firstConfig.ApprovedModels[0] = "mutated"

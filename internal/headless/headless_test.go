@@ -284,7 +284,7 @@ func TestRunReturnsOnClosedFullEventStream(t *testing.T) {
 	}
 	events := rt.Events()
 	for i := 0; i < cap(events); i++ {
-		rt.EmitStatus("status", "fill")
+		_, _ = rt.Do(context.Background(), seam.EmitStatusCommand{Kind: "status", Text: "fill"})
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for len(events) < cap(events) && time.Now().Before(deadline) {

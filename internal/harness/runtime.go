@@ -19,12 +19,6 @@ import (
 	"github.com/slbdotdev/slbh/internal/seam"
 )
 
-// These aliases keep the TUI source-compatible for the unit in which it still
-// imports harness. The definitions and JSON contract live only in seam.
-type Event = seam.Event
-type AgentSnapshot = seam.AgentSnapshot
-type JobSnapshot = seam.JobSnapshot
-
 type LaunchSpec struct {
 	Title            string
 	Harness          string
@@ -42,7 +36,7 @@ type agentSession struct {
 }
 
 type queuedEvent struct {
-	event     Event
+	event     seam.Event
 	delivered chan struct{}
 }
 
@@ -64,7 +58,7 @@ type Runtime struct {
 	pending      map[string]*agentSession
 	sessions     []*agentSession
 	redactor     *secretRedactor
-	events       chan Event
+	events       chan seam.Event
 	eventMu      sync.Mutex
 	eventQueue   []queuedEvent
 	eventWake    chan struct{}
@@ -80,7 +74,7 @@ type Runtime struct {
 type Options struct {
 	Config       config.Config
 	Provider     func(model string) (provider.Provider, error)
-	Events       chan Event
+	Events       chan seam.Event
 	CodexCommand string
 }
 
@@ -99,7 +93,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	workDir, _ := os.Getwd()
 	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), events: options.Events, eventWake: make(chan struct{}, 1), eventStop: make(chan struct{}), eventDone: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand}
 	if r.events == nil {
-		r.events = make(chan Event, 1024)
+		r.events = make(chan seam.Event, 1024)
 	}
 	go r.dispatchEvents()
 	if r.provider == nil {
@@ -139,14 +133,14 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	r.seatID = seat.ID
 	r.mu.Unlock()
 	seat.start()
-	r.emit(Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "runtime", Text: "runtime started"})
+	r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "runtime", Text: "runtime started"})
 	return r, nil
 }
 
-func (r *Runtime) ID() string           { return r.id }
-func (r *Runtime) Dir() string          { return r.runtimeDir }
-func (r *Runtime) Home() string         { return r.config.Home }
-func (r *Runtime) Events() <-chan Event { return r.events }
+func (r *Runtime) ID() string                { return r.id }
+func (r *Runtime) Dir() string               { return r.runtimeDir }
+func (r *Runtime) Home() string              { return r.config.Home }
+func (r *Runtime) Events() <-chan seam.Event { return r.events }
 
 func (r *Runtime) Config() config.Config {
 	r.mu.RLock()
@@ -154,11 +148,11 @@ func (r *Runtime) Config() config.Config {
 	return cloneConfig(r.config)
 }
 
-// SetModelCatalog makes the live provider tree available to every agent's
+// setModelCatalog makes the live provider tree available to every agent's
 // next context. Catalog discovery is intentionally initiated by the TUI, not
 // during startup, so launching slbh never spends a network request merely to
 // render the terminal.
-func (r *Runtime) SetModelCatalog(catalog []provider.Catalog) {
+func (r *Runtime) setModelCatalog(catalog []provider.Catalog) {
 	r.mu.Lock()
 	r.catalog = cloneCatalog(catalog)
 	r.mu.Unlock()
@@ -179,14 +173,14 @@ func (r *Runtime) PolicySource() config.PolicySource {
 	return r.config.PolicySource
 }
 
-// AuthorLocalPolicy writes a local routing policy into the app-owned
+// authorLocalPolicy writes a local routing policy into the app-owned
 // config.json and re-resolves which policy is in force.
 //
 // On a managed host the managed file still wins, and the returned source says
 // so: the write is honest but inert, which is exactly what the precedence rule
 // promises and what the user must be told. On an unmanaged host this is what
 // turns the fail-closed refusal back into a working harness.
-func (r *Runtime) AuthorLocalPolicy(policy provider.Policy) (config.PolicySource, error) {
+func (r *Runtime) authorLocalPolicy(policy provider.Policy) (config.PolicySource, error) {
 	// Resolution re-reads the managed file, so it happens on a copy with no
 	// lock held: a request resolving its own route takes the same lock, and
 	// blocking it behind a file read for a menu keypress would be a poor
@@ -208,17 +202,17 @@ func (r *Runtime) AuthorLocalPolicy(policy provider.Policy) (config.PolicySource
 	return saved.PolicySource, nil
 }
 
-// ConfigureModels preserves the older two-slot API while keeping the leaf
+// configureModels preserves the older two-slot API while keeping the leaf
 // default aligned with the level-one subagent model.
-func (r *Runtime) ConfigureModels(seatModel, subagentModel string, approved []string) error {
+func (r *Runtime) configureModels(seatModel, subagentModel string, approved []string) error {
 	cfg := r.Config()
-	return r.ConfigureModelSlots(seatModel, subagentModel, cfg.LeafModel, approved)
+	return r.configureModelSlots(seatModel, subagentModel, cfg.LeafModel, approved)
 }
 
-// ConfigureModelSlots persists the user's model choices and updates the seat
+// configureModelSlots persists the user's model choices and updates the seat
 // agent immediately. An unapproved configured default is retained in the
 // dotfile but resolves to no model until it is approved again.
-func (r *Runtime) ConfigureModelSlots(seatModel, subagentModel, leafModel string, approved []string) error {
+func (r *Runtime) configureModelSlots(seatModel, subagentModel, leafModel string, approved []string) error {
 	r.mu.Lock()
 	r.config.SeatModel = seatModel
 	r.config.SubagentModel = subagentModel
@@ -425,7 +419,7 @@ func (r *Runtime) LaunchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	} else {
 		agent.start()
 	}
-	r.emit(Event{AgentID: agent.ID, AgentTitle: spec.Title, Kind: "status", Text: "subagent launched", Metadata: map[string]any{"parent": parentID, "harness": agent.Harness, "working_dir": agent.WorkDir}})
+	r.emit(seam.Event{AgentID: agent.ID, AgentTitle: spec.Title, Kind: "status", Text: "subagent launched", Metadata: map[string]any{"parent": parentID, "harness": agent.Harness, "working_dir": agent.WorkDir}})
 	if spec.Brief != "" {
 		if err := agent.Send(spec.Brief); err != nil {
 			agent.stop()
@@ -453,10 +447,10 @@ func (r *Runtime) discardAgent(agentID string) {
 	}
 }
 
-func (r *Runtime) Agents() []AgentSnapshot {
+func (r *Runtime) Agents() []seam.AgentSnapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	result := make([]AgentSnapshot, 0, len(r.agents))
+	result := make([]seam.AgentSnapshot, 0, len(r.agents))
 	for _, a := range r.agents {
 		result = append(result, a.Snapshot())
 	}
@@ -470,11 +464,11 @@ func (r *Runtime) Agents() []AgentSnapshot {
 }
 
 // JobSnapshots returns copies of all jobs owned by the runtime.
-func (r *Runtime) JobSnapshots() []JobSnapshot {
+func (r *Runtime) JobSnapshots() []seam.JobSnapshot {
 	jobs := r.jobs.List()
-	result := make([]JobSnapshot, len(jobs))
+	result := make([]seam.JobSnapshot, len(jobs))
 	for i, snapshot := range jobs {
-		result[i] = JobSnapshot{
+		result[i] = seam.JobSnapshot{
 			ID:          snapshot.ID,
 			Author:      snapshot.Author,
 			Script:      snapshot.Script,
@@ -491,8 +485,8 @@ func (r *Runtime) JobSnapshots() []JobSnapshot {
 	return result
 }
 
-// SendPrompt delivers a user prompt to an agent.
-func (r *Runtime) SendPrompt(agentID, prompt string) error {
+// sendPrompt delivers a user prompt to an agent.
+func (r *Runtime) sendPrompt(agentID, prompt string) error {
 	agent, ok := r.lookupAgent(agentID)
 	if !ok {
 		return fmt.Errorf("agent %q not found", agentID)
@@ -500,8 +494,8 @@ func (r *Runtime) SendPrompt(agentID, prompt string) error {
 	return agent.Send(prompt)
 }
 
-// SteerAgent delivers a steering message to an agent.
-func (r *Runtime) SteerAgent(agentID, message string) error {
+// steerAgent delivers a steering message to an agent.
+func (r *Runtime) steerAgent(agentID, message string) error {
 	agent, ok := r.lookupAgent(agentID)
 	if !ok {
 		return fmt.Errorf("agent %q not found", agentID)
@@ -509,8 +503,8 @@ func (r *Runtime) SteerAgent(agentID, message string) error {
 	return agent.Steer(message)
 }
 
-// SetAgentEffort updates an agent's inference effort.
-func (r *Runtime) SetAgentEffort(agentID, effort string) error {
+// setAgentEffort updates an agent's inference effort.
+func (r *Runtime) setAgentEffort(agentID, effort string) error {
 	agent, ok := r.lookupAgent(agentID)
 	if !ok {
 		return fmt.Errorf("agent %q not found", agentID)
@@ -526,7 +520,7 @@ func (r *Runtime) lookupAgent(agentID string) (*Agent, bool) {
 	return a, ok
 }
 
-func (r *Runtime) Compact(agentID string, keep int) (int, error) {
+func (r *Runtime) compact(agentID string, keep int) (int, error) {
 	agent, ok := r.lookupAgent(agentID)
 	if !ok {
 		return 0, fmt.Errorf("agent %q not found", agentID)
@@ -534,7 +528,7 @@ func (r *Runtime) Compact(agentID string, keep int) (int, error) {
 	return agent.Compact(keep), nil
 }
 
-func (r *Runtime) Clear(agentID string) error {
+func (r *Runtime) clear(agentID string) error {
 	agent, ok := r.lookupAgent(agentID)
 	if !ok {
 		return fmt.Errorf("agent %q not found", agentID)
@@ -597,15 +591,15 @@ func (r *Runtime) promotePending(agentID string) {
 	}
 }
 
-func (r *Runtime) emit(event Event) {
+func (r *Runtime) emit(event seam.Event) {
 	r.emitQueued(event, nil)
 }
 
-func (r *Runtime) emitQueued(event Event, delivered chan struct{}) {
+func (r *Runtime) emitQueued(event seam.Event, delivered chan struct{}) {
 	r.queueEvent(event, delivered, false)
 }
 
-func (r *Runtime) queueEvent(event Event, delivered chan struct{}, closeEvents bool) {
+func (r *Runtime) queueEvent(event seam.Event, delivered chan struct{}, closeEvents bool) {
 	r.eventMu.Lock()
 	if r.eventsClosed {
 		r.eventMu.Unlock()
@@ -714,13 +708,13 @@ func (r *Runtime) recordInferenceRequest(agent *Agent, round int, req provider.R
 		metadata["context"] = json.RawMessage(context)
 		metadata["context_sha256"] = provider.PayloadSHA256(context)
 	}
-	r.emit(Event{AgentID: agent.ID, AgentTitle: agent.Title, Kind: "inference_request", Metadata: metadata})
+	r.emit(seam.Event{AgentID: agent.ID, AgentTitle: agent.Title, Kind: "inference_request", Metadata: metadata})
 }
 
-// EmitStatus lets front ends record local control-plane events without
+// emitStatus lets front ends record local control-plane events without
 // fabricating a provider turn.
-func (r *Runtime) EmitStatus(kind, text string) {
-	r.emit(Event{Kind: kind, Text: text})
+func (r *Runtime) emitStatus(kind, text string) {
+	r.emit(seam.Event{Kind: kind, Text: text})
 }
 
 // deliverJobWarning routes a job's single warn_after_seconds warning.
@@ -742,13 +736,13 @@ func (r *Runtime) EmitStatus(kind, text string) {
 // unchanged: what the agent is told and what the manager observed are the same
 // reading.
 func (r *Runtime) deliverJobWarning(snapshot job.Snapshot) {
-	r.emit(Event{AgentID: snapshot.Author, Kind: "job_warning", Text: "job is still running", Metadata: map[string]any{"job": snapshot.ID, "warn_after": snapshot.WarnAfter.String()}})
+	r.emit(seam.Event{AgentID: snapshot.Author, Kind: "job_warning", Text: "job is still running", Metadata: map[string]any{"job": snapshot.ID, "warn_after": snapshot.WarnAfter.String()}})
 	agent, ok := r.lookupAgent(snapshot.Author)
 	if !ok {
 		return
 	}
 	if err := agent.receiveJobWarning(snapshot); err != nil {
-		r.emit(Event{AgentID: snapshot.Author, AgentTitle: agent.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"job": snapshot.ID}})
+		r.emit(seam.Event{AgentID: snapshot.Author, AgentTitle: agent.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"job": snapshot.ID}})
 	}
 }
 
@@ -758,7 +752,7 @@ func (r *Runtime) deliverJobResult(snapshot job.Snapshot, stdout, stderr string)
 		return
 	}
 	if err := agent.receiveJobResult(snapshot, stdout, stderr); err != nil {
-		r.emit(Event{AgentID: snapshot.Author, AgentTitle: agent.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"job": snapshot.ID}})
+		r.emit(seam.Event{AgentID: snapshot.Author, AgentTitle: agent.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"job": snapshot.ID}})
 	}
 }
 
@@ -766,7 +760,7 @@ func (r *Runtime) Close() error {
 	var err error
 	r.closeOnce.Do(func() {
 		delivered := make(chan struct{})
-		r.queueEvent(Event{Kind: "runtime", Text: "runtime stopping"}, delivered, true)
+		r.queueEvent(seam.Event{Kind: "runtime", Text: "runtime stopping"}, delivered, true)
 		// Shutdown is learned from the event stream, not from a second lifecycle
 		// channel. Give the dispatcher a bounded opportunity to hand off this
 		// marker and every earlier event. If the consumer is not reading, stopping

@@ -60,7 +60,7 @@ func TestClearDefersTheLogSwapUntilAnInFlightTurnEnds(t *testing.T) {
 	}
 	<-p.started
 
-	if err := r.Clear(seat.ID); err != nil {
+	if err := r.clear(seat.ID); err != nil {
 		t.Fatal(err)
 	}
 	during, err := r.TranscriptPath(seat.ID)

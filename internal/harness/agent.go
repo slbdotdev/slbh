@@ -11,6 +11,7 @@ import (
 	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/provider"
+	"github.com/slbdotdev/slbh/internal/seam"
 )
 
 const (
@@ -148,15 +149,15 @@ func (a *Agent) appendMessages(history []provider.Message, messages []agentMessa
 		if message.senderTitle != "" {
 			title = message.senderTitle
 		}
-		a.runtime.emit(Event{AgentID: a.ID, AgentTitle: title, Kind: message.kind, Text: message.text, Metadata: message.metadata})
+		a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: title, Kind: message.kind, Text: message.text, Metadata: message.metadata})
 	}
 	return history
 }
 
-func (a *Agent) Snapshot() AgentSnapshot {
+func (a *Agent) Snapshot() seam.AgentSnapshot {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return AgentSnapshot{
+	return seam.AgentSnapshot{
 		ID:              a.ID,
 		Title:           a.Title,
 		ParentID:        a.ParentID,
@@ -320,10 +321,10 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 				switch event.Kind {
 				case provider.EventText:
 					answer.WriteString(event.Text)
-					a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "assistant", Text: event.Text})
+					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "assistant", Text: event.Text})
 				case provider.EventReasoning:
 					reasoning.WriteString(event.Text)
-					a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "thinking", Text: event.Text})
+					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "thinking", Text: event.Text})
 				case provider.EventTool:
 					call := calls[event.ToolIndex]
 					if call == nil {
@@ -337,10 +338,10 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 						call.Function.Name = event.ToolName
 					}
 					call.Function.Arguments += event.Input
-					a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool", Text: event.Input, Metadata: map[string]any{"name": event.ToolName, "call_id": event.ToolCallID, "index": event.ToolIndex}})
+					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool", Text: event.Input, Metadata: map[string]any{"name": event.ToolName, "call_id": event.ToolCallID, "index": event.ToolIndex}})
 				case provider.EventUsage:
 					a.recordUsage(event.Usage)
-					a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "usage", Metadata: event.Usage})
+					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "usage", Metadata: event.Usage})
 				}
 				return nil
 			})
@@ -376,15 +377,15 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			}
 			a.status = "idle"
 			a.mu.Unlock()
-			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: "idle"})
+			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: "idle"})
 			if a.ParentID != "" && answer.Len() > 0 {
 				if parent, ok := a.runtime.lookupAgent(a.ParentID); ok {
 					if err := parent.receiveChildResult(a, answer.String()); err != nil {
-						a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "delivery_error", Text: err.Error()})
+						a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "delivery_error", Text: err.Error()})
 					}
 				}
 			}
-			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "turn_done"})
+			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "turn_done"})
 			return
 		}
 		ordered := make([]int, 0, len(calls))
@@ -426,7 +427,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			// would be marshalled into the next request, reaching both the
 			// transcript and the provider itself.
 			result = a.runtime.redactSecrets(result)
-			a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool_result", Text: result, Metadata: map[string]any{"name": call.Function.Name, "call_id": call.ID}})
+			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool_result", Text: result, Metadata: map[string]any{"name": call.Function.Name, "call_id": call.ID}})
 			history = append(history, provider.Message{Role: "tool", ToolCallID: call.ID, Name: call.Function.Name, Content: result})
 			history = a.appendMessages(history, a.takeMessages())
 		}
@@ -436,14 +437,14 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 
 func (a *Agent) fail(err error) {
 	a.setStatus("error")
-	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "error", Text: err.Error()})
+	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "error", Text: err.Error()})
 }
 
 func (a *Agent) setStatus(status string) {
 	a.mu.Lock()
 	a.status = status
 	a.mu.Unlock()
-	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: status})
+	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: status})
 }
 
 func (a *Agent) recordRequestContext(req provider.Request, contextWindow int) {
@@ -599,7 +600,7 @@ func (a *Agent) Compact(keep int) int {
 	}
 	a.history = compacted
 	a.mu.Unlock()
-	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
+	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
 	return dropped
 }
 
@@ -614,13 +615,13 @@ func (a *Agent) maybeCompact(contextWindow int, system string, tools []provider.
 	a.mu.Lock()
 	a.history = compacted
 	a.mu.Unlock()
-	a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
+	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
 }
 
 func (a *Agent) compactHistoryIfNeeded(history []provider.Message, contextWindow int, system string, tools []provider.Tool) []provider.Message {
 	compacted, dropped := compactHistory(history, contextWindow, system, tools, 24)
 	if dropped > 0 {
-		a.runtime.emit(Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
+		a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
 		return compacted
 	}
 	return history

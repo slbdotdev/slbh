@@ -17,6 +17,7 @@ import (
 
 	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/provider"
+	"github.com/slbdotdev/slbh/internal/seam"
 )
 
 // ToolDefinitions is the stable tool prefix sent to every provider request.
@@ -188,7 +189,7 @@ func (r *Runtime) EndSubagent(requester, target string) error {
 		return fmt.Errorf("agent is not your child")
 	}
 	child.stop()
-	r.emit(Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "status", Text: "stopped"})
+	r.emit(seam.Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "status", Text: "stopped"})
 	return nil
 }
 
