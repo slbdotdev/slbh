@@ -262,3 +262,6 @@ Measured at `ce9fe49` on `main`. `internal/harness` is 7,713 lines;
 
 ## 12. Open
 
+Nothing. Every design question this specification raised has been answered;
+what remains is the delta in section 11, which is work rather than
+uncertainty.
