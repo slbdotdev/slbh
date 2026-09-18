@@ -46,8 +46,11 @@ func TestLiveHeadlessRuntimeCompletes(t *testing.T) {
 		})
 	}()
 	decoder := json.NewDecoder(bufio.NewReader(outR))
-	found := false
-	for !found {
+	// Assistant text arrives as streamed fragments — a Codex delta or a native
+	// provider chunk can split the marker anywhere — so the reply is judged
+	// whole, once the turn is done, and never fragment by fragment.
+	var reply strings.Builder
+	for done := false; !done; {
 		var message map[string]json.RawMessage
 		if err := decoder.Decode(&message); err != nil {
 			t.Fatalf("decode live event: %v", err)
@@ -59,9 +62,20 @@ func TestLiveHeadlessRuntimeCompletes(t *testing.T) {
 			Kind string `json:"kind"`
 			Text string `json:"text"`
 		}
-		if err := json.Unmarshal(message["params"], &event); err == nil && event.Kind == "assistant" {
-			found = strings.Contains(event.Text, "SLBH_HEADLESS_LIVE_OK")
+		if err := json.Unmarshal(message["params"], &event); err != nil {
+			continue
 		}
+		switch event.Kind {
+		case "assistant":
+			reply.WriteString(event.Text)
+		case "error":
+			t.Fatalf("live turn failed: %s", event.Text)
+		case "turn_done":
+			done = true
+		}
+	}
+	if !strings.Contains(reply.String(), "SLBH_HEADLESS_LIVE_OK") {
+		t.Fatalf("reply %q does not carry the marker", reply.String())
 	}
 	writeRequest(t, inW, 1, "close", map[string]any{})
 	readUntilID(t, decoder, 1)
