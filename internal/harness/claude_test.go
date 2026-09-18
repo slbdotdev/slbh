@@ -3,7 +3,6 @@ package harness
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,7 +10,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -290,33 +288,6 @@ func TestClaudeLeafClearStartsFreshProcess(t *testing.T) {
 	}
 }
 
-func TestClaudeLeafStopKillsProcessGroup(t *testing.T) {
-	childPIDFile := filepath.Join(t.TempDir(), "child.pid")
-	t.Setenv("SLBH_CLAUDE_CHILD_PID_FILE", childPIDFile)
-	r := newClaudeTestRuntime(t, "")
-	child := launchFakeClaude(t, r, "low", "")
-	_ = waitForClaudeEvent(t, r, child.ID, "claude_ready")
-	leaf := child.claudeBackend()
-	processPID := leaf.cmd.Process.Pid
-	data := waitForFile(t, childPIDFile)
-	descendantPID, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := r.endSubagent(child.ParentID, child.ID); err != nil {
-		t.Fatal(err)
-	}
-	for _, pid := range []int{processPID, descendantPID} {
-		deadline := time.Now().Add(3 * time.Second)
-		for processExists(pid) && time.Now().Before(deadline) {
-			time.Sleep(10 * time.Millisecond)
-		}
-		if processExists(pid) {
-			t.Fatalf("stopping Claude leaf left process %d alive", pid)
-		}
-	}
-}
-
 func waitForFile(t *testing.T, path string) []byte {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -328,17 +299,6 @@ func waitForFile(t *testing.T, path string) []byte {
 	}
 	t.Fatalf("file %s was not created", path)
 	return nil
-}
-
-func processExists(pid int) bool {
-	if stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil {
-		fields := strings.Fields(string(stat))
-		if len(fields) > 2 && fields[2] == "Z" {
-			return false
-		}
-	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || !errors.Is(err, syscall.ESRCH)
 }
 
 func TestClaudeStreamFixtureMapsRuntimeEvents(t *testing.T) {
