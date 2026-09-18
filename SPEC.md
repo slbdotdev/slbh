@@ -259,8 +259,6 @@ Measured at `75cd5bb` on `v0.3-draft`. The delta this section listed on
 
 **Not yet true:**
 
-- The Seat's compiled default model is still `deepseek-v4-flash`
-  (`config/config.go`), not the roster's `zai/glm-5.3-flash`.
 - Nothing here has run as the org: no Seat on GLM has used the org tools
   against a live Secretary, and the Intern has not watched a real Seat. The
   pieces are tested separately and end to end in-process; the first live

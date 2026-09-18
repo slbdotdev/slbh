@@ -119,7 +119,7 @@ func Load() Config {
 		// worth its cost: pooled across the two live output_config.effort
 		// ladders, its median is +16.1% over `high` but it wins only 67% of
 		// turn-pairs and costs about 48% more wall clock.
-		SeatModel:      getenv("SLBH_MODEL", "deepseek-v4-flash"),
+		SeatModel:      getenv("SLBH_MODEL", "zai/glm-5.3-flash"),
 		SeatEffort:     getenv("SLBH_EFFORT", "high"),
 		InternModel:    getenv("SLBH_INTERN_MODEL", provider.LocalModelID),
 		InternEffort:   getenv("SLBH_INTERN_EFFORT", "medium"),
