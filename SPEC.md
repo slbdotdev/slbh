@@ -97,7 +97,8 @@ question when it believes the Seat is making a mistake.
   than assembled per run.
 - It asks. It does not instruct, direct, correct, or assert. It has no
   authority, which is the property being bought and not a limitation.
-- A question carries a budget, so that ignoring one stays cheap.
+- Its questions are not rationed and the Seat's answers are not bounded.
+  The guard is the register rather than a counter.
 - It never blocks. The Seat answers briefly and proceeds, and a question
   the Seat overrides is a question that worked.
 - It runs on the local quant, so reading every turn costs nothing and the
@@ -213,9 +214,8 @@ Measured at `ce9fe49` on `main`. `internal/harness` is 7,713 lines;
 ## 12. Open
 
 1. Whether a queued message starts a turn in an idle Codex session.
-2. The Intern's question budget, and whether the Seat's answers are bounded.
-3. Whether the manager layer document stays deployable or is withdrawn.
-4. The read-only tool set the Intern gets, named tool by tool.
-5. Whether `Jobs()` and `Seat()` become data-returning or command-shaped.
-6. Whether the org inbox lives in `$SLBH_HOME` or in a path the Secretary
+2. Whether the manager layer document stays deployable or is withdrawn.
+3. The read-only tool set the Intern gets, named tool by tool.
+4. Whether `Jobs()` and `Seat()` become data-returning or command-shaped.
+5. Whether the org inbox lives in `$SLBH_HOME` or in a path the Secretary
    can also reach directly.
