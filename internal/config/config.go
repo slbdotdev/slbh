@@ -54,6 +54,7 @@ type Config struct {
 	Home           string
 	SeatModel      string
 	SeatEffort     string
+	InternModel    string
 	SubagentModel  string
 	LeafModel      string
 	SubagentEffort string
@@ -115,6 +116,7 @@ func Load() Config {
 		// turn-pairs and costs about 48% more wall clock.
 		SeatModel:      getenv("SLBH_MODEL", "deepseek-v4-flash"),
 		SeatEffort:     getenv("SLBH_EFFORT", "high"),
+		InternModel:    getenv("SLBH_INTERN_MODEL", "local/q27-UD-Q2_K_XL-96k"),
 		SubagentModel:  getenv("SLBH_SUBAGENT_MODEL", "zai/glm-5.3-flash"),
 		LeafModel:      getenv("SLBH_LEAF_MODEL", provider.LocalModelID),
 		SubagentEffort: getenv("SLBH_SUBAGENT_EFFORT", "high"),
@@ -140,6 +142,9 @@ func Load() Config {
 			if seatEffort != "" {
 				cfg.SeatEffort = seatEffort
 			}
+		}
+		if os.Getenv("SLBH_INTERN_MODEL") == "" && persisted.InternModel != "" {
+			cfg.InternModel = persisted.InternModel
 		}
 		if os.Getenv("SLBH_SUBAGENT_MODEL") == "" && persisted.SubagentModel != "" {
 			cfg.SubagentModel = persisted.SubagentModel
@@ -233,6 +238,7 @@ func (c *Config) ApplyLocalPolicy(policy provider.Policy) error {
 type fileConfig struct {
 	SeatModel      string   `json:"seat_model,omitempty"`
 	SeatEffort     string   `json:"seat_effort,omitempty"`
+	InternModel    string   `json:"intern_model,omitempty"`
 	RootModel      string   `json:"root_model,omitempty"`
 	RootEffort     string   `json:"root_effort,omitempty"`
 	SubagentModel  string   `json:"subagent_model,omitempty"`
@@ -256,6 +262,7 @@ func (c Config) Save() error {
 	// host work, and the next launch would refuse every route.
 	payload, err := json.MarshalIndent(fileConfig{
 		SeatModel: c.SeatModel, SeatEffort: c.SeatEffort,
+		InternModel:   c.InternModel,
 		SubagentModel: c.SubagentModel, LeafModel: c.LeafModel, SubagentEffort: c.SubagentEffort,
 		ApprovedModels: unique(c.ApprovedModels),
 		LocalPolicy:    c.LocalPolicy,

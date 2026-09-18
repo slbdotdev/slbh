@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/harness"
 	"github.com/slbdotdev/slbh/internal/headless"
+	"github.com/slbdotdev/slbh/internal/intern"
 	"github.com/slbdotdev/slbh/internal/tui"
 )
 
@@ -24,6 +26,9 @@ const usage = `slbh - agent harness
   slbh                          start the TUI
   slbh -p "do the thing"        run one turn headless and exit
   slbh --prompt-file brief.md   same, with the prompt read from a file
+
+Interactive flags:
+      --intern          run the read-only Intern watcher
 
 Headless flags:
   -p, --prompt STRING    prompt text; running with one implies headless
@@ -47,7 +52,7 @@ func main() {
 
 	var prompt, promptShort, promptFile, workdir, model, effort string
 	var timeout time.Duration
-	var asJSON, quiet, quietShort, summary bool
+	var asJSON, quiet, quietShort, summary, enableIntern bool
 	fs.StringVar(&prompt, "prompt", "", "prompt text")
 	fs.StringVar(&promptShort, "p", "", "prompt text (short)")
 	fs.StringVar(&promptFile, "prompt-file", "", "read the prompt from a file")
@@ -59,6 +64,7 @@ func main() {
 	fs.BoolVar(&quiet, "quiet", false, "no event stream")
 	fs.BoolVar(&quietShort, "q", false, "no event stream (short)")
 	fs.BoolVar(&summary, "summary", false, "print the run summary as JSON")
+	fs.BoolVar(&enableIntern, "intern", false, "run the read-only Intern watcher")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
@@ -72,17 +78,24 @@ func main() {
 	// caller who meant to run headless and got the prompt wrong, and silently opening the
 	// TUI instead would strand a script on a terminal it does not have.
 	supplied := false
+	internSupplied := false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "prompt", "p", "prompt-file":
 			supplied = true
+		case "intern":
+			internSupplied = true
 		}
 	})
 
 	// No prompt flag at all means the interactive TUI, exactly as before.
 	if !supplied {
-		runTUI()
+		runTUI(enableIntern)
 		return
+	}
+	if internSupplied {
+		fmt.Fprintln(os.Stderr, "slbh: --intern is available only in interactive mode")
+		os.Exit(2)
 	}
 
 	if promptFile != "" {
@@ -191,13 +204,20 @@ func runHeadless(prompt, workdir, model, effort string, timeout time.Duration, a
 	return 0
 }
 
-func runTUI() {
+func runTUI(enableIntern bool) {
 	runtime, err := harness.New(config.Load(), harness.Options{})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "slbh:", err)
 		os.Exit(1)
 	}
 	defer runtime.Close()
+	if enableIntern {
+		go func() {
+			if err := intern.Run(context.Background(), runtime, intern.Options{}); err != nil {
+				fmt.Fprintln(os.Stderr, "slbh:", err)
+			}
+		}()
+	}
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)

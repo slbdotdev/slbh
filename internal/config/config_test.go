@@ -87,6 +87,30 @@ func TestDefaultLeafModelIsLocalWorkhorse(t *testing.T) {
 	}
 }
 
+func TestInternModelDefaultEnvironmentAndPersistence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SLBH_HOME", home)
+	t.Setenv("SLBH_INTERN_MODEL", "")
+	if got := Load().InternModel; got != "local/q27-UD-Q2_K_XL-96k" {
+		t.Fatalf("default InternModel = %q", got)
+	}
+
+	t.Setenv("SLBH_INTERN_MODEL", "local/override")
+	if got := Load().InternModel; got != "local/override" {
+		t.Fatalf("environment InternModel = %q", got)
+	}
+
+	t.Setenv("SLBH_INTERN_MODEL", "")
+	cfg := Load()
+	cfg.InternModel = "local/persisted"
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if got := Load().InternModel; got != "local/persisted" {
+		t.Fatalf("persisted InternModel = %q", got)
+	}
+}
+
 // TestDefaultSeatEffortIsServableLocally pins the built-in seat effort. The
 // default has to be a level every route slbh ships with can actually serve,
 // and the local Ollama route is the narrow one: Ollama rewrites `xhigh` to
