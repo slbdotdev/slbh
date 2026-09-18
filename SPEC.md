@@ -215,7 +215,27 @@ transport in sight.
 
 - `$SLBH_HOME/policy.json` and
   `$SLBH_HOME/instructions/{seat,manager,leaf,intern}.md` are org content. They live in `slb-org` and reach hosts by its sync.
+- `$SLBH_HOME/skills/{seat,manager,leaf,intern}/<skill>/` is org content
+  too. The sync fills each layer's directory from the roster: the skills
+  of the slbh name that reads that layer's document.
 - `$SLBH_HOME/config.json` stays application-owned. slbh writes it.
+
+**Skills.** An slbh agent's skills are the directory for its layer, chosen
+exactly as its instruction document is: by depth, and by name for the
+Intern. slbh does no filtering; the directory is the role's set.
+
+- At prompt assembly slbh lists each skill in that directory: its name, the
+  `description` from the front matter of its `SKILL.md`, and the absolute
+  path to it. It lists no bodies. An agent reads a skill with the file
+  tools it already has when a task matches. There is no skill tool.
+- The front matter is the `---` block at the head of `SKILL.md`. slbh reads
+  `name` and `description` from it, and nothing else. A description may be
+  one line or a folded `>-` block.
+- A missing directory or an unreadable skill degrades exactly as a missing
+  instruction document does. The agent runs without it, and the source
+  record says why.
+- A Codex or Claude Code leaf takes no slbh skills. Its own harness loads
+  the skill directory the sync gave it.
 - The managed policy wins over local policy. With neither, slbh refuses to
   route.
 - The **binary** is deployed by `ansible-slb`, cross-built on the
@@ -234,7 +254,7 @@ transport in sight.
 
 ## 11. State of the tree
 
-Measured at `75cd5bb` on `v0.3-draft`. The delta this section listed on
+Measured at `c1fe614` on `v0.3-draft`. The delta this section listed on
 2026-09-18 morning is built, one unit per commit, each checked with
 `gofmt`, build, vet, the full suite and the race detector:
 
@@ -252,6 +272,7 @@ Measured at `75cd5bb` on `v0.3-draft`. The delta this section listed on
 | the one local tag | `4297deb`, `8820bc5` | leaf and Intern default `local/q27-UD-Q2_K_XL-64k` |
 | Secretary wake | `be09a05` | `internal/secretarywake` over `codex queue --thread <name>`; live wake of a real TUI passed |
 | wiring | `75cd5bb` | Seat-only `report_to_secretary`, `org_requests`, `update_request`; request watcher; Intern effort `medium`, output bound, token-budgeted prompt; end-to-end test |
+| the seat runs glm | `c1fe614` | the Seat's compiled default is `zai/glm-5.3-flash` |
 
 `internal/tui`, `headless`, `seam`, `orgstore`, `orgcli`, `readtools`,
 `intern` and `secretarywake` import nothing from `internal/harness`; a
@@ -259,6 +280,8 @@ Measured at `75cd5bb` on `v0.3-draft`. The delta this section listed on
 
 **Not yet true:**
 
+- slbh loads no skills. §9's skill directories are designed, and
+  unbuilt.
 - Nothing here has run as the org: no Seat on GLM has used the org tools
   against a live Secretary, and the Intern has not watched a real Seat. The
   pieces are tested separately and end to end in-process; the first live
