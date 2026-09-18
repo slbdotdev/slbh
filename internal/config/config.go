@@ -87,6 +87,10 @@ type Config struct {
 	// $SLBH_HOME/instructions. Derived like Policy, never persisted: slbh
 	// reads these files and never writes them.
 	Instructions Instructions
+	// Skills are the per-layer skill metadata read from $SLBH_HOME/skills.
+	// Only name, description and absolute SKILL.md path are retained; skill
+	// bodies remain on disk until an agent chooses to read one.
+	Skills Skills
 }
 
 func Load() Config {
@@ -184,6 +188,7 @@ func Load() Config {
 	}
 	cfg.Policy, cfg.PolicySource = ResolvePolicy(home, cfg.LocalPolicy)
 	cfg.Instructions = LoadInstructions(home)
+	cfg.Skills = LoadSkills(home)
 	return cfg
 }
 

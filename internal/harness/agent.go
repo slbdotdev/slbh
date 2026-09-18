@@ -776,13 +776,15 @@ func compactMessages(history []provider.Message, keep int) ([]provider.Message, 
 func systemPrompt(a *Agent) string {
 	prompt := bakedSystemPrompt(a)
 	layer := a.runtime.LayerInstructions(a.Depth)
-	if strings.TrimSpace(layer) == "" {
-		// No document for this layer: run on baked mechanics alone. Absence is
-		// deliberately not a refusal here, unlike a missing routing policy,
-		// which is a security posture. Degrade, never brick.
-		return prompt
+	if strings.TrimSpace(layer) != "" {
+		prompt += fmt.Sprintf("\n\nOrg instructions for your layer (%s). These are managed by the fleet and define what an agent at this layer may and may not do. Where they appear to contradict the runtime mechanics above, the mechanics are facts about this build and stand; the role policy governs everything else.\n\n%s", config.LayerForDepth(a.Depth), layer)
 	}
-	return prompt + fmt.Sprintf("\n\nOrg instructions for your layer (%s). These are managed by the fleet and define what an agent at this layer may and may not do. Where they appear to contradict the runtime mechanics above, the mechanics are facts about this build and stand; the role policy governs everything else.\n\n%s", config.LayerForDepth(a.Depth), layer)
+	if skills := a.runtime.LayerSkillPrompt(a.Depth); skills != "" {
+		prompt += "\n\n" + skills
+	}
+	// Missing documents and skills both degrade independently. A native agent
+	// always retains the baked mechanics even on an unmanaged host.
+	return prompt
 }
 
 // bakedSystemPrompt is the harness-mechanics half, authored as one string.

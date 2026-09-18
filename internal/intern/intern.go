@@ -42,6 +42,9 @@ func Run(ctx context.Context, rt seam.Runtime, opts Options) error {
 	if system == "" {
 		return fmt.Errorf("intern: instructions/%s.md is missing or empty", config.InstructionIntern)
 	}
+	if skills := cfg.Skills.PromptForName(config.InstructionIntern); skills != "" {
+		system += "\n\n" + skills
+	}
 	seat, err := findSeat(rt.Agents())
 	if err != nil {
 		return err

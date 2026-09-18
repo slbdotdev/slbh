@@ -313,6 +313,25 @@ func (r *Runtime) InstructionSource() config.InstructionSource {
 	return source
 }
 
+// SkillSource reports where the managed skill metadata came from and why any
+// layer or skill was omitted.
+func (r *Runtime) SkillSource() config.SkillSource {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	source := r.config.Skills.Source
+	source.Missing = append([]string(nil), source.Missing...)
+	return source
+}
+
+// LayerSkillPrompt returns the metadata-only skill section for a native agent
+// at depth. Codex and Claude Code leaves use separate prompt paths and do not
+// call it because their own harnesses load skills.
+func (r *Runtime) LayerSkillPrompt(depth int) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.config.Skills.PromptFor(depth)
+}
+
 func (r *Runtime) ModelGuidance() string {
 	r.mu.RLock()
 	cfg := r.config

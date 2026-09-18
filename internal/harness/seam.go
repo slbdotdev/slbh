@@ -88,6 +88,13 @@ func cloneConfig(cfg config.Config) config.Config {
 		}
 	}
 	cloned.Instructions.Source.Missing = append([]string(nil), cfg.Instructions.Source.Missing...)
+	if cfg.Skills.Layers != nil {
+		cloned.Skills.Layers = make(map[string][]config.Skill, len(cfg.Skills.Layers))
+		for layer, skills := range cfg.Skills.Layers {
+			cloned.Skills.Layers[layer] = append([]config.Skill(nil), skills...)
+		}
+	}
+	cloned.Skills.Source.Missing = append([]string(nil), cfg.Skills.Source.Missing...)
 	return cloned
 }
 

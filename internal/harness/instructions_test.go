@@ -23,6 +23,12 @@ const (
 // runtimeWithInstructions builds a runtime whose SLBH_HOME carries the named
 // layer documents, deployed the way ansible deploys them.
 func runtimeWithInstructions(t *testing.T, docs map[string]string) *Runtime {
+	return runtimeWithInstructionsAndSkills(t, docs, nil)
+}
+
+// runtimeWithInstructionsAndSkills adds managed skill files before config is
+// loaded so prompt tests exercise the same $SLBH_HOME layout as production.
+func runtimeWithInstructionsAndSkills(t *testing.T, docs map[string]string, skills map[string]map[string]string) *Runtime {
 	t.Helper()
 	home := t.TempDir()
 	if len(docs) > 0 {
@@ -36,10 +42,22 @@ func runtimeWithInstructions(t *testing.T, docs map[string]string) *Runtime {
 			}
 		}
 	}
+	for layer, layerSkills := range skills {
+		for directory, document := range layerSkills {
+			dir := filepath.Join(home, config.SkillsDir, layer, directory)
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(document), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	cfg := config.Config{
 		Home: home, SeatModel: "test", SeatEffort: "high",
 		SubagentModel: "test-child", SubagentEffort: "high",
 		Instructions: config.LoadInstructions(home),
+		Skills:       config.LoadSkills(home),
 	}
 	r, err := New(cfg, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
 	if err != nil {
@@ -159,6 +177,32 @@ func TestSystemPromptWithOnlyOneLayerDeployed(t *testing.T) {
 	}
 }
 
+func TestSeatSystemPromptListsSkillsWithAbsolutePaths(t *testing.T) {
+	r := runtimeWithInstructionsAndSkills(t, allThreeDocs(), map[string]map[string]string{
+		config.LayerSeat: {
+			"review": "---\nname: review-change\ndescription: Review a change before handoff.\n---\nSECRET BODY MUST NOT APPEAR",
+		},
+	})
+	prompt := systemPrompt(r.seat())
+	path := filepath.Join(r.Home(), config.SkillsDir, config.LayerSeat, "review", "SKILL.md")
+	for _, want := range []string{
+		"Skills for your layer (seat).",
+		"When a task matches a skill below, read its SKILL.md at the listed path with your file tools before acting.",
+		"- review-change: Review a change before handoff.",
+		"SKILL.md: " + path,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("seat prompt missing %q: %s", want, prompt)
+		}
+	}
+	if !filepath.IsAbs(path) {
+		t.Fatalf("test path = %q, want absolute", path)
+	}
+	if strings.Contains(prompt, "SECRET BODY MUST NOT APPEAR") {
+		t.Fatal("seat prompt includes a SKILL.md body")
+	}
+}
+
 // The Codex leaf is where per-layer instruction already existed as a hardcoded
 // literal. It keeps its mechanics and now also receives the managed leaf
 // document — and must never receive the manager one.
@@ -191,6 +235,36 @@ func TestCodexLeafWithoutManagedInstructionsKeepsMechanicsOnly(t *testing.T) {
 	instructions := (&codexLeaf{agent: leaf}).developerInstructions()
 	if instructions != codexLeafMechanics {
 		t.Fatalf("Codex leaf instructions = %q, want the mechanics alone", instructions)
+	}
+}
+
+func TestCodexLeafDeveloperInstructionsCarryNoSLBHSkillList(t *testing.T) {
+	r := runtimeWithInstructionsAndSkills(t, allThreeDocs(), map[string]map[string]string{
+		config.LayerLeaf: {
+			"implement": "---\nname: codex-forbidden-skill\ndescription: This metadata must stay out of Codex developer instructions.\n---\n",
+		},
+	})
+	leaf := agentAtDepth(t, r, 2)
+	instructions := (&codexLeaf{agent: leaf}).developerInstructions()
+	for _, forbidden := range []string{"Skills for your layer", "codex-forbidden-skill", config.SkillsDir + string(filepath.Separator) + config.LayerLeaf} {
+		if strings.Contains(instructions, forbidden) {
+			t.Fatalf("Codex leaf developer instructions contain slbh skill data %q: %q", forbidden, instructions)
+		}
+	}
+}
+
+func TestClaudeLeafDeveloperInstructionsCarryNoSLBHSkillList(t *testing.T) {
+	r := runtimeWithInstructionsAndSkills(t, allThreeDocs(), map[string]map[string]string{
+		config.LayerLeaf: {
+			"implement": "---\nname: claude-forbidden-skill\ndescription: This metadata must stay out of Claude developer instructions.\n---\n",
+		},
+	})
+	leaf := agentAtDepth(t, r, 2)
+	instructions := claudeDeveloperInstructions(leaf)
+	for _, forbidden := range []string{"Skills for your layer", "claude-forbidden-skill", config.SkillsDir + string(filepath.Separator) + config.LayerLeaf} {
+		if strings.Contains(instructions, forbidden) {
+			t.Fatalf("Claude leaf developer instructions contain slbh skill data %q: %q", forbidden, instructions)
+		}
 	}
 }
 

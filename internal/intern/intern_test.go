@@ -74,6 +74,7 @@ func (r *fakeRuntime) TranscriptPath(string) (string, error) { return "", nil }
 func (r *fakeRuntime) InstructionSource() config.InstructionSource {
 	return r.config.Instructions.Source
 }
+func (r *fakeRuntime) SkillSource() config.SkillSource   { return r.config.Skills.Source }
 func (r *fakeRuntime) PolicySource() config.PolicySource { return r.config.PolicySource }
 func (r *fakeRuntime) ModelCatalog() []provider.Catalog  { return nil }
 func (r *fakeRuntime) ModelGuidance() string             { return "" }
@@ -163,6 +164,34 @@ func TestInferenceRunsOnlyAtSeatTurnBoundaries(t *testing.T) {
 	request := p.request(0)
 	if len(request.Messages) != 1 || !strings.Contains(request.Messages[0].Content, "working") || !strings.Contains(request.Messages[0].Content, "leaf finished") {
 		t.Fatalf("inference did not receive accumulated Seat-tree events: %#v", request.Messages)
+	}
+	finishIntern(t, rt, done)
+}
+
+func TestInternSystemPromptListsInternSkills(t *testing.T) {
+	rt := newFakeRuntime(t)
+	skillPath := filepath.Join(t.TempDir(), "question", "SKILL.md")
+	rt.config.Skills = config.Skills{Layers: map[string][]config.Skill{
+		config.InstructionIntern: {{
+			Name:        "question-evidence",
+			Description: "Ask a careful evidence-based question.",
+			Path:        skillPath,
+		}},
+	}}
+	p := newScriptedProvider(nil)
+	done := startIntern(t, rt, p)
+	rt.events <- seam.Event{AgentID: "seat", Kind: "turn_done"}
+	waitCall(t, p)
+	request := p.request(0)
+	for _, want := range []string{
+		"Ask careful questions.",
+		"Skills for your layer (intern).",
+		"question-evidence",
+		"SKILL.md: " + skillPath,
+	} {
+		if !strings.Contains(request.System, want) {
+			t.Fatalf("Intern system prompt missing %q: %q", want, request.System)
+		}
 	}
 	finishIntern(t, rt, done)
 }

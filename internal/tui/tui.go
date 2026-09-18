@@ -878,6 +878,10 @@ func (m Model) modelMenuView() string {
 		// alone, which is a legitimate state and therefore a silent one unless
 		// it is reported here.
 		wrapToWidth("Layer instructions: "+m.runtime.InstructionSource().Describe(), width),
+		// Skill loading degrades independently of the layer documents. Report
+		// absent directories and rejected skill metadata rather than silently
+		// presenting a smaller role inventory.
+		wrapToWidth("Layer skills: "+m.runtime.SkillSource().Describe(), width),
 		"r=seat · s=subagent · l=leaf · p=author local policy · Enter=assign · Esc=save and close",
 		"",
 	}

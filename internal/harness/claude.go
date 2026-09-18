@@ -137,6 +137,8 @@ func claudeArgs(model, effort, instructions string) []string {
 }
 
 func claudeDeveloperInstructions(a *Agent) string {
+	// Claude Code loads the synced skill directory itself, so this path carries
+	// only slbh mechanics and the managed role document, never slbh skill data.
 	instructions := claudeLeafMechanics
 	layer := a.runtime.LayerInstructions(a.Depth)
 	if strings.TrimSpace(layer) == "" {

@@ -89,6 +89,10 @@ func TestSeamQueriesReturnDeepCopies(t *testing.T) {
 		Layers: map[string]string{config.LayerSeat: "seat instructions"},
 		Source: config.InstructionSource{Missing: []string{config.LayerLeaf}},
 	}
+	r.config.Skills = config.Skills{
+		Layers: map[string][]config.Skill{config.LayerSeat: {{Name: "seat-skill", Path: "/skills/seat/SKILL.md"}}},
+		Source: config.SkillSource{Missing: []string{config.LayerLeaf}},
+	}
 	r.mu.Unlock()
 	r.setModelCatalog([]provider.Catalog{{Name: "test", Models: []provider.ModelInfo{{ID: "test/model"}}}})
 
@@ -98,12 +102,16 @@ func TestSeamQueriesReturnDeepCopies(t *testing.T) {
 	firstConfig.LocalPolicy.Routes["test"].Provider.Ignore[0] = "mutated"
 	firstConfig.Instructions.Layers[config.LayerSeat] = "mutated"
 	firstConfig.Instructions.Source.Missing[0] = "mutated"
+	firstConfig.Skills.Layers[config.LayerSeat][0].Name = "mutated"
+	firstConfig.Skills.Source.Missing[0] = "mutated"
 	secondConfig := r.Config()
 	if secondConfig.ApprovedModels[0] != "test" ||
 		secondConfig.Policy.Routes["test"].Effort.Levels["high"] != "high" ||
 		secondConfig.LocalPolicy.Routes["test"].Provider.Ignore[0] != "one" ||
 		secondConfig.Instructions.Layers[config.LayerSeat] != "seat instructions" ||
-		secondConfig.Instructions.Source.Missing[0] != config.LayerLeaf {
+		secondConfig.Instructions.Source.Missing[0] != config.LayerLeaf ||
+		secondConfig.Skills.Layers[config.LayerSeat][0].Name != "seat-skill" ||
+		secondConfig.Skills.Source.Missing[0] != config.LayerLeaf {
 		t.Fatalf("mutating Config query changed runtime state: %#v", secondConfig)
 	}
 

@@ -78,6 +78,7 @@ type Runtime interface {
 	Dir() string
 	TranscriptPath(agentID string) (string, error)
 	InstructionSource() config.InstructionSource
+	SkillSource() config.SkillSource
 	PolicySource() config.PolicySource
 	ModelCatalog() []provider.Catalog
 	ModelGuidance() string

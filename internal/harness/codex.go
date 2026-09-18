@@ -460,8 +460,9 @@ func (c *codexLeaf) initialize(ctx context.Context) error {
 // contradicted either would simply be wrong.
 const codexLeafMechanics = "You are a leaf worker managed by slbh. You may not launch, delegate to, or create other agents. You may send progress to your slbh parent with slbh_message_parent. Keep foreground commands bounded and use background work only when the Codex policy provides it."
 
-// developerInstructions assembles a Codex leaf's instructions from the same
-// two layers the native agents use.
+// developerInstructions assembles a Codex leaf's mechanics and managed role
+// document. It deliberately omits slbh's skill list because Codex loads the
+// synced skill directory through its own harness.
 //
 // This literal was the one place per-layer instruction already existed, as a
 // hardcoded string: the concept was here and only the delivery mechanism was
