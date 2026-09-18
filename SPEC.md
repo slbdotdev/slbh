@@ -256,7 +256,7 @@ Intern. slbh does no filtering; the directory is the role's set.
 
 ## 11. State of the tree
 
-Measured at `4a3089f` on `main`, into which `v0.3-draft` merged at
+Measured at `89101df` on `main`, into which `v0.3-draft` merged at
 `ac58fab`. The code-bearing delta is built, one unit per commit, each checked with `gofmt`, build, vet, the full suite and the
 race detector. The current tip also records the role-aware TUI fixture
 migration needed by the runtime's managed roster contract:
@@ -286,6 +286,7 @@ migration needed by the runtime's managed roster contract:
 | job output cap | `0e0bd76` | each job stream keeps at most 4 MiB and consumes the rest, so the cap holds past the first full write and the child is never blocked on a short write |
 | live headless test | `de7174d` | the live check judges the streamed reply whole at `turn_done`; passed on `zai/glm-5.3-flash` and `local/q27-UD-Q2_K_XL-64k` |
 | Windows test build | `4a3089f` | the POSIX process-group test builds on POSIX alone, so `GOOS=windows go vet ./...` passes |
+| Codex final answer | `89101df` | a Codex leaf returns its turn's `final_answer` message, read with the turn id the app-server sends beside the item; commentary no longer runs into the result |
 
 `internal/tui`, `headless`, `seam`, `orgstore`, `orgcli`, `readtools`,
 `intern` and `secretarywake` import nothing from `internal/harness`; a
@@ -299,10 +300,14 @@ done, and the Intern watched that Seat and asked it a live question.
 
 ## 12. Open
 
-No design question is open. Two operational risks are unmeasured rather than
+No design question is open. One operational risk is unmeasured rather than
 unanswered:
 
 - Local Ollama `/v1` fidelity and termination: nothing instruments a local
   leaf's stream for truncation or a turn that does not end.
-- Codex auto-compaction in a headless leaf has not been observed; a long
-  Luna or Sol run may reach its window before it is.
+
+Codex auto-compaction on the app-server path slbh uses was measured on
+2026-09-18 with codex-cli 0.155.0: with `model_auto_compact_token_limit` set
+to 15,000 on the thread, two `contextCompaction` items fired mid-turn and the
+context fell back each time, and every turn completed. The production
+threshold is 700,000 and no leaf has yet run that deep.
