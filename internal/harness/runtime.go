@@ -16,48 +16,14 @@ import (
 	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/logx"
 	"github.com/slbdotdev/slbh/internal/provider"
+	"github.com/slbdotdev/slbh/internal/seam"
 )
 
-type Event struct {
-	Time       time.Time      `json:"time"`
-	RuntimeID  string         `json:"runtime"`
-	AgentID    string         `json:"agent"`
-	AgentTitle string         `json:"agent_title"`
-	Kind       string         `json:"kind"`
-	Text       string         `json:"text,omitempty"`
-	Metadata   map[string]any `json:"metadata,omitempty"`
-}
-
-type AgentSnapshot struct {
-	ID              string `json:"id"`
-	Title           string `json:"title"`
-	ParentID        string `json:"parent_id"`
-	Depth           int    `json:"depth"`
-	Model           string `json:"model"`
-	Effort          string `json:"effort"`
-	Status          string `json:"status"`
-	Harness         string `json:"harness"`
-	WorkDir         string `json:"work_dir"`
-	ContextWindow   int    `json:"context_window"`
-	ContextUsed     int    `json:"context_used"`
-	CacheHitTokens  int    `json:"cache_hit_tokens"`
-	CacheMissTokens int    `json:"cache_miss_tokens"`
-}
-
-// JobSnapshot is a copy of a background job's externally observable state.
-type JobSnapshot struct {
-	ID          string        `json:"id"`
-	Author      string        `json:"author"`
-	Script      string        `json:"script"`
-	ToolName    string        `json:"tool_name"`
-	Status      string        `json:"status"`
-	Started     time.Time     `json:"started"`
-	Finished    time.Time     `json:"finished"`
-	ExitCode    int           `json:"exit_code"`
-	StdoutBytes int           `json:"stdout_bytes"`
-	StderrBytes int           `json:"stderr_bytes"`
-	WarnAfter   time.Duration `json:"warn_after"`
-}
+// These aliases keep the TUI source-compatible for the unit in which it still
+// imports harness. The definitions and JSON contract live only in seam.
+type Event = seam.Event
+type AgentSnapshot = seam.AgentSnapshot
+type JobSnapshot = seam.JobSnapshot
 
 type LaunchSpec struct {
 	Title            string
@@ -73,6 +39,11 @@ type agentSession struct {
 	id   string
 	path string
 	log  *logx.JSONL
+}
+
+type queuedEvent struct {
+	event     Event
+	delivered chan struct{}
 }
 
 type Runtime struct {
@@ -95,8 +66,11 @@ type Runtime struct {
 	redactor     *secretRedactor
 	events       chan Event
 	eventMu      sync.Mutex
-	eventQueue   []Event
+	eventQueue   []queuedEvent
 	eventWake    chan struct{}
+	eventStop    chan struct{}
+	eventDone    chan struct{}
+	eventsClosed bool
 	provider     func(model string) (provider.Provider, error)
 	codexCommand string
 	catalog      []provider.Catalog
@@ -110,6 +84,8 @@ type Options struct {
 	CodexCommand string
 }
 
+var _ seam.Runtime = (*Runtime)(nil)
+
 func New(cfg config.Config, options Options) (*Runtime, error) {
 	if cfg.Home == "" {
 		cfg = config.Load()
@@ -121,7 +97,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), events: options.Events, eventWake: make(chan struct{}, 1), provider: options.Provider, codexCommand: options.CodexCommand}
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), events: options.Events, eventWake: make(chan struct{}, 1), eventStop: make(chan struct{}), eventDone: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand}
 	if r.events == nil {
 		r.events = make(chan Event, 1024)
 	}
@@ -175,7 +151,7 @@ func (r *Runtime) Events() <-chan Event { return r.events }
 func (r *Runtime) Config() config.Config {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.config
+	return cloneConfig(r.config)
 }
 
 // SetModelCatalog makes the live provider tree available to every agent's
@@ -184,14 +160,14 @@ func (r *Runtime) Config() config.Config {
 // render the terminal.
 func (r *Runtime) SetModelCatalog(catalog []provider.Catalog) {
 	r.mu.Lock()
-	r.catalog = append([]provider.Catalog(nil), catalog...)
+	r.catalog = cloneCatalog(catalog)
 	r.mu.Unlock()
 }
 
 func (r *Runtime) ModelCatalog() []provider.Catalog {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return append([]provider.Catalog(nil), r.catalog...)
+	return cloneCatalog(r.catalog)
 }
 
 // PolicySource reports which routing policy is in force and where it came
@@ -280,13 +256,15 @@ func (r *Runtime) LayerInstructions(depth int) string {
 func (r *Runtime) InstructionSource() config.InstructionSource {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.config.Instructions.Source
+	source := r.config.Instructions.Source
+	source.Missing = append([]string(nil), source.Missing...)
+	return source
 }
 
 func (r *Runtime) ModelGuidance() string {
 	r.mu.RLock()
 	cfg := r.config
-	catalog := append([]provider.Catalog(nil), r.catalog...)
+	catalog := cloneCatalog(r.catalog)
 	r.mu.RUnlock()
 
 	approved := "none"
@@ -619,12 +597,22 @@ func (r *Runtime) promotePending(agentID string) {
 	}
 }
 
-// Done closes when the runtime is shutting down. A headless run selects on it
-// so that a signal arriving during an in-flight turn ends the run, instead of
-// blocking forever on an events channel that Close never closes.
-func (r *Runtime) Done() <-chan struct{} { return r.ctx.Done() }
-
 func (r *Runtime) emit(event Event) {
+	r.emitQueued(event, nil)
+}
+
+func (r *Runtime) emitQueued(event Event, delivered chan struct{}) {
+	r.queueEvent(event, delivered, false)
+}
+
+func (r *Runtime) queueEvent(event Event, delivered chan struct{}, closeEvents bool) {
+	r.eventMu.Lock()
+	if r.eventsClosed {
+		r.eventMu.Unlock()
+		return
+	}
+	r.eventMu.Unlock()
+
 	if event.Time.IsZero() {
 		event.Time = time.Now().UTC()
 	}
@@ -655,7 +643,14 @@ func (r *Runtime) emit(event Event) {
 		r.promotePending(agentID)
 	}
 	r.eventMu.Lock()
-	r.eventQueue = append(r.eventQueue, event)
+	if r.eventsClosed {
+		r.eventMu.Unlock()
+		return
+	}
+	if closeEvents {
+		r.eventsClosed = true
+	}
+	r.eventQueue = append(r.eventQueue, queuedEvent{event: event, delivered: delivered})
 	r.eventMu.Unlock()
 	select {
 	case r.eventWake <- struct{}{}:
@@ -666,10 +661,13 @@ func (r *Runtime) emit(event Event) {
 }
 
 func (r *Runtime) dispatchEvents() {
+	defer close(r.eventDone)
 	for {
 		select {
 		case <-r.eventWake:
 			r.flushEvents()
+		case <-r.eventStop:
+			return
 		case <-r.ctx.Done():
 			return
 		}
@@ -683,12 +681,17 @@ func (r *Runtime) flushEvents() {
 			r.eventMu.Unlock()
 			return
 		}
-		event := r.eventQueue[0]
-		r.eventQueue[0] = Event{}
+		queued := r.eventQueue[0]
+		r.eventQueue[0] = queuedEvent{}
 		r.eventQueue = r.eventQueue[1:]
 		r.eventMu.Unlock()
 		select {
-		case r.events <- event:
+		case r.events <- queued.event:
+			if queued.delivered != nil {
+				close(queued.delivered)
+			}
+		case <-r.eventStop:
+			return
 		case <-r.ctx.Done():
 			return
 		}
@@ -762,7 +765,19 @@ func (r *Runtime) deliverJobResult(snapshot job.Snapshot, stdout, stderr string)
 func (r *Runtime) Close() error {
 	var err error
 	r.closeOnce.Do(func() {
-		r.emit(Event{Kind: "runtime", Text: "runtime stopping"})
+		delivered := make(chan struct{})
+		r.queueEvent(Event{Kind: "runtime", Text: "runtime stopping"}, delivered, true)
+		// Shutdown is learned from the event stream, not from a second lifecycle
+		// channel. Give the dispatcher a bounded opportunity to hand off this
+		// marker and every earlier event. If the consumer is not reading, stopping
+		// the dispatcher drops the remaining backlog so Close still returns.
+		select {
+		case <-delivered:
+		case <-time.After(250 * time.Millisecond):
+		}
+		close(r.eventStop)
+		<-r.eventDone
+		close(r.events)
 		r.cancel()
 		r.mu.RLock()
 		agents := make([]*Agent, 0, len(r.agents))

@@ -9,13 +9,14 @@
 package headless
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 	"time"
 
-	"github.com/slbdotdev/slbh/internal/harness"
+	"github.com/slbdotdev/slbh/internal/seam"
 )
 
 // Options configures a single headless turn.
@@ -34,7 +35,7 @@ type Result struct {
 	Model        string  `json:"model"`
 	Runtime      string  `json:"runtime"`              // runtime id; its directory under the home holds every transcript
 	Transcript   string  `json:"transcript,omitempty"` // the seat's transcript.jsonl, the full record of the turn
-	StopReason   string  `json:"stop_reason"`          // "done", "error" or "wall_cap"
+	StopReason   string  `json:"stop_reason"`          // "done", "error", "shutdown" or "wall_cap"
 	Turns        int     `json:"turns"`
 	ToolCalls    int     `json:"tool_calls"`
 	ToolResults  int     `json:"tool_results"`
@@ -65,7 +66,7 @@ func metaInt(meta map[string]any, key string) (int, bool) {
 // Run sends one prompt to the runtime's seat agent and returns when that agent's turn
 // completes or the wall cap expires. The runtime is caller-owned: Run neither creates nor
 // closes it, so an embedder can drive several turns or inspect state afterwards.
-func Run(rt *harness.Runtime, opts Options) (Result, error) {
+func Run(rt seam.Runtime, opts Options) (Result, error) {
 	out := opts.Out
 	if out == nil || opts.Quiet {
 		out = io.Discard
@@ -73,7 +74,7 @@ func Run(rt *harness.Runtime, opts Options) (Result, error) {
 	if rt == nil {
 		return Result{}, fmt.Errorf("headless: nil runtime")
 	}
-	var seat harness.AgentSnapshot
+	var seat seam.AgentSnapshot
 	var found bool
 	for _, agent := range rt.Agents() {
 		if agent.Depth == 0 {
@@ -91,7 +92,7 @@ func Run(rt *harness.Runtime, opts Options) (Result, error) {
 	}
 
 	start := time.Now()
-	if err := rt.SendPrompt(seat.ID, opts.Prompt); err != nil {
+	if _, err := rt.Do(context.Background(), seam.SendPromptCommand{AgentID: seat.ID, Prompt: opts.Prompt}); err != nil {
 		return res, fmt.Errorf("headless: send: %w", err)
 	}
 
@@ -113,8 +114,16 @@ func Run(rt *harness.Runtime, opts Options) (Result, error) {
 	events := rt.Events()
 	for {
 		select {
-		case ev := <-events:
+		case ev, ok := <-events:
+			if !ok {
+				res.StopReason = "shutdown"
+				return finish()
+			}
 			emit(out, opts.JSON, ev)
+			if ev.Kind == "runtime" && ev.Text == "runtime stopping" {
+				res.StopReason = "shutdown"
+				return finish()
+			}
 			switch ev.Kind {
 			case "inference_request":
 				// One API round is one turn. A retry re-emits the same round number, so the
@@ -164,20 +173,11 @@ func Run(rt *harness.Runtime, opts Options) (Result, error) {
 		case <-deadline:
 			res.StopReason = "wall_cap"
 			return finish()
-		case <-rt.Done():
-			// Close cancels the context and stops the dispatcher but never
-			// closes the events channel, and a cancelled turn returns without
-			// emitting turn_done. Without this case a SIGTERM mid-turn parks
-			// the process on <-events until someone sends SIGKILL, so the CLI
-			// can never report its status and no service manager can observe a
-			// clean shutdown.
-			res.StopReason = "shutdown"
-			return finish()
 		}
 	}
 }
 
-func emit(out io.Writer, asJSON bool, ev harness.Event) {
+func emit(out io.Writer, asJSON bool, ev seam.Event) {
 	if out == io.Discard {
 		return
 	}

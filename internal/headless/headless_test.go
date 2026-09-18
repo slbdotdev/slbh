@@ -11,6 +11,7 @@ import (
 	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/harness"
 	"github.com/slbdotdev/slbh/internal/provider"
+	"github.com/slbdotdev/slbh/internal/seam"
 )
 
 // answering replies once and ends the turn, the shape every completed turn has.
@@ -216,11 +217,9 @@ func TestRunRejectsARuntimeWithNoSeat(t *testing.T) {
 }
 
 func TestRunReturnsWhenTheRuntimeShutsDown(t *testing.T) {
-	// With no --timeout the deadline channel is nil, and Close cancels the
-	// context without closing the events channel, so a SIGTERM arriving during
-	// an in-flight turn parked the process on <-events until someone sent
-	// SIGKILL. The CLI could never report its status and no service manager
-	// could observe a clean shutdown.
+	// With no --timeout the deadline channel is nil, so shutdown must arrive on
+	// the seam's event stream. There is deliberately no second lifecycle
+	// channel for a front end to select on.
 	rt := newRuntime(t, stalling{})
 	type outcome struct {
 		res Result
@@ -243,5 +242,74 @@ func TestRunReturnsWhenTheRuntimeShutsDown(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after the runtime shut down")
+	}
+}
+
+type blockedAfterDoRuntime struct {
+	seam.Runtime
+	afterDo chan struct{}
+	release chan struct{}
+}
+
+func (r *blockedAfterDoRuntime) Do(ctx context.Context, command seam.Command) (seam.Reply, error) {
+	reply, err := r.Runtime.Do(ctx, command)
+	close(r.afterDo)
+	<-r.release
+	return reply, err
+}
+
+func TestRunReturnsOnClosedFullEventStream(t *testing.T) {
+	rt := newRuntime(t, stalling{})
+	blocked := &blockedAfterDoRuntime{
+		Runtime: rt,
+		afterDo: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	type outcome struct {
+		res Result
+		err error
+	}
+	done := make(chan outcome, 1)
+	const wallCap = 5 * time.Second
+	started := time.Now()
+	go func() {
+		res, err := Run(blocked, Options{Prompt: "hello", Timeout: wallCap})
+		done <- outcome{res, err}
+	}()
+
+	select {
+	case <-blocked.afterDo:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not send the prompt")
+	}
+	events := rt.Events()
+	for i := 0; i < cap(events); i++ {
+		rt.EmitStatus("status", "fill")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(events) < cap(events) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(events) != cap(events) {
+		t.Fatalf("event buffer length = %d, want full capacity %d", len(events), cap(events))
+	}
+	if err := rt.Close(); err != nil {
+		t.Fatal(err)
+	}
+	close(blocked.release)
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("Run returned an error on shutdown: %v", got.err)
+		}
+		if got.res.StopReason != "shutdown" {
+			t.Fatalf("stop reason %q, want shutdown", got.res.StopReason)
+		}
+		if elapsed := time.Since(started); elapsed >= wallCap/2 {
+			t.Fatalf("Run took %v, want well within wall cap %v", elapsed, wallCap)
+		}
+	case <-time.After(wallCap):
+		t.Fatal("Run waited for its wall cap after the full event stream closed")
 	}
 }

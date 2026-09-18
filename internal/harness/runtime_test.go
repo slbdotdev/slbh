@@ -329,6 +329,87 @@ func TestRuntimeDoesNotDropStreamEventsWhenUIFallsBehind(t *testing.T) {
 	}
 }
 
+func TestRuntimeCloseDeliversStoppingEventThenClosesStream(t *testing.T) {
+	r := testRuntime(t)
+	events := r.Events()
+	received := make(chan []Event, 1)
+	go func() {
+		var all []Event
+		for event := range events {
+			all = append(all, event)
+		}
+		received <- all
+	}()
+
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case all := <-received:
+		if len(all) == 0 {
+			t.Fatal("event stream closed without a runtime stopping event")
+		}
+		last := all[len(all)-1]
+		if last.Kind != "runtime" || last.Text != "runtime stopping" {
+			t.Fatalf("last event = %#v, want runtime stopping", last)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reader did not observe the event stream closing")
+	}
+}
+
+func TestRuntimeCloseReturnsAndClosesFullUnreadStream(t *testing.T) {
+	events := make(chan Event, 1024)
+	r, err := New(
+		config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"},
+		Options{Events: events, Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < cap(events); i++ {
+		r.emit(Event{Kind: "status", Text: "fill"})
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(events) < cap(events) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(events) != cap(events) {
+		t.Fatalf("event buffer length = %d, want full capacity %d", len(events), cap(events))
+	}
+
+	started := time.Now()
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed >= 2*time.Second {
+		t.Fatalf("Close took %v with a full unread stream", elapsed)
+	}
+	for {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				return
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("full event stream was not closed")
+		}
+	}
+}
+
+func TestRuntimeEmitAfterCloseIsNoOp(t *testing.T) {
+	r := testRuntime(t)
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for range r.Events() {
+	}
+	r.emit(Event{Kind: "status", Text: "after close"})
+	if _, ok := <-r.Events(); ok {
+		t.Fatal("event stream reopened after emit following Close")
+	}
+}
+
 func TestAgentSessionsHaveSeparateTranscriptsAndClearRotatesSelectedAgent(t *testing.T) {
 	r := testRuntime(t)
 	seat := r.seat()
