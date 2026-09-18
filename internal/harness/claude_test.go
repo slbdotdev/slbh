@@ -81,6 +81,7 @@ func newClaudeTestRuntime(t *testing.T, captureFile string) *Runtime {
 	}
 	r, err := New(config.Config{
 		Home: t.TempDir(), SeatModel: "test", ApprovedModels: []string{"test"},
+		Roster: testRoster(),
 		Instructions: config.Instructions{Layers: map[string]string{
 			config.LayerLeaf: "MANAGED CLAUDE LEAF",
 		}},
@@ -99,7 +100,7 @@ func launchFakeClaude(t *testing.T, r *Runtime, effort, brief string) *Agent {
 	t.Helper()
 	manager := launchTestManager(t, r)
 	child, err := r.launchSubagentSpec(manager.ID, LaunchSpec{
-		Title: "claude-test", Harness: "claude_code", Model: "claude-opus-5", Effort: effort, Brief: brief,
+		Title: "claude-test", Role: "opus", Harness: "claude_code", Model: "claude-opus-5", Effort: effort, Brief: brief,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -227,23 +228,28 @@ func TestClaudeLeafArgvEnvironmentAndParentDelivery(t *testing.T) {
 	}
 }
 
-func TestClaudeLeafOmitsEmptyEffort(t *testing.T) {
+func TestClaudeLeafUsesRosterEffortWhenOmitted(t *testing.T) {
 	captureFile := filepath.Join(t.TempDir(), "capture.json")
 	r := newClaudeTestRuntime(t, captureFile)
 	child := launchFakeClaude(t, r, "", "brief")
 	_ = waitForClaudeEvent(t, r, child.ID, "turn_done")
-	for _, argument := range readClaudeCapture(t, captureFile).Args {
+	args := readClaudeCapture(t, captureFile).Args
+	for index, argument := range args {
 		if argument == "--effort" {
-			t.Fatal("Claude argv includes --effort for an empty effort")
+			if index+1 >= len(args) || args[index+1] != "high" {
+				t.Fatalf("Claude argv effort = %#v, want roster effort high", args)
+			}
+			return
 		}
 	}
+	t.Fatalf("Claude argv omitted roster effort: %#v", args)
 }
 
 func TestClaudeLeafRequiresExplicitModel(t *testing.T) {
 	r := newClaudeTestRuntime(t, "")
 	manager := launchTestManager(t, r)
-	input := `{"title":"missing","harness":"claude_code","brief":""}`
-	if _, err := r.ExecuteTool(manager.ID, "launch_subagent", input); err == nil || !strings.Contains(err.Error(), "non-empty explicit model") || !strings.Contains(err.Error(), "Claude Code") {
+	input := `{"title":"missing","role":"opus","harness":"claude_code","brief":""}`
+	if _, err := r.ExecuteTool(manager.ID, "launch_subagent", input); err == nil || !strings.Contains(err.Error(), "non-empty explicit model") || !strings.Contains(err.Error(), "opus") {
 		t.Fatalf("missing Claude model error = %v", err)
 	}
 }
@@ -338,7 +344,7 @@ func processExists(pid int) bool {
 func TestClaudeStreamFixtureMapsRuntimeEvents(t *testing.T) {
 	r := newClaudeTestRuntime(t, "")
 	manager := launchTestManager(t, r)
-	agent, err := r.newAgent("fixture", manager.ID, 2, "claude-opus-5", "low")
+	agent, err := r.newAgent("fixture", "opus", manager.ID, 2, "claude-opus-5", "low")
 	if err != nil {
 		t.Fatal(err)
 	}

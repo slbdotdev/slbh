@@ -22,6 +22,7 @@ import (
 
 type LaunchSpec struct {
 	Title            string
+	Role             string
 	Harness          string
 	Model            string
 	Effort           string
@@ -129,7 +130,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	if !cfg.ModelApproved(seatModel) {
 		seatModel = ""
 	}
-	seat, err := r.newAgent("seat", "", 0, seatModel, cfg.SeatEffort)
+	seat, err := r.newAgent("seat", "seat", "", 0, seatModel, cfg.SeatEffort)
 	if err != nil {
 		cancel()
 		_ = os.Remove(filepath.Join(r.runtimeDir, "runtime.json"))
@@ -302,8 +303,28 @@ func (r *Runtime) ModelGuidance() string {
 	if len(branches) == 0 {
 		branches = append(branches, "no provider catalog loaded; use the configured default or honor an explicit user model request")
 	}
-	defaults := fmt.Sprintf("defaults are seat=%q, subagent=%q, leaf=%q", cfg.SeatModel, cfg.SubagentModel, cfg.LeafModel)
-	return "Model guidance: approved models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". The depth-0 Seat may launch only a native depth-1 Manager; only a native depth-1 Manager may launch a depth-2 leaf. A Manager may use any supported leaf harness: native for Flex, codex for Codex, or claude_code for Claude Code. Every depth-2 launch must pass a non-empty model explicitly; neither the subagent default nor the leaf default is substituted for a leaf. The configured subagent default applies only to a native depth-1 Manager whose launch omits model. A model explicitly requested by the user may override the approved list; do not invent model IDs. Codex leaves use the headless Codex app-server and exact ChatGPT model slugs, independent of the native approval list. Claude Code leaves use the host's claude.ai login and exact Claude model slugs; never substitute a native provider route."
+	defaults := fmt.Sprintf("configured application defaults are seat=%q, subagent=%q, leaf=%q", cfg.SeatModel, cfg.SubagentModel, cfg.LeafModel)
+	return "Model guidance: approved native models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". " + rosterLaunchGuidance(cfg.Roster) + " Every launch must name its roster role. The depth-0 Seat may launch only the roster's depth-1 Manager; only a native depth-1 Manager may launch the roster's depth-2 roles. Every depth-2 launch must pass a non-empty model explicitly; configured subagent and leaf defaults are never substituted. Each launch is checked against the selected role's roster harness and pinned or approved model set. Per-launch effort is honored; omission uses the roster role's effort."
+}
+
+func rosterLaunchGuidance(roster config.Roster) string {
+	if roster.Source.Kind != config.RosterManaged {
+		return "Managed roster unavailable (" + roster.Source.Describe() + "); child launches refuse."
+	}
+	roles := append(roster.ChildRoles("seat", 1), roster.ChildRoles("manager", 2)...)
+	parts := make([]string, 0, len(roles))
+	for _, role := range roles {
+		model := role.Model
+		if model == "at_dispatch" {
+			model = "one of [" + strings.Join(role.ModelsApproved, ", ") + "]"
+		}
+		harness, err := launchHarness(role.Harness)
+		if err != nil {
+			harness = "invalid(" + role.Harness + ")"
+		}
+		parts = append(parts, fmt.Sprintf("%s=depth-%d/%s/%s", role.Name, role.Depth, harness, model))
+	}
+	return "Managed roster launch roles: " + strings.Join(parts, "; ") + "."
 }
 func (r *Runtime) seat() *Agent {
 	r.mu.RLock()
@@ -316,8 +337,8 @@ func (r *Runtime) seat() *Agent {
 	return nil
 }
 
-func (r *Runtime) newAgent(title, parentID string, depth int, model, effort string) (*Agent, error) {
-	agent := newAgent(r, id.NewShort("agent"), title, parentID, depth, model, effort)
+func (r *Runtime) newAgent(title, role, parentID string, depth int, model, effort string) (*Agent, error) {
+	agent := newAgent(r, id.NewShort("agent"), title, role, parentID, depth, model, effort)
 	session, err := r.openAgentSession(agent.ID)
 	if err != nil {
 		return nil, err
@@ -371,10 +392,6 @@ func (r *Runtime) TranscriptPath(agentID string) (string, error) {
 	return session.path, nil
 }
 
-func (r *Runtime) launchSubagent(parentID, title, brief string) (*Agent, error) {
-	return r.launchSubagentSpec(parentID, LaunchSpec{Title: title, Brief: brief})
-}
-
 func (r *Runtime) launchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, error) {
 	r.mu.RLock()
 	parent, ok := r.agents[parentID]
@@ -391,31 +408,58 @@ func (r *Runtime) launchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	if spec.Title == "" {
 		return nil, fmt.Errorf("subagent title is required")
 	}
-	harness := strings.TrimSpace(spec.Harness)
-	if harness == "" {
-		harness = "native"
-	}
-	if harness != "native" && harness != "codex" && harness != "claude_code" {
-		return nil, fmt.Errorf("unsupported harness %q", harness)
-	}
-	if parent.Depth == 0 && harness != "native" {
-		return nil, fmt.Errorf("the depth-0 Seat may launch only a native depth-1 Manager; %s leaves must be launched by a native depth-1 Manager", leafHarnessName(harness))
-	}
-	model, effort := strings.TrimSpace(spec.Model), strings.TrimSpace(spec.Effort)
 	r.mu.RLock()
 	cfg := r.config
 	r.mu.RUnlock()
-	if model == "" {
-		if parent.Depth == 1 {
-			return nil, fmt.Errorf("a depth-1 Manager launching a depth-2 %s leaf must pass a non-empty explicit model in launch_subagent.model; subagent and leaf defaults are not used for leaves", leafHarnessName(harness))
+	roleName := strings.ToLower(strings.TrimSpace(spec.Role))
+	if roleName == "" {
+		return nil, fmt.Errorf("launch_subagent.role is required and must name a frozen roster role")
+	}
+	if cfg.Roster.Source.Kind != config.RosterManaged {
+		return nil, fmt.Errorf("cannot launch roster role %q: %s", roleName, cfg.Roster.Source.Describe())
+	}
+	role, ok := cfg.Roster.Role(roleName)
+	if !ok {
+		return nil, fmt.Errorf("unknown roster role %q", roleName)
+	}
+	childDepth := parent.Depth + 1
+	if role.Depth != childDepth {
+		return nil, fmt.Errorf("roster role %q has depth %d and cannot be launched at depth %d", role.Name, role.Depth, childDepth)
+	}
+	if role.LaunchedBy != parent.Role {
+		return nil, fmt.Errorf("roster role %q is launched by %q, not parent role %q", role.Name, role.LaunchedBy, parent.Role)
+	}
+	if parent.Depth == 0 && (parent.Role != "seat" || role.Name != "manager") {
+		return nil, fmt.Errorf("the depth-0 Seat may launch only the roster's manager role")
+	}
+	if parent.Depth == 1 && parent.Role != "manager" {
+		return nil, fmt.Errorf("only the native manager role at depth 1 may launch a depth-2 role")
+	}
+	expectedHarness, err := launchHarness(role.Harness)
+	if err != nil {
+		return nil, fmt.Errorf("roster role %q: %w", role.Name, err)
+	}
+	harness := strings.TrimSpace(spec.Harness)
+	if harness == "" {
+		harness = expectedHarness
+	} else if harness != expectedHarness {
+		return nil, fmt.Errorf("roster role %q requires harness %q, got %q", role.Name, expectedHarness, harness)
+	}
+	model, effort := strings.TrimSpace(spec.Model), strings.TrimSpace(spec.Effort)
+	if childDepth == 2 && model == "" {
+		return nil, fmt.Errorf("a depth-1 Manager launching depth-2 roster role %q must pass a non-empty explicit model in launch_subagent.model; configured defaults are not used for leaves", role.Name)
+	}
+	if role.Model == "at_dispatch" {
+		if !containsExact(role.ModelsApproved, model) {
+			return nil, fmt.Errorf("roster role %q model %q is not in its approved set %v", role.Name, model, role.ModelsApproved)
 		}
-		model = cfg.SubagentModel
-		if !cfg.ModelApproved(model) {
-			model = ""
-		}
+	} else if model == "" {
+		model = role.Model
+	} else if model != role.Model {
+		return nil, fmt.Errorf("roster role %q requires model %q, got %q", role.Name, role.Model, model)
 	}
 	if effort == "" {
-		effort = cfg.SubagentEffort
+		effort = role.Effort
 	}
 	workingDir := parent.WorkDir
 	if spec.WorkingDir != "" {
@@ -432,7 +476,7 @@ func (r *Runtime) launchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 			return nil, fmt.Errorf("working directory %q is not a directory", spec.WorkingDir)
 		}
 	}
-	agent, err := r.newAgent(spec.Title, parentID, parent.Depth+1, model, effort)
+	agent, err := r.newAgent(spec.Title, role.Name, parentID, childDepth, model, effort)
 	if err != nil {
 		return nil, err
 	}
@@ -451,7 +495,7 @@ func (r *Runtime) launchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	} else {
 		agent.start()
 	}
-	r.emit(seam.Event{AgentID: agent.ID, AgentTitle: spec.Title, Kind: "status", Text: "subagent launched", Metadata: map[string]any{"parent": parentID, "harness": agent.Harness, "working_dir": agent.WorkDir}})
+	r.emit(seam.Event{AgentID: agent.ID, AgentTitle: spec.Title, Kind: "status", Text: "subagent launched", Metadata: map[string]any{"parent": parentID, "role": agent.Role, "harness": agent.Harness, "model": agent.Model, "effort": agent.Effort, "working_dir": agent.WorkDir}})
 	if spec.Brief != "" {
 		if err := agent.Send(spec.Brief); err != nil {
 			agent.stop()
@@ -462,15 +506,24 @@ func (r *Runtime) launchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	return agent, nil
 }
 
-func leafHarnessName(harness string) string {
-	switch harness {
-	case "codex":
-		return "Codex"
-	case "claude_code":
-		return "Claude Code"
+func launchHarness(rosterHarness string) (string, error) {
+	switch rosterHarness {
+	case "slbh":
+		return "native", nil
+	case "codex", "claude_code":
+		return rosterHarness, nil
 	default:
-		return "native/Flex"
+		return "", fmt.Errorf("unsupported roster harness %q", rosterHarness)
 	}
+}
+
+func containsExact(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runtime) discardAgent(agentID string) {

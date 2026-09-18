@@ -90,6 +90,13 @@ func cloneConfig(cfg config.Config) config.Config {
 		}
 	}
 	cloned.Skills.Source.Missing = append([]string(nil), cfg.Skills.Source.Missing...)
+	if cfg.Roster.Names != nil {
+		cloned.Roster.Names = make(map[string]config.Role, len(cfg.Roster.Names))
+		for name, role := range cfg.Roster.Names {
+			role.ModelsApproved = append([]string(nil), role.ModelsApproved...)
+			cloned.Roster.Names[name] = role
+		}
+	}
 	return cloned
 }
 

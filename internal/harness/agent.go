@@ -35,6 +35,7 @@ type Agent struct {
 	runtime  *Runtime
 	ID       string
 	Title    string
+	Role     string
 	ParentID string
 	Depth    int
 	Model    string
@@ -63,8 +64,8 @@ type Agent struct {
 	claude        *claudeLeaf
 }
 
-func newAgent(runtime *Runtime, agentID, title, parentID string, depth int, model, effort string) *Agent {
-	return &Agent{runtime: runtime, ID: agentID, Title: title, ParentID: parentID, Depth: depth, Model: model, Effort: effort, Harness: "native", WorkDir: runtime.workDir, status: "idle", wake: make(chan struct{}, 1), done: make(chan struct{})}
+func newAgent(runtime *Runtime, agentID, title, role, parentID string, depth int, model, effort string) *Agent {
+	return &Agent{runtime: runtime, ID: agentID, Title: title, Role: role, ParentID: parentID, Depth: depth, Model: model, Effort: effort, Harness: "native", WorkDir: runtime.workDir, status: "idle", wake: make(chan struct{}, 1), done: make(chan struct{})}
 }
 
 func (a *Agent) start() {
@@ -172,6 +173,7 @@ func (a *Agent) Snapshot() seam.AgentSnapshot {
 	return seam.AgentSnapshot{
 		ID:              a.ID,
 		Title:           a.Title,
+		Role:            a.Role,
 		ParentID:        a.ParentID,
 		Depth:           a.Depth,
 		Model:           a.Model,
@@ -796,7 +798,7 @@ func systemPrompt(a *Agent) string {
 // The fold was verified byte-identical to the patched output before the
 // legacy form was removed.
 func bakedSystemPrompt(a *Agent) string {
-	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message and completed long_job/long_py output, is a mandatory mid-turn steer: read and act on it during your current work. A [warning from long_job ...] or [warning from long_py ...] message means a background job you started has passed its warn_after_seconds and is still running; it is a decision point for you alone. Kill it with kill_job, leave it running and take its result when it finishes, or carry on with other work. It is the only warning that job will send, nothing escalates it, and deciding to keep waiting is a valid decision. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Depth, a.runtime.ModelGuidance())
+	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Your frozen roster role is %s and runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message and completed long_job/long_py output, is a mandatory mid-turn steer: read and act on it during your current work. A [warning from long_job ...] or [warning from long_py ...] message means a background job you started has passed its warn_after_seconds and is still running; it is a decision point for you alone. Kill it with kill_job, leave it running and take its result when it finishes, or carry on with other work. It is the only warning that job will send, nothing escalates it, and deciding to keep waiting is a valid decision. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Role, a.Depth, a.runtime.ModelGuidance())
 }
 
 // maxToolErrorOutput bounds the output carried back with a failing tool call. A five-second

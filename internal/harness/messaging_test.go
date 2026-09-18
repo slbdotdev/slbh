@@ -82,7 +82,7 @@ func toolEvent(index int, id, name, args string) provider.Event {
 func messagingRuntime(t *testing.T) (*Runtime, *boundaryProvider) {
 	t.Helper()
 	p := &boundaryProvider{calls: make(chan pendingInference, 16)}
-	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "passive", SubagentModel: "passive", LeafModel: "passive"}, Options{Provider: func(model string) (provider.Provider, error) {
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "passive", SubagentModel: "passive", LeafModel: "passive", Roster: testRoster()}, Options{Provider: func(model string) (provider.Provider, error) {
 		if model == "active" {
 			return p, nil
 		}
@@ -146,15 +146,15 @@ func TestMessagesReachEveryAgentAtInferenceBoundary(t *testing.T) {
 		t.Run(direction, func(t *testing.T) {
 			r, p := messagingRuntime(t)
 			seat := r.seat()
-			child, err := r.launchSubagent(seat.ID, "child", "")
+			child, err := r.launchSubagentSpec(seat.ID, LaunchSpec{Title: "child", Role: "manager"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			leaf, err := r.launchSubagentSpec(child.ID, LaunchSpec{Title: "leaf", Model: "passive"})
+			leaf, err := r.launchSubagentSpec(child.ID, LaunchSpec{Title: "leaf", Role: "flex", Model: "passive"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			sibling, err := r.launchSubagent(seat.ID, "sibling", "")
+			sibling, err := r.launchSubagentSpec(seat.ID, LaunchSpec{Title: "sibling", Role: "manager"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -211,7 +211,7 @@ func TestOneInboxPreservesFIFOBurstAndDoesNotBlockOnBusyAgentOrUI(t *testing.T) 
 	r, p := messagingRuntime(t)
 	a := r.seat()
 	a.SetModel("active")
-	child, err := r.launchSubagent(a.ID, "child", "")
+	child, err := r.launchSubagentSpec(a.ID, LaunchSpec{Title: "child", Role: "manager"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestAutomaticChildResultEntersBusyParentTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := p.next(t)
-	child, err := r.launchSubagent(seat.ID, "child", "do the work")
+	child, err := r.launchSubagentSpec(seat.ID, LaunchSpec{Title: "child", Role: "manager", Brief: "do the work"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +488,7 @@ func TestToolInFlightFinishesAndDeliversBeforeNextTool(t *testing.T) {
 
 func TestStoppedRecipientsAndEmptyMessagesFailExplicitly(t *testing.T) {
 	r, _ := messagingRuntime(t)
-	child, err := r.launchSubagent(r.seat().ID, "child", "")
+	child, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "child", Role: "manager"})
 	if err != nil {
 		t.Fatal(err)
 	}

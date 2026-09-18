@@ -38,15 +38,16 @@ func ToolDefinitions() []provider.Tool {
 		{Name: "read_job", Description: "Read current stdout and stderr for a job.", Parameters: stringArg("job_id")},
 		{Name: "kill_job", Description: "Kill a job owned by the calling agent.", Parameters: stringArg("job_id")},
 		{Name: "list_subagents", Description: "List this runtime's agent tree.", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
-		{Name: "launch_subagent", Description: "Launch one child and return immediately. The depth-0 Seat may launch only a native depth-1 Manager; it may omit model to use the configured subagent default. Only a native depth-1 Manager may launch a depth-2 leaf, using native for Flex, codex for Codex, or claude_code for Claude Code. Every depth-2 launch must pass a non-empty model explicitly; subagent and leaf defaults are never substituted for a leaf. A depth-2 leaf cannot launch anything. The parent chooses a relevant title made of three words joined by hyphens (for example inspect-api-cache); this is guidance only and is not enforced. Honor an explicit user model request. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.", Parameters: map[string]any{"type": "object", "properties": map[string]any{
+		{Name: "launch_subagent", Description: "Launch one child and return immediately. Every launch must name a frozen roster role, and the runtime enforces that role's declared depth, launcher, harness, and model constraints. The depth-0 Seat may launch only the manager role. Only a native Manager at depth 1 may launch a depth-2 role. Every depth-2 launch must pass a non-empty model explicitly; configured defaults are never substituted. A depth-2 leaf cannot launch anything. The parent chooses a relevant title made of three words joined by hyphens (for example inspect-api-cache); this is guidance only and is not enforced. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.", Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"title":              map[string]any{"type": "string", "description": "A relevant three-word dashed title chosen by the parent, such as inspect-api-cache. Guidance only; not enforced."},
-			"harness":            map[string]any{"type": "string", "enum": []string{"native", "codex", "claude_code"}, "description": "Harness for the child. The Seat may use only native for its Manager. A Manager may use native for Flex, codex for Codex, or claude_code for Claude Code."},
-			"model":              map[string]any{"type": "string", "description": "Model ID. Required and non-empty for every depth-2 leaf, including native/Flex; pass the exact slug for codex or claude_code. May be omitted only for a native depth-1 Manager."},
+			"role":               map[string]any{"type": "string", "description": "Frozen roster name for the child. Required on every launch. The runtime adds the roles allowed for this parent as the schema enum."},
+			"harness":            map[string]any{"type": "string", "enum": []string{"native", "codex", "claude_code"}, "description": "Harness for the child. May be omitted to use the named role's roster harness; an explicit value must match it."},
+			"model":              map[string]any{"type": "string", "description": "Model ID. Required and non-empty for every depth-2 role. It must equal a pinned role model or belong to an at-dispatch role's approved set. May be omitted only when launching the pinned manager role."},
 			"effort":             map[string]any{"type": "string"},
 			"brief":              map[string]any{"type": "string"},
 			"warn_after_seconds": map[string]any{"type": "integer"},
 			"working_dir":        map[string]any{"type": "string"},
-		}, "required": []string{"title", "brief"}}},
+		}, "required": []string{"title", "role", "brief"}}},
 		{Name: "msg_subagent", Description: "Send a mandatory mid-turn steer to any agent in this runtime, including your parent or siblings. FIFO delivery at the next API/tool call boundary; wakes idle recipients. Never waits for turn completion or cancels in-flight work.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string"}, "message": map[string]any{"type": "string"}}, "required": []string{"agent_id", "message"}}},
 		{Name: "end_subagent", Description: "Stop a child agent.", Parameters: stringArg("agent_id")},
 	}...)
@@ -84,7 +85,26 @@ func seatToolDefinitions() []provider.Tool {
 func (r *Runtime) toolDefinitions(agentID string) []provider.Tool {
 	definitions := ToolDefinitions()
 	agent, ok := r.lookupAgent(agentID)
-	if !ok || agent.Depth != 0 {
+	if !ok {
+		return definitions
+	}
+	r.mu.RLock()
+	roles := r.config.Roster.ChildRoles(agent.Role, agent.Depth+1)
+	r.mu.RUnlock()
+	roleNames := make([]string, len(roles))
+	for index, role := range roles {
+		roleNames[index] = role.Name
+	}
+	for index := range definitions {
+		if definitions[index].Name != "launch_subagent" {
+			continue
+		}
+		properties, _ := definitions[index].Parameters["properties"].(map[string]any)
+		roleSchema, _ := properties["role"].(map[string]any)
+		roleSchema["enum"] = roleNames
+		break
+	}
+	if agent.Depth != 0 {
 		return definitions
 	}
 	return append(definitions, seatToolDefinitions()...)
@@ -176,7 +196,7 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 	case "list_subagents":
 		return jsonString(r.Agents())
 	case "launch_subagent":
-		child, err := r.launchSubagentSpec(agentID, LaunchSpec{Title: value(a.Values, "title"), Harness: value(a.Values, "harness"), Model: value(a.Values, "model"), Effort: value(a.Values, "effort"), Brief: value(a.Values, "brief"), WarnAfterSeconds: intValue(a.Values, "warn_after_seconds"), WorkingDir: value(a.Values, "working_dir")})
+		child, err := r.launchSubagentSpec(agentID, LaunchSpec{Title: value(a.Values, "title"), Role: value(a.Values, "role"), Harness: value(a.Values, "harness"), Model: value(a.Values, "model"), Effort: value(a.Values, "effort"), Brief: value(a.Values, "brief"), WarnAfterSeconds: intValue(a.Values, "warn_after_seconds"), WorkingDir: value(a.Values, "working_dir")})
 		if err != nil {
 			return "", err
 		}

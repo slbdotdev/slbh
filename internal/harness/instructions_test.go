@@ -58,6 +58,7 @@ func runtimeWithInstructionsAndSkills(t *testing.T, docs map[string]string, skil
 		SubagentModel: "test-child", SubagentEffort: "high",
 		Instructions: config.LoadInstructions(home),
 		Skills:       config.LoadSkills(home),
+		Roster:       testRoster(),
 	}
 	r, err := New(cfg, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
 	if err != nil {
@@ -80,8 +81,9 @@ func agentAtDepth(t *testing.T, r *Runtime, depth int) *Agent {
 	t.Helper()
 	agent := r.seat()
 	for i := 0; i < depth; i++ {
-		spec := LaunchSpec{Title: "child-agent-here"}
+		spec := LaunchSpec{Title: "child-agent-here", Role: "manager"}
 		if agent.Depth == 1 {
+			spec.Role = "flex"
 			spec.Model = "explicit-leaf-model"
 		}
 		child, err := r.launchSubagentSpec(agent.ID, spec)
@@ -138,7 +140,7 @@ func TestSystemPromptKeepsBakedMechanicsAlongsideTheLayerDocument(t *testing.T) 
 			"launch_subagent returns immediately",
 			"Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops",
 			"mandatory mid-turn steer",
-			"Model guidance: approved models are",
+			"Model guidance: approved native models are",
 		} {
 			if !strings.Contains(prompt, mechanic) {
 				t.Fatalf("depth %d prompt lost baked mechanic %q", depth, mechanic)

@@ -34,10 +34,9 @@ const (
 
 // LayerForDepth maps an agent's runtime depth to its instruction layer.
 //
-// The mapping is by depth rather than by a configured role name because depth
-// is the one fact the runtime cannot be wrong about: it assigns it when the
-// agent is created and nothing can edit it afterwards. A role name in a config
-// file is a second source of truth for something already known.
+// The mapping remains by depth because these are layer documents shared by
+// several roster roles. The separately loaded roster names launch identity;
+// launch validation requires its declared depth to match the runtime depth.
 //
 // Depths beyond 2 are leaves rather than an error. The runtime caps delegation
 // at depth 2 today (a parent at depth >= 2 may not launch), so depth 3 cannot

@@ -36,6 +36,9 @@ func newOrgRuntime(t *testing.T, cfg config.Config) *Runtime {
 	if cfg.SeatModel == "" {
 		cfg.SeatModel = "test"
 	}
+	if cfg.Roster.Source.Kind != config.RosterManaged {
+		cfg.Roster = testRoster()
+	}
 	r, err := New(cfg, Options{
 		Provider:            func(string) (provider.Provider, error) { return fakeProvider{}, nil },
 		CodexCommand:        os.Args[0],
@@ -51,11 +54,11 @@ func newOrgRuntime(t *testing.T, cfg config.Config) *Runtime {
 func TestSeatOrgToolSchemasAreExclusive(t *testing.T) {
 	r := newOrgRuntime(t, config.Config{SecretaryWake: false})
 	seat := r.seat()
-	child, err := r.launchSubagent(seat.ID, "manager", "inspect")
+	child, err := r.launchSubagentSpec(seat.ID, LaunchSpec{Title: "manager", Role: "manager", Brief: "inspect"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	leaf, err := r.launchSubagentSpec(child.ID, LaunchSpec{Title: "leaf", Model: "test-leaf", Brief: "inspect more"})
+	leaf, err := r.launchSubagentSpec(child.ID, LaunchSpec{Title: "leaf", Role: "flex", Model: "test-leaf", Brief: "inspect more"})
 	if err != nil {
 		t.Fatal(err)
 	}

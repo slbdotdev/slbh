@@ -18,7 +18,7 @@ func TestLiveCodexLeafRoundTrip(t *testing.T) {
 	}
 	model := os.Getenv("SLBH_CODEX_TEST_MODEL")
 	if model == "" {
-		model = "gpt-5.6-terra"
+		model = "gpt-5.6-luna"
 	}
 	r, err := New(config.Config{Home: t.TempDir()}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
 	if err != nil {
@@ -27,7 +27,7 @@ func TestLiveCodexLeafRoundTrip(t *testing.T) {
 	defer r.Close()
 	manager := launchTestManager(t, r)
 	child, err := r.launchSubagentSpec(manager.ID, LaunchSpec{
-		Title: "codex-live", Harness: "codex", Model: model,
+		Title: "codex-live", Role: "luna", Harness: "codex", Model: model,
 		Brief: "Reply with exactly CODEX_LEAF_OK and nothing else. Do not call tools.",
 	})
 	if err != nil {
@@ -61,7 +61,7 @@ func TestLiveCodexLeafBidirectionalSteer(t *testing.T) {
 	}
 	model := os.Getenv("SLBH_CODEX_TEST_MODEL")
 	if model == "" {
-		model = "gpt-5.6-terra"
+		model = "gpt-5.6-luna"
 	}
 	r, err := New(config.Config{Home: t.TempDir()}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
 	if err != nil {
@@ -70,7 +70,7 @@ func TestLiveCodexLeafBidirectionalSteer(t *testing.T) {
 	defer r.Close()
 	manager := launchTestManager(t, r)
 	child, err := r.launchSubagentSpec(manager.ID, LaunchSpec{
-		Title: "codex-steer-live", Harness: "codex", Model: model,
+		Title: "codex-steer-live", Role: "luna", Harness: "codex", Model: model,
 		Brief: "First run exactly `python -c \"import time; time.sleep(3)\"`. While it runs, a slbh steer will arrive. After that, call slbh_message_parent with message CODEX_PARENT_OK, then reply exactly CODEX_STEER_OK and nothing else.",
 	})
 	if err != nil {

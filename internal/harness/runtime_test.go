@@ -89,7 +89,7 @@ func (usageProvider) Stream(ctx context.Context, _ provider.Request, sink provid
 type childResultProvider struct{}
 
 func (childResultProvider) Stream(_ context.Context, request provider.Request, sink provider.StreamSink) error {
-	if request.Model == "test-child" {
+	if request.Model == "test-manager" {
 		return sink(provider.Event{Kind: provider.EventText, Text: "child answer"})
 	}
 	for _, message := range request.Messages {
@@ -102,7 +102,7 @@ func (childResultProvider) Stream(_ context.Context, request provider.Request, s
 			return sink(provider.Event{Kind: provider.EventText, Text: "parent waiting"})
 		}
 	}
-	return sink(provider.Event{Kind: provider.EventTool, ToolIndex: 0, ToolCallID: "launch-1", ToolName: "launch_subagent", Input: `{"title":"child","brief":"child brief"}`})
+	return sink(provider.Event{Kind: provider.EventTool, ToolIndex: 0, ToolCallID: "launch-1", ToolName: "launch_subagent", Input: `{"title":"child","role":"manager","brief":"child brief"}`})
 }
 
 type requestCaptureProvider struct{ requests chan provider.Request }
@@ -117,12 +117,29 @@ func (p requestCaptureProvider) Stream(_ context.Context, request provider.Reque
 
 func testRuntime(t *testing.T) *Runtime {
 	t.Helper()
-	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high", SubagentModel: "test-child", SubagentEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high", SubagentModel: "test-child", SubagentEffort: "high", Roster: testRoster()}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
 	return r
+}
+
+func testRoster() config.Roster {
+	return config.Roster{
+		Version: 3,
+		Source:  config.RosterSource{Kind: config.RosterManaged, Path: "/test/roster.toml"},
+		Names: map[string]config.Role{
+			"secretary": {Name: "secretary", Harness: "codex", Model: "gpt-5.6-luna", Effort: "high", Depth: -1, LaunchedBy: "owner"},
+			"seat":      {Name: "seat", Harness: "slbh", Model: "test", Effort: "high", Depth: 0, LaunchedBy: "owner"},
+			"manager":   {Name: "manager", Harness: "slbh", Model: "test-manager", Effort: "high", Depth: 1, LaunchedBy: "seat"},
+			"luna":      {Name: "luna", Harness: "codex", Model: "gpt-5.6-luna", Effort: "high", Depth: 2, LaunchedBy: "manager"},
+			"sol":       {Name: "sol", Harness: "codex", Model: "gpt-5.6-sol", Effort: "high", Depth: 2, LaunchedBy: "manager"},
+			"opus":      {Name: "opus", Harness: "claude_code", Model: "claude-opus-5", Effort: "high", Depth: 2, LaunchedBy: "manager"},
+			"flex":      {Name: "flex", Harness: "slbh", Model: "at_dispatch", ModelsApproved: []string{"test-leaf", "passive", "explicit-flex", "explicit-leaf-model", "deepseek-v4-flash", "z-ai/glm-5.3-flash"}, Effort: "high", Depth: 2, LaunchedBy: "manager"},
+			"intern":    {Name: "intern", Harness: "slbh", Model: "local/test", Effort: "medium", Depth: -1, LaunchedBy: "owner"},
+		},
+	}
 }
 
 var testEventStreams sync.Map
@@ -157,7 +174,12 @@ func testEvents(runtime seam.Runtime) <-chan seam.Event {
 
 func launchTestManager(t *testing.T, r *Runtime) *Agent {
 	t.Helper()
-	manager, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "native-manager", Harness: "native", Model: "test-manager"})
+	r.mu.Lock()
+	if r.config.Roster.Source.Kind != config.RosterManaged {
+		r.config.Roster = testRoster()
+	}
+	r.mu.Unlock()
+	manager, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "native-manager", Role: "manager"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +190,7 @@ func TestAgentSnapshotJSONRoundTrip(t *testing.T) {
 	want := seam.AgentSnapshot{
 		ID:              "agent-1234",
 		Title:           "reviewer",
+		Role:            "sol",
 		ParentID:        "agent-parent",
 		Depth:           2,
 		Model:           "gpt-test",
@@ -191,7 +214,7 @@ func TestAgentSnapshotJSONRoundTrip(t *testing.T) {
 	if got != want {
 		t.Fatalf("seam.AgentSnapshot round trip = %#v, want %#v", got, want)
 	}
-	for _, key := range []string{"id", "title", "parent_id", "depth", "model", "effort", "status", "harness", "work_dir", "context_window", "context_used", "cache_hit_tokens", "cache_miss_tokens"} {
+	for _, key := range []string{"id", "title", "role", "parent_id", "depth", "model", "effort", "status", "harness", "work_dir", "context_window", "context_used", "cache_hit_tokens", "cache_miss_tokens"} {
 		if !strings.Contains(string(data), `"`+key+`"`) {
 			t.Fatalf("seam.AgentSnapshot JSON missing %q: %s", key, data)
 		}
@@ -431,7 +454,7 @@ func TestAgentSessionsHaveSeparateTranscriptsAndClearRotatesSelectedAgent(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := r.launchSubagent(seat.ID, "child", "")
+	child, err := r.launchSubagentSpec(seat.ID, LaunchSpec{Title: "child", Role: "manager"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,11 +573,11 @@ func TestAgentTracksContextAndCacheStats(t *testing.T) {
 func TestDepthAndSteerIsolation(t *testing.T) {
 	r := testRuntime(t)
 	child := launchTestManager(t, r)
-	grandchild, err := r.launchSubagentSpec(child.ID, LaunchSpec{Title: "grandchild", Model: "test-leaf", Brief: "brief"})
+	grandchild, err := r.launchSubagentSpec(child.ID, LaunchSpec{Title: "grandchild", Role: "flex", Model: "test-leaf", Brief: "brief"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.launchSubagent(grandchild.ID, "too-deep", "brief"); err == nil {
+	if _, err := r.launchSubagentSpec(grandchild.ID, LaunchSpec{Title: "too-deep", Role: "flex", Model: "test-leaf", Brief: "brief"}); err == nil {
 		t.Fatal("expected depth error")
 	}
 	child.Steer("change emphasis")
@@ -847,11 +870,11 @@ func TestReasoningContentIsReplayedForToolContinuation(t *testing.T) {
 	}
 }
 
-func TestEmptyApprovalPolicyDoesNotCallProviderButExplicitLaunchModelWorks(t *testing.T) {
+func TestRosterManagerModelDoesNotUseApplicationApprovalDefaults(t *testing.T) {
 	providerCalls := 0
 	r, err := New(config.Config{
 		Home: t.TempDir(), SeatModel: "seat-model", SeatEffort: "high",
-		SubagentModel: "default-child", SubagentEffort: "high", ApprovedModels: []string{},
+		SubagentModel: "default-child", SubagentEffort: "high", ApprovedModels: []string{}, Roster: testRoster(),
 	}, Options{Provider: func(string) (provider.Provider, error) {
 		providerCalls++
 		return fakeProvider{}, nil
@@ -863,12 +886,12 @@ func TestEmptyApprovalPolicyDoesNotCallProviderButExplicitLaunchModelWorks(t *te
 	if got := r.seat().Snapshot().Model; got != "" {
 		t.Fatalf("seat model = %q, want fail-closed empty model", got)
 	}
-	child, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "explicit", Model: "user-requested"})
+	child, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "manager", Role: "manager"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := child.Snapshot().Model; got != "user-requested" {
-		t.Fatalf("explicit child model = %q, want user-requested", got)
+	if got := child.Snapshot().Model; got != "test-manager" {
+		t.Fatalf("manager model = %q, want roster-pinned test-manager", got)
 	}
 	if providerCalls != 0 {
 		t.Fatalf("provider calls before any turn = %d, want zero", providerCalls)
@@ -879,7 +902,7 @@ func TestNativeLeafRequiresAndUsesExplicitLaunchModel(t *testing.T) {
 	requests := make(chan provider.Request, 1)
 	r, err := New(config.Config{
 		Home: t.TempDir(), SeatModel: "seat", SeatEffort: "high",
-		SubagentModel: "level-one", LeafModel: "level-two", SubagentEffort: "high",
+		SubagentModel: "level-one", LeafModel: "level-two", SubagentEffort: "high", Roster: testRoster(),
 	}, Options{Provider: func(model string) (provider.Provider, error) {
 		if model == "explicit-flex" {
 			return requestCaptureProvider{requests: requests}, nil
@@ -890,22 +913,34 @@ func TestNativeLeafRequiresAndUsesExplicitLaunchModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	levelOne, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "level one"})
+	levelOne, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "level one", Role: "manager"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.launchSubagentSpec(levelOne.ID, LaunchSpec{Title: "missing model"}); err == nil || !strings.Contains(err.Error(), "non-empty explicit model") || !strings.Contains(err.Error(), "defaults are not used") {
+	if _, err := r.launchSubagentSpec(levelOne.ID, LaunchSpec{Title: "missing model", Role: "flex"}); err == nil || !strings.Contains(err.Error(), "non-empty explicit model") || !strings.Contains(err.Error(), "defaults are not used") {
 		t.Fatalf("native leaf launch error = %v, want explicit-model refusal", err)
 	}
-	levelTwo, err := r.launchSubagentSpec(levelOne.ID, LaunchSpec{Title: "level two", Model: "explicit-flex", Brief: "capture the request"})
+	levelTwo, err := r.launchSubagentSpec(levelOne.ID, LaunchSpec{Title: "level two", Role: "flex", Model: "explicit-flex", Effort: "xhigh", Brief: "capture the request"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := levelOne.Snapshot().Model; got != "level-one" {
-		t.Fatalf("level-one model = %q, want level-one", got)
+	if got := levelOne.Snapshot().Model; got != "test-manager" {
+		t.Fatalf("level-one model = %q, want roster-pinned test-manager", got)
 	}
 	if got := levelTwo.Snapshot().Model; got != "explicit-flex" {
 		t.Fatalf("level-two model = %q, want explicit-flex", got)
+	}
+	if got := levelTwo.Snapshot().Effort; got != "xhigh" {
+		t.Fatalf("level-two effort = %q, want per-launch xhigh", got)
+	}
+	var recorded bool
+	for _, event := range r.PollEvents(seam.EventQuery{}).Events {
+		if event.AgentID == levelTwo.ID && event.Kind == "status" && event.Text == "subagent launched" {
+			recorded = event.Metadata["role"] == "flex" && event.Metadata["model"] == "explicit-flex" && event.Metadata["effort"] == "xhigh"
+		}
+	}
+	if !recorded {
+		t.Fatal("launch event did not record role, model, and effort")
 	}
 	select {
 	case request := <-requests:
@@ -918,7 +953,7 @@ func TestNativeLeafRequiresAndUsesExplicitLaunchModel(t *testing.T) {
 }
 
 func TestCodexLeafStartFailureDoesNotLeaveOrphanAgent(t *testing.T) {
-	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "seat"}, Options{
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "seat", Roster: testRoster()}, Options{
 		Provider:     func(string) (provider.Provider, error) { return fakeProvider{}, nil },
 		CodexCommand: filepath.Join(t.TempDir(), "missing-codex"),
 	})
@@ -927,7 +962,7 @@ func TestCodexLeafStartFailureDoesNotLeaveOrphanAgent(t *testing.T) {
 	}
 	defer r.Close()
 	manager := launchTestManager(t, r)
-	if _, err := r.launchSubagentSpec(manager.ID, LaunchSpec{Title: "broken codex", Harness: "codex", Model: "gpt-test"}); err == nil {
+	if _, err := r.launchSubagentSpec(manager.ID, LaunchSpec{Title: "broken codex", Role: "luna", Harness: "codex", Model: "gpt-5.6-luna"}); err == nil {
 		t.Fatal("missing Codex executable unexpectedly launched")
 	}
 	agents := r.Agents()
@@ -939,7 +974,7 @@ func TestCodexLeafStartFailureDoesNotLeaveOrphanAgent(t *testing.T) {
 func TestSeatRejectsDirectExternalLeafLaunches(t *testing.T) {
 	r, err := New(config.Config{
 		Home: t.TempDir(), SeatModel: "native-seat", SubagentModel: "native-child", LeafModel: "native-leaf",
-		ApprovedModels: []string{"native-seat", "native-child", "native-leaf"},
+		ApprovedModels: []string{"native-seat", "native-child", "native-leaf"}, Roster: testRoster(),
 	}, Options{
 		Provider:     func(string) (provider.Provider, error) { return fakeProvider{}, nil },
 		CodexCommand: filepath.Join(t.TempDir(), "missing-codex"),
@@ -949,17 +984,18 @@ func TestSeatRejectsDirectExternalLeafLaunches(t *testing.T) {
 	}
 	defer r.Close()
 	for _, test := range []struct {
+		role    string
 		harness string
 		model   string
 	}{
-		{harness: "codex", model: "gpt-5.6-sol"},
-		{harness: "claude_code", model: "claude-opus-5"},
+		{role: "sol", harness: "codex", model: "gpt-5.6-sol"},
+		{role: "opus", harness: "claude_code", model: "claude-opus-5"},
 	} {
-		input, err := json.Marshal(map[string]string{"title": "direct external", "harness": test.harness, "model": test.model, "brief": "work"})
+		input, err := json.Marshal(map[string]string{"title": "direct external", "role": test.role, "harness": test.harness, "model": test.model, "brief": "work"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, launchErr := r.ExecuteTool(r.seat().ID, "launch_subagent", string(input)); launchErr == nil || !strings.Contains(launchErr.Error(), "depth-0 Seat may launch only a native depth-1 Manager") || !strings.Contains(launchErr.Error(), "depth-1 Manager") {
+		if _, launchErr := r.ExecuteTool(r.seat().ID, "launch_subagent", string(input)); launchErr == nil || !strings.Contains(launchErr.Error(), "cannot be launched at depth 1") {
 			t.Fatalf("direct %s launch error = %v, want Seat-to-Manager refusal", test.harness, launchErr)
 		}
 	}
@@ -972,18 +1008,18 @@ func TestManagerLeafLaunchRequiresExplicitModelForEveryHarness(t *testing.T) {
 	r := testRuntime(t)
 	manager := launchTestManager(t, r)
 	for _, test := range []struct {
+		role    string
 		harness string
-		name    string
 	}{
-		{harness: "native", name: "native/Flex"},
-		{harness: "codex", name: "Codex"},
-		{harness: "claude_code", name: "Claude Code"},
+		{role: "flex", harness: "native"},
+		{role: "luna", harness: "codex"},
+		{role: "opus", harness: "claude_code"},
 	} {
-		input, err := json.Marshal(map[string]string{"title": "missing model", "harness": test.harness, "brief": "work"})
+		input, err := json.Marshal(map[string]string{"title": "missing model", "role": test.role, "harness": test.harness, "brief": "work"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, launchErr := r.ExecuteTool(manager.ID, "launch_subagent", string(input)); launchErr == nil || !strings.Contains(launchErr.Error(), "non-empty explicit model") || !strings.Contains(launchErr.Error(), test.name) || !strings.Contains(launchErr.Error(), "defaults are not used") {
+		if _, launchErr := r.ExecuteTool(manager.ID, "launch_subagent", string(input)); launchErr == nil || !strings.Contains(launchErr.Error(), "non-empty explicit model") || !strings.Contains(launchErr.Error(), test.role) || !strings.Contains(launchErr.Error(), "defaults are not used") {
 			t.Fatalf("%s leaf launch error = %v, want explicit-model refusal", test.harness, launchErr)
 		}
 	}
@@ -992,10 +1028,68 @@ func TestManagerLeafLaunchRequiresExplicitModelForEveryHarness(t *testing.T) {
 	}
 }
 
+func TestRosterRoleLaunchRejections(t *testing.T) {
+	r := testRuntime(t)
+	seat := r.seat()
+	for _, test := range []struct {
+		name string
+		spec LaunchSpec
+		want string
+	}{
+		{name: "missing role", spec: LaunchSpec{Title: "missing"}, want: "launch_subagent.role is required"},
+		{name: "unknown role", spec: LaunchSpec{Title: "unknown", Role: "invented"}, want: "unknown roster role"},
+		{name: "secretary outside tree", spec: LaunchSpec{Title: "secretary", Role: "secretary"}, want: "cannot be launched at depth 1"},
+		{name: "intern outside tree", spec: LaunchSpec{Title: "intern", Role: "intern"}, want: "cannot be launched at depth 1"},
+		{name: "seat skips manager", spec: LaunchSpec{Title: "luna", Role: "luna", Model: "gpt-5.6-luna"}, want: "cannot be launched at depth 1"},
+		{name: "manager wrong model", spec: LaunchSpec{Title: "manager", Role: "manager", Model: "other"}, want: "requires model"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := r.launchSubagentSpec(seat.ID, test.spec); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("launch error = %v, want %q", err, test.want)
+			}
+		})
+	}
+
+	manager := launchTestManager(t, r)
+	for _, test := range []struct {
+		name string
+		spec LaunchSpec
+		want string
+	}{
+		{name: "wrong harness", spec: LaunchSpec{Title: "luna", Role: "luna", Harness: "native", Model: "gpt-5.6-luna"}, want: "requires harness"},
+		{name: "wrong pinned model", spec: LaunchSpec{Title: "luna", Role: "luna", Model: "gpt-5.6-sol"}, want: "requires model"},
+		{name: "unapproved flex model", spec: LaunchSpec{Title: "flex", Role: "flex", Model: "vendor/unapproved"}, want: "not in its approved set"},
+		{name: "manager at leaf depth", spec: LaunchSpec{Title: "manager", Role: "manager", Model: "test-manager"}, want: "cannot be launched at depth 2"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := r.launchSubagentSpec(manager.ID, test.spec); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("launch error = %v, want %q", err, test.want)
+			}
+		})
+	}
+	if got := len(r.Agents()); got != 2 {
+		t.Fatalf("rejected role launches left %d agents, want Seat and Manager", got)
+	}
+}
+
+func TestLaunchRefusesUnavailableRoster(t *testing.T) {
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test"}, Options{
+		Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	_, err = r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "manager", Role: "manager"})
+	if err == nil || !strings.Contains(err.Error(), "child launches refuse") {
+		t.Fatalf("missing-roster launch error = %v", err)
+	}
+}
+
 func TestModelGuidanceDescribesExternalLeafModelSelection(t *testing.T) {
 	r := testRuntime(t)
 	guidance := r.ModelGuidance()
-	for _, want := range []string{"depth-0 Seat may launch only a native depth-1 Manager", "only a native depth-1 Manager may launch a depth-2 leaf", "native for Flex", "Every depth-2 launch must pass a non-empty model explicitly", "neither the subagent default nor the leaf default", "headless Codex app-server", "exact ChatGPT model slugs", "independent of the native approval list", "host's claude.ai login", "exact Claude model slugs"} {
+	for _, want := range []string{"Every launch must name its roster role", "depth-0 Seat may launch only the roster's depth-1 Manager", "only a native depth-1 Manager may launch the roster's depth-2 roles", "Every depth-2 launch must pass a non-empty model explicitly", "configured subagent and leaf defaults are never substituted", "luna=depth-2/codex/gpt-5.6-luna", "opus=depth-2/claude_code/claude-opus-5", "flex=depth-2/native/one of"} {
 		if !strings.Contains(guidance, want) {
 			t.Fatalf("model guidance missing %q: %s", want, guidance)
 		}
@@ -1017,6 +1111,14 @@ func TestLaunchSubagentToolAdvertisesLeafHarnessModelFields(t *testing.T) {
 	if !ok {
 		t.Fatalf("launch_subagent properties = %#v", launch.Parameters["properties"])
 	}
+	role, ok := properties["role"].(map[string]any)
+	if !ok || !strings.Contains(role["description"].(string), "Required on every launch") {
+		t.Fatalf("role schema = %#v", properties["role"])
+	}
+	required, ok := launch.Parameters["required"].([]string)
+	if !ok || !containsExact(required, "role") {
+		t.Fatalf("launch required fields = %#v", launch.Parameters["required"])
+	}
 	harness, ok := properties["harness"].(map[string]any)
 	if !ok {
 		t.Fatalf("harness schema = %#v", properties["harness"])
@@ -1027,18 +1129,42 @@ func TestLaunchSubagentToolAdvertisesLeafHarnessModelFields(t *testing.T) {
 	}
 	model, ok := properties["model"].(map[string]any)
 	description, _ := model["description"].(string)
-	if !ok || !strings.Contains(description, "Required and non-empty for every depth-2 leaf") || !strings.Contains(description, "native/Flex") || !strings.Contains(description, "May be omitted only for a native depth-1 Manager") {
+	if !ok || !strings.Contains(description, "Required and non-empty for every depth-2 role") || !strings.Contains(description, "at-dispatch role's approved set") || !strings.Contains(description, "pinned manager role") {
 		t.Fatalf("model schema = %#v", properties["model"])
 	}
-	for _, want := range []string{"depth-0 Seat may launch only a native depth-1 Manager", "Only a native depth-1 Manager may launch a depth-2 leaf", "Every depth-2 launch must pass a non-empty model explicitly", "depth-2 leaf cannot launch anything"} {
+	for _, want := range []string{"Every launch must name a frozen roster role", "depth-0 Seat may launch only the manager role", "Only a native Manager at depth 1 may launch a depth-2 role", "Every depth-2 launch must pass a non-empty model explicitly", "depth-2 leaf cannot launch anything"} {
 		if !strings.Contains(launch.Description, want) {
 			t.Fatalf("launch_subagent description missing %q: %s", want, launch.Description)
 		}
 	}
+	r := testRuntime(t)
+	seatRole := launchRoleEnum(t, r.toolDefinitions(r.seat().ID))
+	if len(seatRole) != 1 || seatRole[0] != "manager" {
+		t.Fatalf("Seat launch role enum = %#v", seatRole)
+	}
+	manager := launchTestManager(t, r)
+	managerRoles := launchRoleEnum(t, r.toolDefinitions(manager.ID))
+	if strings.Join(managerRoles, ",") != "flex,luna,opus,sol" {
+		t.Fatalf("Manager launch role enum = %#v", managerRoles)
+	}
+}
+
+func launchRoleEnum(t *testing.T, definitions []provider.Tool) []string {
+	t.Helper()
+	for _, tool := range definitions {
+		if tool.Name != "launch_subagent" {
+			continue
+		}
+		properties := tool.Parameters["properties"].(map[string]any)
+		role := properties["role"].(map[string]any)
+		return role["enum"].([]string)
+	}
+	t.Fatal("launch_subagent tool is missing")
+	return nil
 }
 
 func TestChildResultReachesParent(t *testing.T) {
-	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high", SubagentModel: "test-child", SubagentEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return childResultProvider{}, nil }})
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high", SubagentModel: "test-child", SubagentEffort: "high", Roster: testRoster()}, Options{Provider: func(string) (provider.Provider, error) { return childResultProvider{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
