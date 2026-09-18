@@ -453,16 +453,19 @@ type limitedBuffer struct {
 
 const limitedBufferMax = 4 * 1024 * 1024
 
+// Write keeps at most limitedBufferMax bytes and discards the rest. It always
+// reports the whole of p as written: a short count would make exec's copy
+// goroutine stop with io.ErrShortWrite and leave the child blocked on a full
+// pipe, so the overflow is consumed and dropped rather than refused.
 func (b *limitedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.buf.Len() < limitedBufferMax {
-		remaining := limitedBufferMax - b.buf.Len()
-		if len(p) > remaining {
-			p = p[:remaining]
-		}
+	n := len(p)
+	if remaining := limitedBufferMax - b.buf.Len(); remaining < n {
+		p = p[:max(remaining, 0)]
 	}
-	return b.buf.Write(p)
+	_, _ = b.buf.Write(p)
+	return n, nil
 }
 
 func (b *limitedBuffer) Len() int {

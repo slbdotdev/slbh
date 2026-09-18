@@ -392,3 +392,50 @@ func TestStartAfterCloseIsRefusedAndArmsNoWarning(t *testing.T) {
 		t.Fatal("Close did not return after a refused Start")
 	}
 }
+
+// TestLimitedBufferCapsAcrossWrites is the regression test for the cap that
+// held only for the write that crossed it: once the buffer was full the guard
+// was skipped and every later write was kept whole, so a 5,000,000-byte job
+// captured all of it. It also pins the reported count, which must be the whole
+// write or exec's copy goroutine stops with io.ErrShortWrite.
+func TestLimitedBufferCapsAcrossWrites(t *testing.T) {
+	var b limitedBuffer
+	chunk := make([]byte, 1024*1024+7)
+	for i := 0; i < 6; i++ {
+		n, err := b.Write(chunk)
+		if err != nil || n != len(chunk) {
+			t.Fatalf("write %d: n=%d err=%v, want n=%d", i, n, err, len(chunk))
+		}
+	}
+	if b.Len() != limitedBufferMax {
+		t.Fatalf("len=%d, want %d", b.Len(), limitedBufferMax)
+	}
+}
+
+func TestJobOutputIsCappedAndTheJobCompletes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell pipeline")
+	}
+	m := NewManager(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	job, err := m.Start(ctx, Spec{Author: "agent-test", Script: "head -c 5000000 /dev/zero; echo done >&2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-job.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("job did not finish")
+	}
+	stdout, stderr := job.Output()
+	if len(stdout) != limitedBufferMax {
+		t.Fatalf("stdout captured %d bytes, want %d", len(stdout), limitedBufferMax)
+	}
+	if !strings.Contains(stderr, "done") {
+		t.Fatalf("stderr=%q", stderr)
+	}
+	if snap := job.Snapshot(); snap.Status != Complete || snap.StdoutBytes != limitedBufferMax {
+		t.Fatalf("snapshot=%+v", snap)
+	}
+}
