@@ -171,9 +171,16 @@ the queue method, addressing the session by a stable name. This is the same
 connection kind slbh already makes for its Codex leaves and adds no new
 dependency class.
 
-Whether queueing to an idle session starts a turn or merely parks the
-message is unverified. If it only parks, there is no wake and the owner's
-attention is the trigger; the org design changes, not this one.
+The wake is measured, not assumed. On 2026-09-18 a queued message started a
+turn in an idle session **43 ms** after the queue command returned. Queued
+mid-turn it did not interrupt: it waited for the active response and was
+taken up as soon as that turn completed.
+
+A session is addressed by UUID or by an exact name, and a name is assigned
+with `/rename` **after the session's first turn** — there is no launch-time
+flag for it. So the Secretary's session is named once at startup, and the
+Seat addresses that name rather than hunting for the newest session, which
+is not an identity test.
 
 ## 8. The Secretary's interface
 
@@ -255,4 +262,3 @@ Measured at `ce9fe49` on `main`. `internal/harness` is 7,713 lines;
 
 ## 12. Open
 
-1. Whether a queued message starts a turn in an idle Codex session.
