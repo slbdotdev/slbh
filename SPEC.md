@@ -43,9 +43,9 @@ That concurrency has been tested and holds.
 ## 3. The seam
 
 slbh has one runtime and several front ends. That is already its shape;
-v0.3 makes the boundary between them explicit, because three new consumers
-— the Intern's watcher, the MCP server and the org inbox — are all front
-ends on the same runtime.
+v0.3 makes the boundary between them explicit, because new consumers — the
+Intern's watcher, and the org inbox's write side — are front ends on the
+same runtime.
 
 Three rules define the seam:
 
@@ -66,9 +66,9 @@ The seam stays **in-process**. No listener, no wire protocol, no daemon.
 The rules exist so that adding a transport later is a marshalling layer
 rather than a redesign — not because a transport is planned.
 
-The test of whether the seam is real: the TUI, headless, the Intern watcher
-and the MCP server can each be written against it while importing nothing
-else from `internal/harness`.
+The test of whether the seam is real: the TUI, headless and the Intern's
+watcher can each be written against it while importing nothing else from
+`internal/harness`.
 
 Codex's app-server is the model for the *decomposition* and not for the
 vocabulary. Its method names are not copied. slbh is a client of that
@@ -239,8 +239,7 @@ Measured at `ce9fe49` on `main`. `internal/harness` is 7,713 lines;
 
 - `AgentSnapshot` (`runtime.go:31`) carries the right fields — `Depth`,
   `Model`, `Effort`, `Status`, `Harness`, `ContextWindow`, `ContextUsed` —
-  and **no JSON tags**. It is the type the Intern and the MCP server both
-  want.
+  and **no JSON tags**. It is the type the Intern wants.
 - `Jobs() *job.Manager` (`runtime.go:159`) and `Seat() *Agent`
   (`runtime.go:296`) hand out live pointers into other subsystems. These
   are holes through the seam and cannot cross a transport.
@@ -249,7 +248,8 @@ Measured at `ce9fe49` on `main`. `internal/harness` is 7,713 lines;
 - One leaf model for the runtime, not per launch: `ConfigureModelSlots`
   (`runtime.go:231`) sets `SeatModel`, `SubagentModel`, `LeafModel`.
 - No Claude Code leaf. Nothing under `internal/` mentions it.
-- No MCP, in either direction.
+- No `slbh` subcommand path, and no inbox or queue code separable from
+  `internal/harness`.
 - No durable org inbox.
 - No Intern, and no read-only tool set to give one.
 
