@@ -52,23 +52,25 @@ type Runtime struct {
 	// pending holds a session opened by Clear while the agent was still
 	// mid-turn. It becomes current at that turn's end, so the turn that issued
 	// a request keeps its own transcript through its last event.
-	pending          map[string]*agentSession
-	sessions         []*agentSession
-	redactor         *secretRedactor
-	eventMu          sync.Mutex
-	eventLog         []seam.Event
-	eventNotify      chan struct{}
-	eventsClosed     bool
-	eventSequence    seam.EventCursor
-	provider         func(model string) (provider.Provider, error)
-	codexCommand     string
-	claudeCommand    string
-	catalog          []provider.Catalog
-	closeOnce        sync.Once
-	orgStore         *orgstore.Store
-	requestWatchStop chan struct{}
-	requestWatchDone chan struct{}
-	requestPoll      time.Duration
+	pending            map[string]*agentSession
+	sessions           []*agentSession
+	redactor           *secretRedactor
+	eventMu            sync.Mutex
+	eventLog           []seam.Event
+	eventNotify        chan struct{}
+	eventsClosed       bool
+	eventSequence      seam.EventCursor
+	provider           func(model string) (provider.Provider, error)
+	codexCommand       string
+	claudeCommand      string
+	catalog            []provider.Catalog
+	closeOnce          sync.Once
+	orgStore           *orgstore.Store
+	requestWatchStop   chan struct{}
+	requestWatchDone   chan struct{}
+	requestPoll        time.Duration
+	subagentWarningsMu sync.Mutex
+	subagentWarnings   map[string]*time.Timer
 }
 
 type Options struct {
@@ -103,7 +105,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	if poll <= 0 {
 		poll = 2 * time.Second
 	}
-	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), eventNotify: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand, orgStore: store, requestWatchStop: make(chan struct{}), requestWatchDone: make(chan struct{}), requestPoll: poll}
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), eventNotify: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand, orgStore: store, requestWatchStop: make(chan struct{}), requestWatchDone: make(chan struct{}), requestPoll: poll, subagentWarnings: make(map[string]*time.Timer)}
 	if r.provider == nil {
 		// The current config is read per call rather than captured, so a policy
 		// authored from /models on an unmanaged host takes effect on the next
@@ -408,6 +410,13 @@ func (r *Runtime) launchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	if spec.Title == "" {
 		return nil, fmt.Errorf("subagent title is required")
 	}
+	if spec.WarnAfterSeconds < 0 {
+		return nil, fmt.Errorf("launch_subagent.warn_after_seconds must not be negative")
+	}
+	warnAfterSeconds := spec.WarnAfterSeconds
+	if warnAfterSeconds == 0 {
+		warnAfterSeconds = defaultSubagentWarnAfterSeconds
+	}
 	r.mu.RLock()
 	cfg := r.config
 	r.mu.RUnlock()
@@ -497,6 +506,7 @@ func (r *Runtime) launchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 	}
 	r.emit(seam.Event{AgentID: agent.ID, AgentTitle: spec.Title, Kind: "status", Text: "subagent launched", Metadata: map[string]any{"parent": parentID, "role": agent.Role, "harness": agent.Harness, "model": agent.Model, "effort": agent.Effort, "working_dir": agent.WorkDir}})
 	if spec.Brief != "" {
+		r.armSubagentWarning(agent.ID, parentID, time.Duration(warnAfterSeconds)*time.Second)
 		if err := agent.Send(spec.Brief); err != nil {
 			agent.stop()
 			r.discardAgent(agent.ID)
@@ -527,6 +537,7 @@ func containsExact(values []string, wanted string) bool {
 }
 
 func (r *Runtime) discardAgent(agentID string) {
+	r.cancelSubagentWarning(agentID)
 	r.mu.Lock()
 	delete(r.agents, agentID)
 	session := r.current[agentID]
@@ -541,6 +552,56 @@ func (r *Runtime) discardAgent(agentID string) {
 	if session != nil {
 		_ = session.log.Close()
 	}
+}
+
+const defaultSubagentWarnAfterSeconds = 5
+
+func (r *Runtime) armSubagentWarning(childID, parentID string, after time.Duration) {
+	r.subagentWarningsMu.Lock()
+	if previous := r.subagentWarnings[childID]; previous != nil {
+		previous.Stop()
+	}
+	var timer *time.Timer
+	timer = time.AfterFunc(after, func() {
+		r.subagentWarningsMu.Lock()
+		if current := r.subagentWarnings[childID]; current != timer {
+			r.subagentWarningsMu.Unlock()
+			return
+		}
+		delete(r.subagentWarnings, childID)
+		r.subagentWarningsMu.Unlock()
+		if r.ctx.Err() != nil {
+			return
+		}
+		child, childOK := r.lookupAgent(childID)
+		parent, parentOK := r.lookupAgent(parentID)
+		if !childOK || !parentOK {
+			return
+		}
+		if err := parent.receiveSubagentWarning(child, after); err != nil {
+			r.emit(seam.Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"parent": parent.ID, "warning": "subagent"}})
+		}
+	})
+	r.subagentWarnings[childID] = timer
+	r.subagentWarningsMu.Unlock()
+}
+
+func (r *Runtime) cancelSubagentWarning(childID string) {
+	r.subagentWarningsMu.Lock()
+	if timer := r.subagentWarnings[childID]; timer != nil {
+		timer.Stop()
+		delete(r.subagentWarnings, childID)
+	}
+	r.subagentWarningsMu.Unlock()
+}
+
+func (r *Runtime) cancelAllSubagentWarnings() {
+	r.subagentWarningsMu.Lock()
+	for childID, timer := range r.subagentWarnings {
+		timer.Stop()
+		delete(r.subagentWarnings, childID)
+	}
+	r.subagentWarningsMu.Unlock()
 }
 
 func (r *Runtime) Agents() []seam.AgentSnapshot {
@@ -720,6 +781,9 @@ func (r *Runtime) queueEvent(event seam.Event, closeEvents bool) {
 	// stored copy and the rendered one identically.
 	event.Text = redactor.redact(event.Text)
 	event.Metadata = redactor.redactMetadata(event.Metadata)
+	if event.Kind == "turn_done" || event.Kind == "error" {
+		r.cancelSubagentWarning(event.AgentID)
+	}
 	if session != nil {
 		_ = session.log.Append(logx.Entry{Time: event.Time, Agent: event.AgentID, Session: session.id, Kind: event.Kind, Text: event.Text, Metadata: event.Metadata})
 	}
@@ -965,6 +1029,7 @@ func (r *Runtime) Close() error {
 		<-r.requestWatchDone
 		r.queueEvent(seam.Event{Kind: "runtime", Text: "runtime stopping"}, true)
 		r.cancel()
+		r.cancelAllSubagentWarnings()
 		r.mu.RLock()
 		agents := make([]*Agent, 0, len(r.agents))
 		for _, a := range r.agents {

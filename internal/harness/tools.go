@@ -45,7 +45,7 @@ func ToolDefinitions() []provider.Tool {
 			"model":              map[string]any{"type": "string", "description": "Model ID. Required and non-empty for every depth-2 role. It must equal a pinned role model or belong to an at-dispatch role's approved set. May be omitted only when launching the pinned manager role."},
 			"effort":             map[string]any{"type": "string"},
 			"brief":              map[string]any{"type": "string"},
-			"warn_after_seconds": map[string]any{"type": "integer"},
+			"warn_after_seconds": map[string]any{"type": "integer", "description": "Seconds before the parent receives one warning that this child is still running; defaults to 5."},
 			"working_dir":        map[string]any{"type": "string"},
 		}, "required": []string{"title", "role", "brief"}}},
 		{Name: "msg_subagent", Description: "Send a mandatory mid-turn steer to any agent in this runtime, including your parent or siblings. FIFO delivery at the next API/tool call boundary; wakes idle recipients. Never waits for turn completion or cancels in-flight work.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string"}, "message": map[string]any{"type": "string"}}, "required": []string{"agent_id", "message"}}},

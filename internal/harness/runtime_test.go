@@ -30,6 +30,17 @@ func (fakeProvider) Stream(ctx context.Context, _ provider.Request, sink provide
 	return sink(provider.Event{Kind: provider.EventDone})
 }
 
+type blockingProvider struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (p *blockingProvider) Stream(ctx context.Context, _ provider.Request, _ provider.StreamSink) error {
+	p.once.Do(func() { close(p.started) })
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 type toolProvider struct{}
 
 func (toolProvider) Stream(ctx context.Context, request provider.Request, sink provider.StreamSink) error {
@@ -1042,6 +1053,7 @@ func TestRosterRoleLaunchRejections(t *testing.T) {
 		{name: "intern outside tree", spec: LaunchSpec{Title: "intern", Role: "intern"}, want: "cannot be launched at depth 1"},
 		{name: "seat skips manager", spec: LaunchSpec{Title: "luna", Role: "luna", Model: "gpt-5.6-luna"}, want: "cannot be launched at depth 1"},
 		{name: "manager wrong model", spec: LaunchSpec{Title: "manager", Role: "manager", Model: "other"}, want: "requires model"},
+		{name: "negative warning", spec: LaunchSpec{Title: "manager", Role: "manager", WarnAfterSeconds: -1}, want: "warn_after_seconds must not be negative"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := r.launchSubagentSpec(seat.ID, test.spec); err == nil || !strings.Contains(err.Error(), test.want) {
@@ -1070,6 +1082,84 @@ func TestRosterRoleLaunchRejections(t *testing.T) {
 	if got := len(r.Agents()); got != 2 {
 		t.Fatalf("rejected role launches left %d agents, want Seat and Manager", got)
 	}
+}
+
+func TestSubagentWarningReachesParentOnce(t *testing.T) {
+	blocker := &blockingProvider{started: make(chan struct{})}
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high", Roster: testRoster()}, Options{
+		Provider: func(model string) (provider.Provider, error) {
+			if model == "test-manager" {
+				return blocker, nil
+			}
+			return fakeProvider{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	parent := r.seat()
+	child, err := r.launchSubagentSpec(parent.ID, LaunchSpec{Title: "slow-manager", Role: "manager", Brief: "work", WarnAfterSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-blocker.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("child provider did not start")
+	}
+	cursor := r.PollEvents(seam.EventQuery{}).Cursor
+	deadline := time.Now().Add(3 * time.Second)
+	warnings := 0
+	for time.Now().Before(deadline) && warnings == 0 {
+		batch := r.PollEvents(seam.EventQuery{After: cursor, WaitMilliseconds: 100})
+		cursor = batch.Cursor
+		for _, event := range batch.Events {
+			if event.AgentID == parent.ID && event.Kind == "subagent_warning" {
+				warnings++
+				if !strings.Contains(event.Text, child.ID) || !strings.Contains(event.Text, "end_subagent") {
+					t.Fatalf("warning = %q, want child id and end_subagent guidance", event.Text)
+				}
+			}
+		}
+	}
+	if warnings != 1 {
+		t.Fatalf("subagent warnings = %d, want one", warnings)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	batch := r.PollEvents(seam.EventQuery{After: cursor})
+	for _, event := range batch.Events {
+		if event.AgentID == parent.ID && event.Kind == "subagent_warning" {
+			t.Fatal("subagent warning repeated")
+		}
+	}
+}
+
+func TestSubagentWarningCancelsAfterChildResult(t *testing.T) {
+	r := testRuntime(t)
+	parent := r.seat()
+	child, err := r.launchSubagentSpec(parent.ID, LaunchSpec{Title: "fast-manager", Role: "manager", Brief: "work", WarnAfterSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor := r.PollEvents(seam.EventQuery{}).Cursor
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		batch := r.PollEvents(seam.EventQuery{After: cursor, WaitMilliseconds: 100})
+		cursor = batch.Cursor
+		for _, event := range batch.Events {
+			if event.AgentID == child.ID && event.Kind == "turn_done" {
+				time.Sleep(1200 * time.Millisecond)
+				for _, later := range r.PollEvents(seam.EventQuery{After: cursor}).Events {
+					if later.Kind == "subagent_warning" {
+						t.Fatal("warning fired after child result")
+					}
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("child did not finish before warning interval")
 }
 
 func TestLaunchRefusesUnavailableRoster(t *testing.T) {

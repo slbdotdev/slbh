@@ -239,6 +239,7 @@ func (a *Agent) ClearHistory() {
 
 func (a *Agent) stop() {
 	a.stopOnce.Do(func() {
+		a.runtime.cancelSubagentWarning(a.ID)
 		if codex := a.codexBackend(); codex != nil {
 			codex.stop()
 			return
@@ -547,7 +548,19 @@ func usageNestedInt(usage map[string]any, parent, key string) (int, bool) {
 }
 
 func (a *Agent) receiveChildResult(child *Agent, text string) error {
+	a.runtime.cancelSubagentWarning(child.ID)
 	return a.deliver(agentMessage{prompt: fmt.Sprintf("[result from %s] %s", child.Title, text), kind: "child_result", text: text, metadata: map[string]any{"child": child.ID}, senderTitle: child.Title})
+}
+
+func (a *Agent) receiveSubagentWarning(child *Agent, after time.Duration) error {
+	text := fmt.Sprintf("%s %s is still running after %s. This is the only warning for this child: inspect it with list_subagents, message it with msg_subagent, end it with end_subagent, or continue other work and wait for its result.", child.Title, child.ID, after)
+	return a.deliver(agentMessage{
+		prompt:      "[warning from subagent " + child.Title + "]\n" + text,
+		kind:        "subagent_warning",
+		text:        text,
+		metadata:    map[string]any{"child": child.ID, "warn_after": after.String()},
+		senderTitle: child.Title,
+	})
 }
 
 func (a *Agent) receiveOrgRequest(request orgstore.Request) error {
