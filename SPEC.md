@@ -273,7 +273,7 @@ Measured at `c1fe614` on `v0.3-draft`. The delta this section listed on
 | Secretary wake | `be09a05` | `internal/secretarywake` over `codex queue --thread <name>`; live wake of a real TUI passed |
 | wiring | `75cd5bb` | Seat-only `report_to_secretary`, `org_requests`, `update_request`; request watcher; Intern effort `medium`, output bound, token-budgeted prompt; end-to-end test |
 | the seat runs glm | `c1fe614` | the Seat's compiled default is `zai/glm-5.3-flash` |
-| skill loading | (uncommitted) | layer skill metadata loads from `$SLBH_HOME`; native agents and the Intern receive names, descriptions and absolute `SKILL.md` paths without bodies |
+| skill loading | `cc030fc` | layer skill metadata loads from `$SLBH_HOME`; native agents and the Intern receive names, descriptions and absolute `SKILL.md` paths without bodies |
 
 `internal/tui`, `headless`, `seam`, `orgstore`, `orgcli`, `readtools`,
 `intern` and `secretarywake` import nothing from `internal/harness`; a
