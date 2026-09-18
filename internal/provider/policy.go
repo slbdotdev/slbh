@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"sort"
@@ -18,7 +19,14 @@ const PolicyVersion = 1
 const (
 	WireOpenAIChat        = "openai-chat"
 	WireAnthropicMessages = "anthropic-messages"
+	// WireOllamaChat is Ollama's native /api/chat, which the local route
+	// speaks because the /v1 shim silently discards the sampler options the
+	// route's guard is made of (ollama.go).
+	WireOllamaChat = "ollama-chat"
 )
+
+// knownWires lists the schema's wires in a stable order, for error messages.
+var knownWires = []string{WireOpenAIChat, WireAnthropicMessages, WireOllamaChat}
 
 // effortFieldForWire fixes the one effort spelling each wire may use.
 //
@@ -35,6 +43,11 @@ const (
 var effortFieldForWire = map[string]string{
 	WireOpenAIChat:        "reasoning_effort",
 	WireAnthropicMessages: "output_config.effort",
+	// On /api/chat the level is the top-level `think` string. Measured
+	// 2026-09-18 on Ollama 0.34.1: "low", "medium" and "high" render the same
+	// prompt as /v1's reasoning_effort at that level, and an unknown string is
+	// an HTTP 400 rather than a silent default.
+	WireOllamaChat: "think",
 }
 
 // wireSupported names the protocols this build can actually speak.
@@ -55,6 +68,7 @@ var effortFieldForWire = map[string]string{
 var wireSupported = map[string]bool{
 	WireOpenAIChat:        true,
 	WireAnthropicMessages: true,
+	WireOllamaChat:        true,
 }
 
 // WireSupported reports whether this build can speak a wire.
@@ -158,6 +172,13 @@ type RoutePolicy struct {
 	MaxOutputTokens int              `json:"maxOutputTokens,omitempty"`
 	Effort          EffortDescriptor `json:"effort"`
 	Provider        *ProviderPosture `json:"provider,omitempty"`
+	// Options is the sampler block an ollama-chat route sends in `options`,
+	// verbatim. It is policy rather than code because it is a per-model fact
+	// that changes with the tag, and it is refused on every other wire: the
+	// OpenAI shim on the same server discards these fields under HTTP 200, so
+	// a guard written there would be written down and never applied. Keys are
+	// checked against the sampler set in validateOllamaOptions.
+	Options map[string]json.RawMessage `json:"options,omitempty"`
 }
 
 // Policy is the routing policy document, keyed by authoritative route key.
@@ -218,7 +239,7 @@ func (r RoutePolicy) validate(key string) error {
 	wanted, known := effortFieldForWire[r.Wire]
 	if !known {
 		return fmt.Errorf("route %q names wire %q, which is not a wire protocol slbh knows (%s)",
-			key, r.Wire, strings.Join([]string{WireOpenAIChat, WireAnthropicMessages}, ", "))
+			key, r.Wire, strings.Join(knownWires, ", "))
 	}
 	if r.ContextWindow < 0 {
 		return fmt.Errorf("route %q has a negative contextWindow", key)
@@ -242,6 +263,16 @@ func (r RoutePolicy) validate(key string) error {
 	}
 	if len(r.Effort.Levels) == 0 {
 		return fmt.Errorf("route %q has an empty effort level map, so no effort could ever be sent", key)
+	}
+	if len(r.Options) > 0 {
+		if r.Wire != WireOllamaChat {
+			return fmt.Errorf(
+				"route %q on wire %q carries a sampler options block, which only the %s wire sends; on this wire it would be read and never applied",
+				key, r.Wire, WireOllamaChat)
+		}
+		if err := validateOllamaOptions(key, r.Options); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -331,7 +362,17 @@ func DefaultLocalPolicy(models []string) Policy {
 		if native, isNative := nativeRouteFor(key); isNative {
 			switch native.flavor {
 			case LocalProviderName:
+				// The local route speaks Ollama's native /api/chat, the only path
+				// on that server that honours a sampler option. The window is
+				// pinned for the compiled-in tag alone, because it is sent as
+				// num_ctx and a wrong one reloads the shared model; another tag's
+				// window is the Modelfile's, and sending none leaves it there.
+				route.Wire = WireOllamaChat
+				route.Effort = EffortDescriptor{Field: effortFieldForWire[WireOllamaChat], Levels: identityEffortLevels()}
 				route.Endpoint = localEndpoint()
+				if key == LocalModelID {
+					route.ContextWindow = LocalContextWindow
+				}
 			default:
 				route.Endpoint = native.endpoint
 				route.CatalogEndpoint, _ = modelsEndpoint(native.endpoint)

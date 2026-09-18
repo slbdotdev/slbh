@@ -61,18 +61,26 @@
         }
       }
     },
-    "local/q27-IQ2_M-96k": {
-      "endpoint": "http://fractal.wyvern-temperature.ts.net:11434/v1/chat/completions",
-      "wire": "openai-chat",
+    "local/q27-UD-Q2_K_XL-64k": {
+      "endpoint": "http://fractal.wyvern-temperature.ts.net:11434/api/chat",
+      "wire": "ollama-chat",
+      "contextWindow": 65536,
+      "maxOutputTokens": 32768,
       "effort": {
-        "field": "reasoning_effort",
+        "field": "think",
         "levels": {
           "low": "low",
           "medium": "medium",
           "high": "high",
-          "xhigh": "xhigh",
-          "max": "max"
+          "xhigh": "high",
+          "max": "high"
         }
+      },
+      "options": {
+        "temperature": 1.0,
+        "top_k": 20,
+        "top_p": 0.95,
+        "presence_penalty": 1.5
       }
     }
   }

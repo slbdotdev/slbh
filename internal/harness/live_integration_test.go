@@ -230,7 +230,14 @@ func TestLiveTranscriptReplayAndCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstRequest.CacheKey == "" || firstRequest.CacheKey != secondRequest.CacheKey {
+	// Ollama's native wire has no cache-key field — its prompt cache is
+	// automatic prefix reuse — so the key cannot survive a transcript there,
+	// and the cached-token check below is what proves the cache on that route.
+	keyless := false
+	if wired, ok := inner.(interface{ Wire() string }); ok && wired.Wire() == provider.WireOllamaChat {
+		keyless = true
+	}
+	if !keyless && (firstRequest.CacheKey == "" || firstRequest.CacheKey != secondRequest.CacheKey) {
 		t.Fatalf("cache key changed across transcript reload: first=%q second=%q", firstRequest.CacheKey, secondRequest.CacheKey)
 	}
 	if firstRequest.System != secondRequest.System {

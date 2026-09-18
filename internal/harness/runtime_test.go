@@ -1327,3 +1327,70 @@ func readTranscript(path string) ([]logEntry, error) {
 }
 
 type logEntry struct{ Text string }
+
+// lengthProvider ends its generation at the output bound, as a runaway local
+// generation does when maxOutputTokens stops it.
+type lengthProvider struct{ reason string }
+
+func (p lengthProvider) Stream(_ context.Context, _ provider.Request, sink provider.StreamSink) error {
+	if err := sink(provider.Event{Kind: provider.EventText, Text: "partial"}); err != nil {
+		return err
+	}
+	return sink(provider.Event{Kind: provider.EventUsage, StopReason: p.reason, Usage: map[string]any{"completion_tokens": 32768}})
+}
+
+func TestOutputLimitStopIsAWarningInTheTranscript(t *testing.T) {
+	for _, tc := range []struct {
+		reason string
+		warn   bool
+	}{{"length", true}, {"max_tokens", true}, {"stop", false}} {
+		t.Run(tc.reason, func(t *testing.T) {
+			r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return lengthProvider{reason: tc.reason}, nil }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			seat := r.seat()
+			seat.Send("hello")
+			warned := false
+			deadline := time.After(5 * time.Second)
+		wait:
+			for {
+				select {
+				case event := <-testEvents(r):
+					if event.Kind == "warning" {
+						warned = true
+						if !strings.Contains(event.Text, "output limit") || !strings.Contains(event.Text, "32768") || event.Metadata["stop_reason"] != tc.reason {
+							t.Fatalf("warning = %#v", event)
+						}
+					}
+					if event.Kind == "turn_done" {
+						break wait
+					}
+				case <-deadline:
+					t.Fatal("agent turn did not finish")
+				}
+			}
+			if warned != tc.warn {
+				t.Fatalf("stop reason %q warned = %v, want %v", tc.reason, warned, tc.warn)
+			}
+			path, err := r.TranscriptPath(seat.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, err := logx.Read(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inTranscript := false
+			for _, entry := range entries {
+				if entry.Kind == "warning" {
+					inTranscript = true
+				}
+			}
+			if inTranscript != tc.warn {
+				t.Fatalf("stop reason %q transcript warning = %v, want %v", tc.reason, inTranscript, tc.warn)
+			}
+		})
+	}
+}

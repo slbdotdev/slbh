@@ -173,6 +173,20 @@ type Event struct {
 	Err        error
 }
 
+// IsOutputLimitStop reports whether a terminal reason means the generation hit
+// its output bound rather than ending. `length` is the coding wire's and
+// Ollama's spelling; `max_tokens` is the Anthropic wire's, which passes through
+// unmapped. A generation that ends this way was cut off, and a caller that
+// treated it as finished would commit a partial answer as a whole one.
+func IsOutputLimitStop(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "length", "max_tokens", "max_output_tokens", "model_length":
+		return true
+	default:
+		return false
+	}
+}
+
 type StreamSink func(Event) error
 
 type Provider interface {
@@ -481,7 +495,7 @@ const (
 	LocalModelID       = "local/q27-UD-Q2_K_XL-64k"
 	localWireModelID   = "q27-UD-Q2_K_XL-64k"
 	LocalContextWindow = 65536
-	localDefaultURL    = "http://fractal.wyvern-temperature.ts.net:11434/v1/chat/completions"
+	localDefaultURL    = "http://fractal.wyvern-temperature.ts.net:11434/api/chat"
 )
 
 func localEndpoint() string {
@@ -814,13 +828,14 @@ func (p *HTTPProvider) RequestPayload(req Request) ([]byte, error) {
 //
 // Detection is by a field only one shape has, not by guessing: the OpenAI body
 // always carries `stream_options` and the Anthropic body always carries
-// `max_tokens`, because both are set unconditionally by their own payload
-// builders. A transcript that carries neither is tried on the OpenAI wire
+// `max_tokens`, and the Ollama body always carries `options`, because each is
+// set unconditionally by its own payload builder. A transcript that carries neither is tried on the OpenAI wire
 // first, which is what every record written before phase 2 is.
 func RequestFromPayload(payload []byte) (Request, error) {
 	var shape struct {
 		StreamOptions *json.RawMessage `json:"stream_options"`
 		MaxTokens     *int             `json:"max_tokens"`
+		Options       *json.RawMessage `json:"options"`
 	}
 	if err := json.Unmarshal(payload, &shape); err != nil {
 		return Request{}, fmt.Errorf("decode request payload: %w", err)
@@ -830,6 +845,8 @@ func RequestFromPayload(payload []byte) (Request, error) {
 		return openAIChatWire{}.requestFromPayload(payload)
 	case shape.MaxTokens != nil:
 		return anthropicMessagesWire{}.requestFromPayload(payload)
+	case shape.Options != nil:
+		return ollamaChatWire{}.requestFromPayload(payload)
 	}
 	return openAIChatWire{}.requestFromPayload(payload)
 }

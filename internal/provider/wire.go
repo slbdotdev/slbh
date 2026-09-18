@@ -30,8 +30,9 @@ type wireStrategy interface {
 	// transcripts stay byte-replayable on every route rather than only on the
 	// wire that happened to be implemented first.
 	requestFromPayload(payload []byte) (Request, error)
-	// parseStream turns an SSE body into normalized Events. No SSE dialect
-	// escapes this package.
+	// parseStream turns a response body — SSE on two wires, NDJSON on
+	// ollama-chat — into normalized Events. No stream dialect escapes this
+	// package.
 	parseStream(body io.Reader, sink StreamSink) error
 	// classifyError turns a non-2xx response into an error carrying whatever
 	// the envelope held.
@@ -49,6 +50,8 @@ func wireFor(name string) (wireStrategy, bool) {
 		return openAIChatWire{}, true
 	case WireAnthropicMessages:
 		return anthropicMessagesWire{}, true
+	case WireOllamaChat:
+		return ollamaChatWire{}, true
 	}
 	return nil, false
 }
@@ -107,7 +110,9 @@ func (e *StatusError) Retryable() bool { return e.Status >= 500 }
 type retryable interface{ Retryable() bool }
 
 // openAIChatWire is the OpenAI-shaped chat-completions protocol: OpenRouter,
-// DeepSeek, the local Ollama server, and Z.ai's coding endpoint.
+// DeepSeek and Z.ai's coding endpoint. The local Ollama server left it for
+// ollama-chat on 2026-09-18, because Ollama's /v1 shim discards sampler
+// options.
 type openAIChatWire struct{}
 
 func (openAIChatWire) name() string { return WireOpenAIChat }

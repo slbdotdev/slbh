@@ -376,6 +376,16 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 				case provider.EventUsage:
 					a.recordUsage(event.Usage)
 					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "usage", Metadata: event.Usage})
+					if provider.IsOutputLimitStop(event.StopReason) {
+						// A generation cut off by its output bound otherwise looks
+						// like any other finished turn: the usage record carries no
+						// stop reason. On the local route that bound is the only
+						// thing that ends a runaway, so its firing must be seen, on
+						// screen and in the transcript, not inferred.
+						a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "warning",
+							Text:     outputLimitWarning(model, event.StopReason, event.Usage),
+							Metadata: map[string]any{"stop_reason": event.StopReason, "model": model, "round": round}})
+					}
 				}
 				return nil
 			})
@@ -515,6 +525,15 @@ func (a *Agent) recordUsage(usage map[string]any) {
 	if missOK {
 		a.cacheMisses += miss
 	}
+}
+
+// outputLimitWarning is the text of the warning a truncated generation raises.
+func outputLimitWarning(model, reason string, usage map[string]any) string {
+	text := fmt.Sprintf("generation on %s hit its output limit (stop reason %q)", model, reason)
+	if tokens, ok := usageInt(usage, "completion_tokens"); ok {
+		text += fmt.Sprintf(" after %d output tokens", tokens)
+	}
+	return text + "; the reply is truncated"
 }
 
 func usageInt(usage map[string]any, key string) (int, bool) {

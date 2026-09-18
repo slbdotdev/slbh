@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/slbdotdev/slbh/internal/config"
@@ -108,6 +109,13 @@ func clonePolicy(policy provider.Policy) provider.Policy {
 	cloned.Routes = make(map[string]provider.RoutePolicy, len(policy.Routes))
 	for name, route := range policy.Routes {
 		route.Effort.Levels = cloneStringMap(route.Effort.Levels)
+		if route.Options != nil {
+			options := make(map[string]json.RawMessage, len(route.Options))
+			for key, value := range route.Options {
+				options[key] = append(json.RawMessage(nil), value...)
+			}
+			route.Options = options
+		}
 		if route.Provider != nil {
 			posture := *route.Provider
 			posture.Ignore = append([]string(nil), route.Provider.Ignore...)

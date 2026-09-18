@@ -310,7 +310,7 @@ func (w *watcher) infer(ctx context.Context, events []seam.Event) error {
 
 		content := answer.String()
 		reasoningContent := reasoning.String()
-		if isOutputLimitStop(stopReason) {
+		if provider.IsOutputLimitStop(stopReason) {
 			if content != "" || reasoningContent != "" {
 				turn = append(turn, provider.Message{Role: "assistant", Content: content, ReasoningContent: reasoningContent})
 			}
@@ -356,15 +356,6 @@ func eventTurn(events []seam.Event) ([]provider.Message, error) {
 		return nil, fmt.Errorf("intern: encode events: %w", err)
 	}
 	return []provider.Message{{Role: "user", Content: "Events since your previous inference:\n" + string(encoded)}}, nil
-}
-
-func isOutputLimitStop(reason string) bool {
-	switch strings.ToLower(strings.TrimSpace(reason)) {
-	case "length", "max_tokens", "max_output_tokens", "model_length":
-		return true
-	default:
-		return false
-	}
 }
 
 const (

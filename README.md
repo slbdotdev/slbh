@@ -101,7 +101,8 @@ an edit changed nothing.
 Per route the policy carries the endpoint, the wire protocol, a separate
 catalog endpoint where one cannot be derived from the other, a context window
 where the provider's catalog cannot report one, an optional `maxOutputTokens`
-bound on one generation, an effort descriptor, and — for
+bound on one generation, an effort descriptor, on an `ollama-chat` route an
+`options` block of sampler settings, and — for
 an OpenRouter route — the routing posture (`zdr`, `data_collection`, `sort`,
 `ignore`, `max_price`). No credential appears in either file.
 
@@ -110,14 +111,18 @@ more than an order of magnitude in what an unbounded generation costs: a cloud
 route runs away in seconds, while a local 27B decoding at about 76 tokens per
 second against a 196,608-token window is some forty minutes of held GPU before
 anything stops it. Unset, a route takes its wire's default —
-`DefaultMaxOutputTokens` on the OpenAI-shaped wire, and on the Messages wire
-the larger ceiling that exists only because that API requires the field. A
+`DefaultMaxOutputTokens` on the OpenAI-shaped and Ollama wires, and on the
+Messages wire the larger ceiling that exists only because that API requires the field. A
 request may override both.
 
 Bounding is also what makes the terminal telemetry mean anything. An unbounded
 request can only ever come back `stop`, so `finish_reason` carries no signal at
 all; with a bound, a generation that will not end reports `length` and is
-visible as what it is rather than as a hang.
+visible as what it is rather than as a hang. When one does, on any wire, the
+runtime emits a `warning` event naming the model, the stop reason and the
+output token count, and it is written to the agent's transcript — the usage
+record alone does not carry the stop reason, so without it a truncated reply
+would look like any finished turn.
 
 That posture is sent as OpenRouter's `provider` routing object on the
 OpenRouter route and on no other, because `zdr` and `data_collection` are
@@ -138,14 +143,18 @@ one hole in this guarantee that you sign for by hand.
 
 ### Wires
 
-A route names the protocol it speaks, and slbh implements two.
+A route names the protocol it speaks, and slbh implements three.
 
 - `openai-chat` — the OpenAI-shaped chat-completions protocol: OpenRouter,
-  DeepSeek, the local Ollama server, and Z.ai's coding endpoint. Effort is
-  `reasoning_effort`.
+  DeepSeek and Z.ai's coding endpoint. Effort is `reasoning_effort`.
 - `anthropic-messages` — the Anthropic-shaped Messages protocol, which the
   Z.ai coding plan also exposes. Effort is `output_config.effort`, sent with
   `x-api-key` and `anthropic-version`.
+- `ollama-chat` — Ollama's native `/api/chat`, which the local route speaks.
+  Effort is the top-level `think` string. The stream is NDJSON rather than
+  SSE, tool calls arrive whole with object arguments, and the route's
+  `options` block is sent as Ollama's `options` verbatim, beside `num_ctx`
+  (from `contextWindow`) and `num_predict` (from `maxOutputTokens`).
 
 The plan route runs on `anthropic-messages` because that is the only route on
 which an effort setting is honoured. On the coding endpoint the effort enum is
@@ -155,13 +164,30 @@ ladder. On that same Anthropic endpoint `thinking.budget_tokens` and a bare
 `reasoning_effort` are both accepted with HTTP 200 and then discarded, so
 neither is representable in the policy schema at all.
 
-The local Ollama route reaches only the bottom three of slbh's five levels.
-Ollama's OpenAI-compatible layer rewrites `reasoning_effort` before the model's
-chat template sees it: `high` arrives as the template's top rung, and `xhigh`
-arrives as `max`, which the template has no rung for and raises on. So `low`,
-`medium` and `high` return 200 there, and `xhigh` and `max` both come back as a
-500 out of the template — not a routing fault, and not something slbh clamps.
-That is why the seat default is `high`.
+The local route left `openai-chat` for `ollama-chat` on 2026-09-18 because
+Ollama's `/v1` shim is lossy: it forces `top_p` to 1.0 over the model's own
+0.95 and silently discards `repeat_penalty`, `top_k`, `min_p` and
+`draft_num_predict` under HTTP 200, where `/api/chat` honours all of them
+(measured by a seeded sampler A/B). A sampler guard can therefore only be
+carried on the native wire, and the policy refuses an `options` block on any
+other wire rather than let it be written down and never applied. The block
+admits the sampler keys only — `temperature`, `top_k`, `top_p`, `min_p`,
+`typical_p`, `repeat_penalty`, `repeat_last_n`, `presence_penalty`,
+`frequency_penalty`, `seed`, `stop` — and refuses anything else by name:
+Ollama ignores an option it does not know, and a runner option such as
+`num_gpu` or `draft_num_predict` would reload the shared model. `num_ctx` and
+`num_predict` are refused inside it because slbh derives them, so each is
+stated once. A request's own temperature beats the block's.
+
+On `/api/chat`, `think: "low" | "medium" | "high"` renders the same prompt as
+`/v1`'s `reasoning_effort` at that level; an omitted `think` takes the model
+template's default, which on the served family is its top rung. The template
+has no `xhigh` or `max` rung — Ollama refuses `"xhigh"` with a 400 and the
+template raises on `"max"` with a 500 — so the managed policy maps both onto
+`high`, and a policy that does not is loud rather than silently clamped.
+Replayed transcripts on this wire carry no cache key, because Ollama has no
+field for one: its prompt cache is automatic prefix reuse, reported as
+`cached_tokens` in usage.
 
 Everything a wire changes is normalized before it leaves the provider package,
 so nothing downstream knows or cares which one served a request. Three of those
@@ -180,13 +206,20 @@ wrong:
   tools begin at 1 behind the thinking block. They are renumbered to a dense
   ordinal from 0, and nothing downstream may treat the wire index as an array
   position.
-- **Tool arguments** arrive fragmented on one wire and whole on the other.
-  Both are handled by accumulation, so no test asserts one chunk per call.
+- **Tool arguments** arrive fragmented on the Messages wire and whole on the
+  other two. Both are handled by accumulation, so no test asserts one chunk
+  per call. On `ollama-chat` they arrive as a JSON object and are forwarded as
+  its JSON text, and history sends them back as an object.
+- **Stop reasons** are reported in the coding wire's vocabulary. Ollama
+  reports `done_reason: "stop"` for a turn that ended in tool calls, so on that
+  wire the calls decide it and the turn reports `tool_calls`; `length` passes
+  through. Its usage maps `prompt_eval_count`, which is gross, onto
+  `prompt_tokens`, and `prompt_eval_cached_count` onto `cached_tokens`.
 
-Errors are classified by status class over three envelopes — the coding wire's
-`{"error":{...}}`, the Messages wire's `{"type":"error",...,"request_id"}`, and
+Errors are classified by status class over four envelopes — the coding wire's
+`{"error":{...}}`, the Messages wire's `{"type":"error",...,"request_id"}`,
 an HTTP 422 FastAPI `{"detail":[...]}` for a schema violation on that same
-wire. A 4xx is not retried and a 5xx is. A 429 is inside the 4xx rule
+wire, and Ollama's bare-string `{"error":"..."}`. A 4xx is not retried and a 5xx is. A 429 is inside the 4xx rule
 deliberately: a quota refusal should surface at once rather than be spent three
 times over. `request_id` is preserved in the error text, since it is the only
 handle the provider gives for a support question.
@@ -225,7 +258,7 @@ These environment variables are read at startup:
 | `SLBH_SUBAGENT_EFFORT` | `high` | Default child-agent effort. |
 | `SLBH_PYTHON` | managed `~/.local/share/slbh/python` interpreter | Python interpreter used by `quick_py` and `long_py`. |
 | `SLBH_ENDPOINT` | OpenRouter chat-completions endpoint | Compatible provider endpoint. |
-| `SLBH_LOCAL_ENDPOINT` | `http://fractal.wyvern-temperature.ts.net:11434/v1/chat/completions` | Desktop Ollama chat-completions endpoint. |
+| `SLBH_LOCAL_ENDPOINT` | `http://fractal.wyvern-temperature.ts.net:11434/api/chat` | Desktop Ollama endpoint. It must match the route's wire: an `ollama-chat` route needs an `/api/chat` URL. |
 
 The model policy is persisted at `$SLBH_HOME/config.json`. `/models` always
 shows the configured local Ollama model and refreshes catalogs for providers
