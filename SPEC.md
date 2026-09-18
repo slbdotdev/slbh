@@ -56,6 +56,12 @@ Three rules define the seam:
 3. **One event stream outbound.** A single ordered, typed stream that every
    front end consumes. There is not a second way to learn what happened.
 
+Reads are the third shape and are neither a command nor an event. A query
+returns a copy: `Agents() []AgentSnapshot`, `JobSnapshots() []JobSnapshot`.
+`Jobs()` and `Seat()` are replaced by those, and by named commands for what
+they were reached through to change. No caller receives a live pointer into
+another subsystem.
+
 The seam stays **in-process**. No listener, no wire protocol, no daemon.
 The rules exist so that adding a transport later is a marshalling layer
 rather than a redesign — not because a transport is planned.
@@ -229,6 +235,5 @@ Measured at `ce9fe49` on `main`. `internal/harness` is 7,713 lines;
 ## 12. Open
 
 1. Whether a queued message starts a turn in an idle Codex session.
-2. Whether `Jobs()` and `Seat()` become data-returning or command-shaped.
-3. Whether the org inbox lives in `$SLBH_HOME` or in a path the Secretary
+2. Whether the org inbox lives in `$SLBH_HOME` or in a path the Secretary
    can also reach directly.
