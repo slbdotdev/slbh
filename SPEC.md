@@ -1,7 +1,7 @@
 # slbh for org v0.3
 
-**Draft.** On `v0.3-draft`. Nothing here is implemented by this document
-being written, and `main` remains what runs. The companion is `SPEC.md` in
+Live on `main` since the org's v0.3 cutover on 2026-09-18; the owner's final
+acceptance is pending. The companion is `SPEC.md` in
 `slb-org`, which specifies the organization this serves; where the two
 disagree, that one is about the org and this one is about the program.
 
@@ -256,8 +256,8 @@ Intern. slbh does no filtering; the directory is the role's set.
 
 ## 11. State of the tree
 
-Measured at `ce9c1ca` on `v0.3-draft`. The code-bearing delta is built, one
-unit per commit, each checked with `gofmt`, build, vet, the full suite and the
+Measured at `4a3089f` on `main`, into which `v0.3-draft` merged at
+`ac58fab`. The code-bearing delta is built, one unit per commit, each checked with `gofmt`, build, vet, the full suite and the
 race detector. The current tip also records the role-aware TUI fixture
 migration needed by the runtime's managed roster contract:
 
@@ -282,20 +282,27 @@ migration needed by the runtime's managed roster contract:
 | runtime documentation | `d7042f1` | README and operational defaults describe the current v0.3 roster, local model and org-sync ownership |
 | role-aware test fixtures | `7989857` | TUI launch tests provide the managed Seat/Manager roster roles required by the runtime |
 | subagent stall warnings | `ce9c1ca` | `launch_subagent.warn_after_seconds` defaults to five seconds, warns the parent once through its inbox, and cancels on child completion, error, stop or runtime shutdown |
+| persistent headless | `a397d17` | `slbh --headless` is a long-lived JSONL protocol over the seam: initialize, prompts, polled events and `close`, with the Intern inside the same runtime |
+| job output cap | `0e0bd76` | each job stream keeps at most 4 MiB and consumes the rest, so the cap holds past the first full write and the child is never blocked on a short write |
+| live headless test | `de7174d` | the live check judges the streamed reply whole at `turn_done`; passed on `zai/glm-5.3-flash` and `local/q27-UD-Q2_K_XL-64k` |
+| Windows test build | `4a3089f` | the POSIX process-group test builds on POSIX alone, so `GOOS=windows go vet ./...` passes |
 
 `internal/tui`, `headless`, `seam`, `orgstore`, `orgcli`, `readtools`,
 `intern` and `secretarywake` import nothing from `internal/harness`; a
 `go list -deps` check proves it on every unit.
 
-**Not yet true:**
-
-- Nothing here has run as the org: no Seat on GLM has used the org tools
-  against a live Secretary, and the Intern has not watched a real Seat. The
-  pieces are tested separately and end to end in-process; the first live
-  run is cutover work.
+**Run as the org** on 2026-09-18, recorded in `slb-org`
+`org/v03-cutover-readiness-2026-09-18.md`: a headless GLM Seat launched a
+native Manager and a Sol Codex leaf, reported to a live named Secretary that
+was woken, drained its inbox once and filed a request the Seat carried to
+done, and the Intern watched that Seat and asked it a live question.
 
 ## 12. Open
 
-Nothing. Every design question this specification raised has been answered;
-what remains is the delta in section 11, which is work rather than
-uncertainty.
+No design question is open. Two operational risks are unmeasured rather than
+unanswered:
+
+- Local Ollama `/v1` fidelity and termination: nothing instruments a local
+  leaf's stream for truncation or a turn that does not end.
+- Codex auto-compaction in a headless leaf has not been observed; a long
+  Luna or Sol run may reach its window before it is.
