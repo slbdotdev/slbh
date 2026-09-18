@@ -26,6 +26,7 @@ control and therefore no daemon.
 | Luna | 2 | Codex leaf | `gpt-5.6-luna` |
 | Sol | 2 | Codex leaf | `gpt-5.6-sol` |
 | Opus | 2 | Claude Code leaf, headless | `claude-opus-5` |
+| Flex | 2 | native provider | named at dispatch |
 | Intern | outside the tree | native provider | `local/q27-…` |
 
 Depth 1 exists in the runtime and carries no name in v0.3. The manager
@@ -76,12 +77,15 @@ roster does not exist unless the launch can say which.
 does not fail — it silently runs the wrong agent. slbh asserts the model on
 every leaf launch rather than relying on the default.
 
-Two leaf harnesses:
+Three leaf kinds:
 
 - **Codex**, over the app-server, as today.
 - **Claude Code**, headless, for Opus. `ANTHROPIC_API_KEY` is not exported
   on this fleet, so a headless Claude Code leaf runs on the host's
   claude.ai login and is plan-billed. It must stay that way.
+- **slbh's own provider path**, for Flex. This needs no integration: the
+  routes are already in `policy.json`. Flex names its model at dispatch
+  rather than carrying one, and that model is never the author's family.
 
 A leaf receives the managed leaf document appended to the harness-specific
 mechanics slbh supplies, as the Codex leaf already does.
