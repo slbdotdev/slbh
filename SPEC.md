@@ -234,8 +234,9 @@ transport in sight.
 
 ## 11. State of the tree
 
-Measured at `ce9fe49` on `main`. `internal/harness` is 7,713 lines;
-`provider` 4,835; `tui` 2,895; `config` 1,035; `job` 949; `headless` 501.
+Measured at `f6a29b8` on `v0.3-draft`. Non-test Go lines: `internal/harness`
+3,256; `provider` 2,597; `tui` 1,794; `config` 477; `job` 555; `headless`
+190. With tests: 7,713; 4,835; 2,895; 1,035; 949; 501.
 
 **Already true:**
 
@@ -244,29 +245,57 @@ Measured at `ce9fe49` on `main`. `internal/harness` is 7,713 lines;
   it outright: "a different front end, not a second harness."
 - The outbound stream is already protocol-shaped. `runtime.go:21` defines
   `Event` with complete JSON tags; `runtime.go:158` exposes
-  `Events() <-chan Event`.
-- The Codex leaf exists and drives the app-server: `codex.go:185`.
-- Layer instructions resolve by depth: `runtime.go:259`.
+  `Events() <-chan Event`. `Agents()` already returns snapshots.
+- The Codex leaf exists and drives the app-server.
+- A leaf's harness, model and effort are chosen per launch: `LaunchSpec`
+  (`runtime.go:47`) carries all three, and a Codex launch with no model is
+  refused. Effort reaches a Codex leaf on every `turn/start` since
+  `f6a29b8`. `ConfigureModelSlots` sets only the fallbacks.
+- Layer instructions resolve by depth: `config/instructions.go` loads
+  seat, manager and leaf.
 - An idle agent can be woken by delivery: `job/manager.go:34`.
+- A flag-driven headless mode exists (`cmd/slbh/main.go`); it is not the
+  subcommand path §8 needs.
 
 **Not yet true:**
 
 - `AgentSnapshot` (`runtime.go:31`) carries the right fields — `Depth`,
   `Model`, `Effort`, `Status`, `Harness`, `ContextWindow`, `ContextUsed` —
-  and **no JSON tags**. It is the type the Intern wants.
+  and **no JSON tags**. It is the type the Intern wants. There is no
+  `JobSnapshots()`.
 - `Jobs() *job.Manager` (`runtime.go:159`) and `Seat() *Agent`
   (`runtime.go:296`) hand out live pointers into other subsystems. These
   are holes through the seam and cannot cross a transport.
-- The inbound surface is not a closed command set. `Runtime` exports about
-  thirty methods mixing accessors, tool execution and config mutation.
-- One leaf model for the runtime, not per launch: `ConfigureModelSlots`
-  (`runtime.go:231`) sets `SeatModel`, `SubagentModel`, `LeafModel`.
-- No Claude Code leaf. Nothing under `internal/` mentions it.
+- The inbound surface is not a closed command set. `Runtime` exports 28
+  methods mixing accessors, tool execution and config mutation, and the TUI
+  and headless front ends import `internal/harness` directly.
+- The Seat's default model is `deepseek-v4-flash` (`config/config.go`), not
+  the roster's `zai/glm-5.3-flash`.
+- No Claude Code leaf. `internal/provider` mentions Claude Code only as a
+  wire client, not as a harness slbh drives.
 - No `slbh` subcommand path, and no inbox or queue code separable from
   `internal/harness`.
-- No durable org inbox.
-- No Intern, and no read-only tool set to give one. Nothing loads
+- No durable org inbox or request queue.
+- No Codex app-server client for waking the Secretary by session name.
+- No Intern, and no read-only tool set to give one: the general tool set
+  mixes reads with edits, writes, shell and jobs. Nothing loads
   `instructions/intern.md`.
+
+**Implementation order.** Each unit builds and tests on its own and lands
+before the next starts:
+
+1. The seam: JSON-tagged snapshots, `JobSnapshots()`, and named commands in
+   place of `Jobs()` and `Seat()`; then the closed command set, with the
+   front ends written against it.
+2. The Claude Code headless leaf, for Opus.
+3. The durable org inbox and request queue, a package independent of
+   `internal/harness`.
+4. The Intern: its read-only tools, `intern.md` loaded by name, and its
+   watcher on the event stream.
+5. The `slbh` subcommands over the store.
+6. The Secretary wake over Codex's app-server.
+7. End-to-end wiring: Seat reports, Intern questions, request status and the
+   wake together.
 
 ## 12. Open
 
