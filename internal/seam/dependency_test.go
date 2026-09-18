@@ -13,7 +13,7 @@ func TestSeamConsumersDoNotDependOnHarness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command("go", "list", "-deps", "./internal/headless", "./internal/intern", "./internal/seam", "./internal/tui")
+	command := exec.Command("go", "list", "-deps", "./internal/headless", "./internal/intern", "./internal/runtimeapp", "./internal/seam", "./internal/tui")
 	command.Dir = root
 	command.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.0")
 	output, err := command.CombinedOutput()

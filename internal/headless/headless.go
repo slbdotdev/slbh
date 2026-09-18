@@ -1,199 +1,322 @@
-// Package headless runs one slbh turn without the Bubble Tea UI.
+// Package headless exposes the slbh runtime over a persistent JSONL protocol.
 //
-// slbh's Codex leaves have always been headless: a native parent launches one with
-// harness: "codex" and it runs a persistent app-server session with no UI involvement.
-// The native side had no equivalent -- cmd/slbh took no flags and handed the runtime
-// straight to the TUI -- so a native agent could only be driven by a human at a terminal.
-// This package closes that gap using the same runtime, the same Agent, the same tools and
-// the same system prompt the TUI drives. It is a different front end, not a second harness.
+// The protocol is deliberately a thin transport over internal/seam: commands
+// are the seam's closed command set, queries return seam snapshots, and every
+// runtime event is emitted as an ordered notification. The TUI is another
+// consumer of that same seam; it is not part of the runtime lifecycle.
 package headless
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"strings"
-	"time"
+	"sync"
 
 	"github.com/slbdotdev/slbh/internal/seam"
 )
 
-// Options configures a single headless turn.
+// Options configures the persistent protocol server.
 type Options struct {
-	Prompt  string        // the user message; required
-	Timeout time.Duration // wall cap for the turn; zero means no cap
-	JSON    bool          // emit one JSON object per event instead of prose
-	Quiet   bool          // suppress per-event output; the summary is still returned
-	Out     io.Writer     // event stream destination; nil means io.Discard
+	// InitialPrompt is sent to the Seat after the event stream is attached. It
+	// is the compatibility bridge for `slbh -p`; subsequent turns arrive as
+	// send_prompt protocol commands.
+	InitialPrompt string
 }
 
-// Result is what the turn did. Counts come from the runtime's own event stream, so they
-// are the same numbers the TUI renders rather than a parallel accounting.
-type Result struct {
-	AgentID      string  `json:"agent_id"`
-	Model        string  `json:"model"`
-	Runtime      string  `json:"runtime"`              // runtime id; its directory under the home holds every transcript
-	Transcript   string  `json:"transcript,omitempty"` // the seat's transcript.jsonl, the full record of the turn
-	StopReason   string  `json:"stop_reason"`          // "done", "error", "shutdown" or "wall_cap"
-	Turns        int     `json:"turns"`
-	ToolCalls    int     `json:"tool_calls"`
-	ToolResults  int     `json:"tool_results"`
-	Errors       int     `json:"errors"`
-	PromptTokens int     `json:"prompt_tokens"`
-	OutputTokens int     `json:"output_tokens"`
-	WallS        float64 `json:"wall_s"`
-	Final        string  `json:"final,omitempty"`
+type request struct {
+	JSONRPC string          `json:"jsonrpc,omitempty"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
 }
 
-// metaInt reads a count from an event's metadata, tolerating the numeric types JSON and Go
-// both produce: a value that arrived over the wire is float64, one set in-process is int.
-func metaInt(meta map[string]any, key string) (int, bool) {
-	if meta == nil {
-		return 0, false
-	}
-	switch v := meta[key].(type) {
-	case int:
-		return v, true
-	case int64:
-		return int(v), true
-	case float64:
-		return int(v), true
-	}
-	return 0, false
+type response struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Result  any             `json:"result,omitempty"`
+	Error   *wireError      `json:"error,omitempty"`
 }
 
-// Run sends one prompt to the runtime's seat agent and returns when that agent's turn
-// completes or the wall cap expires. The runtime is caller-owned: Run neither creates nor
-// closes it, so an embedder can drive several turns or inspect state afterwards.
-func Run(rt seam.Runtime, opts Options) (Result, error) {
-	out := opts.Out
-	if out == nil || opts.Quiet {
-		out = io.Discard
-	}
+type notification struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}
+
+type wireError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type decodeResult struct {
+	request request
+	err     error
+}
+
+type writer struct {
+	mu  sync.Mutex
+	enc *json.Encoder
+}
+
+func (w *writer) write(value any) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.enc.Encode(value)
+}
+
+// Serve owns the headless protocol loop but not the supplied runtime. It
+// remains active until stdin closes, the runtime closes, or ctx is canceled.
+// Each input line is one JSON-RPC-shaped request. Runtime events are emitted
+// as notifications independently of request/response traffic.
+func Serve(ctx context.Context, rt seam.Runtime, in io.Reader, out io.Writer, opts Options) error {
 	if rt == nil {
-		return Result{}, fmt.Errorf("headless: nil runtime")
+		return errors.New("headless: nil runtime")
 	}
-	var seat seam.AgentSnapshot
-	var found bool
-	for _, agent := range rt.Agents() {
-		if agent.Depth == 0 {
-			seat = agent
-			found = true
-			break
+	if in == nil {
+		return errors.New("headless: nil input")
+	}
+	if out == nil {
+		return errors.New("headless: nil output")
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	w := &writer{enc: json.NewEncoder(out)}
+	eventsDone := make(chan struct{})
+	go func() {
+		defer close(eventsDone)
+		streamEvents(ctx, rt, w)
+	}()
+
+	if opts.InitialPrompt != "" {
+		seat, err := seat(rt)
+		if err != nil {
+			return err
+		}
+		if _, err := rt.Do(seam.SendPromptCommand{AgentID: seat.ID, Prompt: opts.InitialPrompt}); err != nil {
+			return fmt.Errorf("headless: initial prompt: %w", err)
 		}
 	}
-	if !found {
-		return Result{}, fmt.Errorf("headless: runtime has no seat agent")
-	}
-	res := Result{AgentID: seat.ID, Model: seat.Model, StopReason: "done", Runtime: rt.ID()}
-	if path, err := rt.TranscriptPath(seat.ID); err == nil {
-		res.Transcript = path
-	}
 
-	cursor := rt.PollEvents(seam.EventQuery{}).Cursor
-	start := time.Now()
-	if _, err := rt.Do(seam.SendPromptCommand{AgentID: seat.ID, Prompt: opts.Prompt}); err != nil {
-		return res, fmt.Errorf("headless: send: %w", err)
-	}
-
-	// The seat's reply streams as deltas; Final is the whole of the last one.
-	var final strings.Builder
-	finish := func() (Result, error) {
-		res.WallS = time.Since(start).Seconds()
-		res.Final = final.String()
-		return res, nil
-	}
-
+	requests := make(chan decodeResult, 1)
+	go decodeRequests(in, requests)
 	for {
-		wait := 250 * time.Millisecond
-		if opts.Timeout > 0 {
-			remaining := opts.Timeout - time.Since(start)
-			if remaining <= 0 {
-				res.StopReason = "wall_cap"
-				return finish()
+		var decoded decodeResult
+		select {
+		case <-ctx.Done():
+			<-eventsDone
+			return nil
+		case <-eventsDone:
+			return nil
+		case decoded = <-requests:
+		}
+		if decoded.err != nil {
+			if errors.Is(decoded.err, io.EOF) {
+				return nil
 			}
-			if remaining < wait {
-				wait = remaining
+			return fmt.Errorf("headless: decode request: %w", decoded.err)
+		}
+		req := decoded.request
+		if req.Method == "" {
+			if err := writeError(w, req.ID, "invalid_request", "method is required"); err != nil {
+				return err
+			}
+			continue
+		}
+
+		result, closeRuntime, err := dispatch(rt, req.Method, req.Params)
+		if req.ID != nil {
+			if err != nil {
+				if writeErr := writeError(w, req.ID, "request_failed", err.Error()); writeErr != nil {
+					return writeErr
+				}
+			} else if writeErr := w.write(response{JSONRPC: "2.0", ID: req.ID, Result: result}); writeErr != nil {
+				return writeErr
 			}
 		}
-		batch := rt.PollEvents(seam.EventQuery{After: cursor, WaitMilliseconds: max(1, int(wait/time.Millisecond))})
+		if closeRuntime {
+			cancel()
+			<-eventsDone
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			<-eventsDone
+			return nil
+		default:
+		}
+	}
+}
+
+func decodeRequests(in io.Reader, requests chan<- decodeResult) {
+	decoder := json.NewDecoder(in)
+	for {
+		var req request
+		err := decoder.Decode(&req)
+		requests <- decodeResult{request: req, err: err}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func streamEvents(ctx context.Context, rt seam.Runtime, w *writer) {
+	var cursor seam.EventCursor
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		batch := rt.PollEvents(seam.EventQuery{After: cursor, Limit: 128, WaitMilliseconds: 250})
 		cursor = batch.Cursor
-		for _, ev := range batch.Events {
-			emit(out, opts.JSON, ev)
-			if ev.Kind == "runtime" && ev.Text == "runtime stopping" {
-				res.StopReason = "shutdown"
-				return finish()
-			}
-			switch ev.Kind {
-			case "inference_request":
-				// One API round is one turn. A retry re-emits the same round number, so the
-				// count is the highest round seen, not the number of requests; the agent
-				// drops its partial answer when it retries, and so does Final.
-				if ev.AgentID == seat.ID {
-					if round, ok := metaInt(ev.Metadata, "round"); ok && round+1 > res.Turns {
-						res.Turns = round + 1
-					}
-					final.Reset()
-				}
-			case "assistant":
-				if ev.AgentID == seat.ID {
-					final.WriteString(ev.Text)
-				}
-			case "tool":
-				res.ToolCalls++
-			case "tool_result":
-				res.ToolResults++
-			case "error", "delivery_error":
-				res.Errors++
-				// A native agent emits "error" only from fail(), which ends its turn with no
-				// turn_done to follow. For the seat that is the end of the run: waiting on
-				// would only burn the wall cap against a provider that has already refused.
-				if ev.Kind == "error" && ev.AgentID == seat.ID {
-					res.StopReason = "error"
-					return finish()
-				}
-			case "usage":
-				// The metadata is the provider's own usage object on the OpenAI wire shape:
-				// prompt_tokens and completion_tokens. Summed over rounds.
-				if v, ok := metaInt(ev.Metadata, "prompt_tokens"); ok {
-					res.PromptTokens += v
-				}
-				if v, ok := metaInt(ev.Metadata, "completion_tokens"); ok {
-					res.OutputTokens += v
-				} else if v, ok := metaInt(ev.Metadata, "output_tokens"); ok {
-					res.OutputTokens += v
-				}
-			case "turn_done":
-				// Only the seat's own turn ends this run. A subagent finishing is not the
-				// seat finishing, and treating it as such would cut the turn short.
-				if ev.AgentID == seat.ID {
-					return finish()
-				}
+		for _, event := range batch.Events {
+			if err := w.write(notification{JSONRPC: "2.0", Method: "event", Params: event}); err != nil {
+				return
 			}
 		}
 		if batch.End {
-			res.StopReason = "shutdown"
-			return finish()
+			return
 		}
 	}
 }
 
-func emit(out io.Writer, asJSON bool, ev seam.Event) {
-	if out == io.Discard {
-		return
-	}
-	if asJSON {
-		if b, err := json.Marshal(ev); err == nil {
-			fmt.Fprintln(out, string(b))
+func writeError(w *writer, id json.RawMessage, code, message string) error {
+	return w.write(response{JSONRPC: "2.0", ID: id, Error: &wireError{Code: code, Message: message}})
+}
+
+func seat(rt seam.Runtime) (seam.AgentSnapshot, error) {
+	for _, agent := range rt.Agents() {
+		if agent.Depth == 0 {
+			return agent, nil
 		}
-		return
 	}
-	switch ev.Kind {
-	case "assistant", "thinking", "status", "error", "delivery_error":
-		if ev.Text != "" {
-			fmt.Fprintf(out, "[%s] %s\n", ev.Kind, ev.Text)
+	return seam.AgentSnapshot{}, errors.New("headless: runtime has no Seat agent")
+}
+
+func dispatch(rt seam.Runtime, method string, params json.RawMessage) (result any, closeRuntime bool, err error) {
+	if params == nil {
+		params = json.RawMessage(`{}`)
+	}
+	if seam.IsCommandName(method) {
+		command, decodeErr := decodeCommand(method, params)
+		if decodeErr != nil {
+			return nil, false, decodeErr
 		}
-	case "tool", "tool_result":
-		fmt.Fprintf(out, "[%s] %s\n", ev.Kind, ev.Text)
+		reply, doErr := rt.Do(command)
+		return reply, method == seam.CommandClose, doErr
+	}
+
+	switch method {
+	case "initialize":
+		return map[string]any{
+			"runtime": rt.ID(),
+			"home":    rt.Home(),
+			"dir":     rt.Dir(),
+			"agents":  rt.Agents(),
+		}, false, nil
+	case "agents":
+		return rt.Agents(), false, nil
+	case "jobs":
+		return rt.JobSnapshots(), false, nil
+	case "config":
+		return rt.Config(), false, nil
+	case "runtime":
+		return map[string]string{"id": rt.ID(), "home": rt.Home(), "dir": rt.Dir()}, false, nil
+	case "transcript_path":
+		var query struct {
+			AgentID string `json:"agent_id"`
+		}
+		if err := json.Unmarshal(params, &query); err != nil {
+			return nil, false, fmt.Errorf("transcript_path params: %w", err)
+		}
+		path, err := rt.TranscriptPath(query.AgentID)
+		return map[string]string{"path": path}, false, err
+	case "instruction_source":
+		return rt.InstructionSource(), false, nil
+	case "skill_source":
+		return rt.SkillSource(), false, nil
+	case "policy_source":
+		return rt.PolicySource(), false, nil
+	case "model_catalog":
+		return rt.ModelCatalog(), false, nil
+	case "model_guidance":
+		return rt.ModelGuidance(), false, nil
+	case "poll_events":
+		var query seam.EventQuery
+		if err := json.Unmarshal(params, &query); err != nil {
+			return nil, false, fmt.Errorf("poll_events params: %w", err)
+		}
+		return rt.PollEvents(query), false, nil
+	default:
+		return nil, false, fmt.Errorf("unknown method %q", method)
+	}
+}
+
+func decodeCommand(method string, params json.RawMessage) (seam.Command, error) {
+	var command seam.Command
+	switch method {
+	case seam.CommandSendPrompt:
+		command = &seam.SendPromptCommand{}
+	case seam.CommandSteerAgent:
+		command = &seam.SteerAgentCommand{}
+	case seam.CommandSetAgentEffort:
+		command = &seam.SetAgentEffortCommand{}
+	case seam.CommandClear:
+		command = &seam.ClearCommand{}
+	case seam.CommandCompact:
+		command = &seam.CompactCommand{}
+	case seam.CommandConfigureModels:
+		command = &seam.ConfigureModelsCommand{}
+	case seam.CommandConfigureModelSlots:
+		command = &seam.ConfigureModelSlotsCommand{}
+	case seam.CommandSetModelCatalog:
+		command = &seam.SetModelCatalogCommand{}
+	case seam.CommandAuthorLocalPolicy:
+		command = &seam.AuthorLocalPolicyCommand{}
+	case seam.CommandEmitStatus:
+		command = &seam.EmitStatusCommand{}
+	case seam.CommandClose:
+		command = &seam.CloseCommand{}
+	default:
+		return nil, fmt.Errorf("unknown command %q", method)
+	}
+	if err := json.Unmarshal(params, command); err != nil {
+		return nil, fmt.Errorf("%s params: %w", method, err)
+	}
+	return commandValue(command), nil
+}
+
+// The runtime's closed command set uses value commands. Decode into pointers
+// above to keep the JSON decoder simple, then normalize before Do validates
+// and dispatches the command.
+func commandValue(command seam.Command) seam.Command {
+	switch typed := command.(type) {
+	case *seam.SendPromptCommand:
+		return *typed
+	case *seam.SteerAgentCommand:
+		return *typed
+	case *seam.SetAgentEffortCommand:
+		return *typed
+	case *seam.ClearCommand:
+		return *typed
+	case *seam.CompactCommand:
+		return *typed
+	case *seam.ConfigureModelsCommand:
+		return *typed
+	case *seam.ConfigureModelSlotsCommand:
+		return *typed
+	case *seam.SetModelCatalogCommand:
+		return *typed
+	case *seam.AuthorLocalPolicyCommand:
+		return *typed
+	case *seam.EmitStatusCommand:
+		return *typed
+	case *seam.CloseCommand:
+		return *typed
+	default:
+		return command
 	}
 }

@@ -402,37 +402,39 @@ answered a live job with two empty strings.
 
 ## Headless
 
-`slbh` with a prompt runs one turn without the TUI and exits. It is the same runtime, the
-same seat agent, the same tools and the same system prompt the TUI drives — only the front
-end differs. Codex leaves have always been headless; this is the native equivalent.
+Headless is the persistent runtime frontend. It creates the same runtime, Seat, tools,
+event stream and child lifecycle as the TUI, then speaks a JSONL request/notification
+protocol over stdin/stdout. The process remains alive for multiple turns until the client
+sends `close`, stdin closes, or it receives a termination signal. The TUI is only a
+presentation frontend; no runtime capability depends on it.
 
 ```sh
-slbh -p "summarise the failing tests in ./logs"
-slbh --prompt-file brief.md --workdir /srv/project --timeout 15m
-echo "what changed today?" | slbh --prompt-file -
+slbh --headless --intern
+slbh -p "start with this Seat prompt" --model zai/glm-5.3-flash
+slbh --headless --prompt-file brief.md --workdir /srv/project
 ```
 
-| flag | meaning |
-| --- | --- |
-| `-p`, `--prompt` | prompt text; supplying one is what selects headless |
-| `--prompt-file` | read the prompt from a file, or `-` for stdin |
-| `--workdir` | directory the agent works in (default: the current one) |
-| `--model` | model for this turn; naming one also approves it for the turn |
-| `--effort` | thinking effort for this turn |
-| `--timeout` | wall cap such as `15m`; zero means none |
-| `--json` | one JSON object per runtime event on stdout |
-| `-q`, `--quiet` | no event stream; print only the summary |
-| `--summary` | print the run summary as JSON on exit |
+Requests are JSON-RPC-shaped. Commands use the seam command names and fields:
 
-Exit status is `0` when the turn completed, `1` on error, `2` on a usage problem, and `124`
-when the wall cap was reached — so a caller can tell a finished turn from a truncated one
-without parsing output.
+```json
+{"jsonrpc":"2.0","id":1,"method":"send_prompt","params":{"agent_id":"agent-...","prompt":"continue"}}
+{"jsonrpc":"2.0","id":2,"method":"agents","params":{}}
+{"jsonrpc":"2.0","id":3,"method":"close","params":{}}
+```
 
-Running with no flags starts the TUI exactly as before; the prompt is the only thing that
-selects headless.
+Responses carry `result` or `error`; runtime events are asynchronous
+`{"jsonrpc":"2.0","method":"event","params":{...}}` notifications. The available
+commands are the closed seam command set (`send_prompt`, `steer_agent`, `clear`, `compact`,
+model configuration, local-policy authoring, status and `close`). Queries expose agent/job
+snapshots, runtime metadata, transcript paths, instruction/skill/policy sources, model
+catalog/guidance and cursor-based event polling.
 
-Embedders can skip the CLI and call `headless.Run(runtime, headless.Options{...})`, which
-neither creates nor closes the runtime, so several turns can be driven in one process.
+`-p` and `--prompt-file` provide an optional initial Seat prompt and imply headless mode;
+later turns use `send_prompt`. `--intern` works with either frontend and starts the same
+runtime watcher. Running with no frontend flags starts the TUI.
+
+Embedders call `headless.Serve(ctx, runtime, stdin, stdout, headless.Options{...})` and retain
+the same seam rather than selecting a separate one-turn implementation.
 
 
 ## Runtime data
@@ -466,7 +468,7 @@ closes session transcripts. The same cleanup path handles slash-command exit,
 Run these checks from the repository checkout:
 
 ```sh
-gofmt -w cmd/slbh/main.go internal/config/*.go internal/harness/*.go internal/id/*.go internal/job/*.go internal/logx/*.go internal/provider/*.go internal/tui/*.go
+gofmt -w cmd/slbh/main.go internal/config/*.go internal/harness/*.go internal/headless/*.go internal/id/*.go internal/job/*.go internal/logx/*.go internal/provider/*.go internal/runtimeapp/*.go internal/tui/*.go
 go test ./...
 go vet ./...
 go build ./...

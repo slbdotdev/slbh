@@ -3,7 +3,9 @@ package headless
 import (
 	"bytes"
 	"context"
-	"errors"
+	"encoding/json"
+	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,53 +13,22 @@ import (
 	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/harness"
 	"github.com/slbdotdev/slbh/internal/provider"
-	"github.com/slbdotdev/slbh/internal/seam"
 )
 
-// answering replies once and ends the turn, the shape every completed turn has.
 type answering struct{}
 
 func (answering) Stream(_ context.Context, _ provider.Request, sink provider.StreamSink) error {
-	if err := sink(provider.Event{Kind: provider.EventReasoning, Text: "plan"}); err != nil {
-		return err
-	}
 	if err := sink(provider.Event{Kind: provider.EventText, Text: "SLBH_HEADLESS_OK"}); err != nil {
 		return err
 	}
 	return sink(provider.Event{Kind: provider.EventDone})
 }
 
-// stalling never returns until the context is cancelled, so the wall cap is what ends it.
 type stalling struct{}
 
 func (stalling) Stream(ctx context.Context, _ provider.Request, _ provider.StreamSink) error {
 	<-ctx.Done()
 	return ctx.Err()
-}
-
-// refusing fails every attempt outright, the shape of a provider that rejects the request
-// itself (a 4xx/5xx) rather than one that is slow.
-type refusing struct{}
-
-func (refusing) Stream(_ context.Context, _ provider.Request, _ provider.StreamSink) error {
-	return errors.New("provider returned 500 Internal Server Error")
-}
-
-// chunked streams one reply as several deltas and reports usage the way an OpenAI-compatible
-// provider does: one round, one usage object, completion_tokens for the output side.
-type chunked struct{}
-
-func (chunked) Stream(_ context.Context, _ provider.Request, sink provider.StreamSink) error {
-	for _, piece := range []string{"PO", "NG"} {
-		if err := sink(provider.Event{Kind: provider.EventText, Text: piece}); err != nil {
-			return err
-		}
-	}
-	usage := map[string]any{"prompt_tokens": 11, "completion_tokens": 5}
-	if err := sink(provider.Event{Kind: provider.EventUsage, Usage: usage}); err != nil {
-		return err
-	}
-	return sink(provider.Event{Kind: provider.EventDone})
 }
 
 func newRuntime(t *testing.T, p provider.Provider) *harness.Runtime {
@@ -73,235 +44,171 @@ func newRuntime(t *testing.T, p provider.Provider) *harness.Runtime {
 	return rt
 }
 
-func TestRunReturnsWhenTheSeatTurnCompletes(t *testing.T) {
+func TestServeIsPersistentAndCarriesTheRuntimeEventStream(t *testing.T) {
 	rt := newRuntime(t, answering{})
-	var out bytes.Buffer
-	res, err := Run(rt, Options{Prompt: "hello", Timeout: 30 * time.Second, Out: &out})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if res.StopReason != "done" {
-		t.Fatalf("stop_reason = %q, want done", res.StopReason)
-	}
-	if res.Turns < 1 {
-		t.Fatalf("turns = %d, want >= 1", res.Turns)
-	}
-	if res.AgentID == "" {
-		t.Fatal("agent_id is empty")
-	}
-	if res.WallS <= 0 {
-		t.Fatalf("wall_s = %v, want > 0", res.WallS)
-	}
-	if !strings.Contains(res.Final, "SLBH_HEADLESS_OK") {
-		t.Fatalf("final = %q, want the assistant text", res.Final)
-	}
-	if got := out.String(); !strings.Contains(got, "SLBH_HEADLESS_OK") {
-		t.Fatalf("event stream did not carry the reply: %q", got)
-	}
-	if res.Runtime == "" || res.Transcript == "" {
-		t.Fatalf("runtime = %q, transcript = %q: a caller must be able to find the record", res.Runtime, res.Transcript)
-	}
-	if !strings.HasSuffix(res.Transcript, "transcript.jsonl") || !strings.Contains(res.Transcript, res.AgentID) {
-		t.Fatalf("transcript = %q, want the seat's transcript.jsonl", res.Transcript)
-	}
-}
-
-// A streamed reply is one turn, not one per delta; Final is the whole reply; and output
-// tokens come from completion_tokens, the field the OpenAI wire shape actually carries.
-func TestCountsAreRoundsAndWholeRepliesNotStreamDeltas(t *testing.T) {
-	rt := newRuntime(t, chunked{})
-	res, err := Run(rt, Options{Prompt: "hello", Timeout: 30 * time.Second})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if res.Turns != 1 {
-		t.Fatalf("turns = %d, want 1 for a single streamed reply", res.Turns)
-	}
-	if res.Final != "PONG" {
-		t.Fatalf("final = %q, want the whole reply PONG", res.Final)
-	}
-	if res.PromptTokens != 11 || res.OutputTokens != 5 {
-		t.Fatalf("tokens = (%d, %d), want (11, 5)", res.PromptTokens, res.OutputTokens)
-	}
-}
-
-func TestRunStopsAtTheWallCap(t *testing.T) {
-	rt := newRuntime(t, stalling{})
-	res, err := Run(rt, Options{Prompt: "hello", Timeout: 150 * time.Millisecond})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if res.StopReason != "wall_cap" {
-		t.Fatalf("stop_reason = %q, want wall_cap", res.StopReason)
-	}
-}
-
-// A provider that refuses ends the seat's turn without a turn_done. Run must return then,
-// with the reason named, instead of sitting out the whole wall cap; a bench caller with a
-// fifteen-minute cap would otherwise pay it in full for every refused request.
-func TestRunStopsWhenTheSeatFails(t *testing.T) {
-	rt := newRuntime(t, refusing{})
-	res, err := Run(rt, Options{Prompt: "hello", Timeout: 30 * time.Second})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if res.StopReason != "error" {
-		t.Fatalf("stop_reason = %q, want error", res.StopReason)
-	}
-	if res.Errors < 1 {
-		t.Fatalf("errors = %d, want >= 1", res.Errors)
-	}
-	if res.WallS >= 10 {
-		t.Fatalf("wall_s = %v, want well under the 30s cap", res.WallS)
-	}
-}
-
-func TestQuietSuppressesTheEventStreamButNotTheResult(t *testing.T) {
-	rt := newRuntime(t, answering{})
-	var out bytes.Buffer
-	res, err := Run(rt, Options{Prompt: "hello", Timeout: 30 * time.Second, Quiet: true, Out: &out})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if out.Len() != 0 {
-		t.Fatalf("quiet wrote %d bytes, want 0", out.Len())
-	}
-	if res.Turns < 1 {
-		t.Fatalf("turns = %d, want >= 1 even when quiet", res.Turns)
-	}
-}
-
-func TestJSONStreamIsOnePerLine(t *testing.T) {
-	rt := newRuntime(t, answering{})
-	var out bytes.Buffer
-	if _, err := Run(rt, Options{Prompt: "hello", Timeout: 30 * time.Second, JSON: true, Out: &out}); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
-		if line == "" {
-			continue
-		}
-		if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
-			t.Fatalf("not a JSON object per line: %q", line)
-		}
-	}
-}
-
-// Usage counts arrive as int in-process and as float64 when they have been through JSON.
-// Both must count, or token totals silently read zero on one of the two paths.
-func TestMetaIntAcceptsBothNumericShapes(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		meta map[string]any
-		want int
-		ok   bool
-	}{
-		{"int", map[string]any{"prompt_tokens": 7}, 7, true},
-		{"int64", map[string]any{"prompt_tokens": int64(7)}, 7, true},
-		{"float64", map[string]any{"prompt_tokens": float64(7)}, 7, true},
-		{"missing", map[string]any{}, 0, false},
-		{"nil", nil, 0, false},
-		{"wrong type", map[string]any{"prompt_tokens": "7"}, 0, false},
-	} {
-		got, ok := metaInt(tc.meta, "prompt_tokens")
-		if got != tc.want || ok != tc.ok {
-			t.Fatalf("%s: metaInt = (%d, %v), want (%d, %v)", tc.name, got, ok, tc.want, tc.ok)
-		}
-	}
-}
-
-func TestRunRejectsARuntimeWithNoSeat(t *testing.T) {
-	if _, err := Run(nil, Options{Prompt: "x"}); err == nil {
-		t.Fatal("want an error for a nil runtime")
-	}
-}
-
-func TestRunReturnsWhenTheRuntimeShutsDown(t *testing.T) {
-	// With no --timeout the deadline channel is nil, so shutdown must arrive on
-	// the seam's event stream. There is deliberately no second lifecycle
-	// channel for a front end to select on.
-	rt := newRuntime(t, stalling{})
-	type outcome struct {
-		res Result
-		err error
-	}
-	done := make(chan outcome, 1)
-	go func() {
-		res, err := Run(rt, Options{Prompt: "hello"})
-		done <- outcome{res, err}
-	}()
-	time.Sleep(100 * time.Millisecond)
-	_ = rt.Close()
+	inR, inW := io.Pipe()
+	var output bytes.Buffer
+	done := make(chan error, 1)
+	go func() { done <- Serve(context.Background(), rt, inR, &output, Options{}) }()
+	seatID := rt.Agents()[0].ID
+	writeRequest(t, inW, 1, "send_prompt", map[string]any{"agent_id": seatID, "prompt": "first"})
+	writeRequest(t, inW, 2, "send_prompt", map[string]any{"agent_id": seatID, "prompt": "second"})
+	time.Sleep(50 * time.Millisecond)
+	writeRequest(t, inW, 3, "close", map[string]any{})
+	_ = inW.Close()
 	select {
-	case got := <-done:
-		if got.err != nil {
-			t.Fatalf("Run returned an error on shutdown: %v", got.err)
-		}
-		if got.res.StopReason != "shutdown" {
-			t.Fatalf("stop reason %q, want shutdown", got.res.StopReason)
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not return after the runtime shut down")
+		t.Fatal("Serve did not stop after close")
+	}
+	messages := decodeMessages(t, output.Bytes())
+	if !hasResponseID(messages, 1) || !hasResponseID(messages, 2) || !hasResponseID(messages, 3) {
+		t.Fatalf("protocol responses missing: %v", messages)
+	}
+	if countEventMessages(messages) == 0 {
+		t.Fatalf("event stream was empty: %v", messages)
 	}
 }
 
-type blockedAfterDoRuntime struct {
-	seam.Runtime
-	afterDo chan struct{}
-	release chan struct{}
-}
-
-func (r *blockedAfterDoRuntime) Do(command seam.Command) (seam.Reply, error) {
-	reply, err := r.Runtime.Do(command)
-	close(r.afterDo)
-	<-r.release
-	return reply, err
-}
-
-func TestRunReturnsAfterShutdownWithAnUnreadEventBacklog(t *testing.T) {
-	rt := newRuntime(t, stalling{})
-	blocked := &blockedAfterDoRuntime{
-		Runtime: rt,
-		afterDo: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	type outcome struct {
-		res Result
-		err error
-	}
-	done := make(chan outcome, 1)
-	const wallCap = 5 * time.Second
-	started := time.Now()
+func TestServeInitialPromptAndQueries(t *testing.T) {
+	rt := newRuntime(t, answering{})
+	inR, inW := io.Pipe()
+	var output bytes.Buffer
+	done := make(chan error, 1)
 	go func() {
-		res, err := Run(blocked, Options{Prompt: "hello", Timeout: wallCap})
-		done <- outcome{res, err}
+		done <- Serve(context.Background(), rt, inR, &output, Options{InitialPrompt: "initial"})
 	}()
+	writeRequest(t, inW, 1, "initialize", map[string]any{})
+	writeRequest(t, inW, 2, "agents", map[string]any{})
+	writeRequest(t, inW, 3, "close", map[string]any{})
+	_ = inW.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	messages := decodeMessages(t, output.Bytes())
+	if !hasResponseID(messages, 1) || !hasResponseID(messages, 2) || !hasResponseID(messages, 3) {
+		t.Fatalf("query responses missing: %v", messages)
+	}
+}
 
-	select {
-	case <-blocked.afterDo:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Run did not send the prompt")
+func TestServeReportsProtocolErrorsWithoutEndingTheRuntime(t *testing.T) {
+	rt := newRuntime(t, stalling{})
+	input := strings.NewReader(`{"id":1,"method":"not_a_method","params":{}}
+{"id":2,"method":"close","params":{}}
+`)
+	var output strings.Builder
+	if err := Serve(context.Background(), rt, input, &output, Options{}); err != nil {
+		t.Fatalf("Serve: %v", err)
 	}
-	for i := 0; i < 128; i++ {
-		_, _ = rt.Do(seam.EmitStatusCommand{Kind: "status", Text: "fill"})
+	if !strings.Contains(output.String(), `"code":"request_failed"`) || !strings.Contains(output.String(), `"id":2`) {
+		t.Fatalf("protocol output = %q", output.String())
 	}
-	if err := rt.Close(); err != nil {
-		t.Fatal(err)
-	}
-	close(blocked.release)
+}
 
-	select {
-	case got := <-done:
-		if got.err != nil {
-			t.Fatalf("Run returned an error on shutdown: %v", got.err)
+func TestServeRejectsNilRuntime(t *testing.T) {
+	if err := Serve(context.Background(), nil, strings.NewReader("{}\n"), io.Discard, Options{}); err == nil {
+		t.Fatal("Serve(nil) succeeded")
+	}
+}
+
+func writeRequest(t *testing.T, w *io.PipeWriter, id int, method string, params map[string]any) {
+	t.Helper()
+	request := map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}
+	if err := json.NewEncoder(w).Encode(request); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+}
+
+func readUntilID(t *testing.T, decoder *json.Decoder, id int) []map[string]json.RawMessage {
+	t.Helper()
+	var messages []map[string]json.RawMessage
+	want := json.RawMessage(strconv.Itoa(id))
+	for {
+		var message map[string]json.RawMessage
+		if err := decoder.Decode(&message); err != nil {
+			t.Fatalf("decode protocol message: %v", err)
 		}
-		if got.res.StopReason != "shutdown" {
-			t.Fatalf("stop reason %q, want shutdown", got.res.StopReason)
+		messages = append(messages, message)
+		if string(message["id"]) == string(want) {
+			return messages
 		}
-		if elapsed := time.Since(started); elapsed >= wallCap/2 {
-			t.Fatalf("Run took %v, want well within wall cap %v", elapsed, wallCap)
+	}
+}
+
+func countAssistantEvents(messages []map[string]json.RawMessage) int {
+	count := 0
+	for _, message := range messages {
+		if string(message["method"]) != `"event"` {
+			continue
 		}
-	case <-time.After(wallCap):
-		t.Fatal("Run waited for its wall cap after the full event stream closed")
+		var event struct {
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal(message["params"], &event); err == nil && event.Kind == "assistant" {
+			count++
+		}
+	}
+	return count
+}
+
+func decodeMessages(t *testing.T, data []byte) []map[string]json.RawMessage {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	var messages []map[string]json.RawMessage
+	for {
+		var message map[string]json.RawMessage
+		err := decoder.Decode(&message)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("decode protocol output: %v", err)
+		}
+		messages = append(messages, message)
+	}
+	return messages
+}
+
+func hasResponseID(messages []map[string]json.RawMessage, id int) bool {
+	want := strconv.Itoa(id)
+	for _, message := range messages {
+		if string(message["id"]) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func countEventMessages(messages []map[string]json.RawMessage) int {
+	count := 0
+	for _, message := range messages {
+		if string(message["method"]) == `"event"` {
+			count++
+		}
+	}
+	return count
+}
+
+func readUntilEvent(t *testing.T, decoder *json.Decoder, kind string) []map[string]json.RawMessage {
+	t.Helper()
+	var messages []map[string]json.RawMessage
+	for {
+		var message map[string]json.RawMessage
+		if err := decoder.Decode(&message); err != nil {
+			t.Fatalf("decode event message: %v", err)
+		}
+		messages = append(messages, message)
+		if string(message["method"]) != `"event"` {
+			continue
+		}
+		var event struct {
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal(message["params"], &event); err == nil && event.Kind == kind {
+			return messages
+		}
 	}
 }

@@ -62,19 +62,21 @@ returns a copy: `Agents() []AgentSnapshot`, `JobSnapshots() []JobSnapshot`.
 they were reached through to change. No caller receives a live pointer into
 another subsystem.
 
-The seam stays **in-process**. No listener, no wire protocol, no daemon.
-The rules exist so that adding a transport later is a marshalling layer
-rather than a redesign — not because a transport is planned.
+The seam is in-process for the TUI and the Intern, and headless exposes the
+same seam as a persistent JSONL app-runtime protocol over stdin/stdout. There
+is still one Go binary and one runtime: the transport is only marshalling,
+not a second harness or daemon. A headless process stays alive for multiple
+commands and emits the runtime's ordered event stream as notifications.
 
 The test of whether the seam is real: the TUI, headless and the Intern's
 watcher can each be written against it while importing nothing else from
 `internal/harness`.
 
-Codex's app-server is the model for the *decomposition* and not for the
-vocabulary. Its method names are not copied. slbh is a client of that
-protocol and a server of its own; the two do not have to look alike, and
-slbh's own nouns — depth, layer instructions, routing policy, local routes
-— have no Codex equivalent.
+Codex's app-server is the model for the *decomposition* and the persistent
+frontend lifecycle, not a vocabulary requirement. slbh remains a client of
+that protocol for Codex leaves and a server of its own JSONL runtime protocol;
+the two do not have to share method names. slbh's own nouns — depth, layer
+instructions, routing policy, local routes — have no Codex equivalent.
 
 ## 4. Leaves
 
@@ -263,12 +265,12 @@ migration needed by the runtime's managed roster contract:
 | --- | --- | --- |
 | Codex leaf effort | `f6a29b8` | effort reaches a Codex leaf on every `turn/start` |
 | queries return copies | `6cb7af1` | JSON-tagged snapshots, `JobSnapshots()`, no `Jobs()`/`Seat()` |
-| the closed command set | `c511112` | `internal/seam`, eleven named commands through `Do`, headless on the seam; the event stream closes on Close |
+| the closed command set | `c511112` | `internal/seam`, eleven named commands through `Do`, persistent headless protocol on the seam; the event stream closes on Close |
 | TUI on the seam | `3265a3a` | the TUI imports only the seam; duplicate `Runtime` methods unexported |
 | Claude Code leaf | `adcec0e` | `claude_code` harness for Opus, plan-billed with the API-key variables scrubbed; live round trip passed |
 | durable org store | `0aa7b5f` | `internal/orgstore`: append-only inbox and request queue, flock, fsync, atomic cursor, torn-line repair |
 | subscribers and read tools | `246ac1e` | `Subscribe()` fan-out; `internal/readtools`; `intern.md` loaded by name |
-| the Intern | `7a06ec0` | `internal/intern` behind `--intern`, local routes only, nine tools with `ask_seat` its one move |
+| the Intern | `7a06ec0` | `internal/intern` behind the shared runtime frontend lifecycle and `--intern`, local routes only, nine tools with `ask_seat` its one move |
 | Secretary subcommands | `ed29397` | `slbh inbox`, `ack`, `request`, `requests`, `help`, with `--json`, no runtime constructed |
 | the one local tag | `4297deb`, `8820bc5` | leaf and Intern default `local/q27-UD-Q2_K_XL-64k` |
 | Secretary wake | `be09a05` | `internal/secretarywake` over `codex queue --thread <name>`; live wake of a real TUI passed |

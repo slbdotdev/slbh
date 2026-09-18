@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -11,39 +10,33 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/harness"
 	"github.com/slbdotdev/slbh/internal/headless"
-	"github.com/slbdotdev/slbh/internal/intern"
 	"github.com/slbdotdev/slbh/internal/orgcli"
+	"github.com/slbdotdev/slbh/internal/runtimeapp"
 	"github.com/slbdotdev/slbh/internal/tui"
 )
 
 const usage = `slbh - agent harness
 
   slbh                          start the TUI
-  slbh -p "do the thing"        run one turn headless and exit
-  slbh --prompt-file brief.md   same, with the prompt read from a file
+  slbh --headless                run the persistent JSONL runtime protocol
+  slbh -p "do the thing"        start headless with an initial Seat prompt
+  slbh --prompt-file brief.md   same, with the initial prompt read from a file
 
-Interactive flags:
-      --intern          run the read-only Intern watcher
+Runtime flags:
+      --headless          run the persistent JSONL runtime protocol
+      --intern            start the read-only Intern watcher in any frontend
+  -p, --prompt STRING      initial prompt for the Seat; implies --headless
+      --prompt-file PATH   initial prompt file; implies --headless
+      --workdir PATH       directory the agent works in (default: cwd)
+      --model SLUG         model for the runtime Seat
+      --effort LEVEL       reasoning effort for the runtime Seat
 
-Headless flags:
-  -p, --prompt STRING    prompt text; running with one implies headless
-      --prompt-file PATH read the prompt from a file ("-" for stdin)
-      --workdir PATH     directory the agent works in (default: cwd)
-      --model SLUG       model for the turn (default: configured seat model)
-      --effort LEVEL     thinking effort for the turn
-      --timeout DURATION wall cap, e.g. 15m; zero means none
-      --json             one JSON object per event on stdout
-  -q, --quiet            no event stream; only the final summary
-      --summary          print the run summary as JSON on exit
-
-Exit status: 0 turn completed, 1 error (the seat failed or could not start), 2 usage,
-124 wall cap reached.
+Exit status: 0 clean shutdown, 1 runtime or protocol error, 2 usage.
 `
 
 func main() {
@@ -56,19 +49,14 @@ func main() {
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 
 	var prompt, promptShort, promptFile, workdir, model, effort string
-	var timeout time.Duration
-	var asJSON, quiet, quietShort, summary, enableIntern bool
+	var headlessMode, enableIntern bool
 	fs.StringVar(&prompt, "prompt", "", "prompt text")
 	fs.StringVar(&promptShort, "p", "", "prompt text (short)")
 	fs.StringVar(&promptFile, "prompt-file", "", "read the prompt from a file")
 	fs.StringVar(&workdir, "workdir", "", "directory the agent works in")
-	fs.StringVar(&model, "model", "", "model for the turn")
-	fs.StringVar(&effort, "effort", "", "thinking effort for the turn")
-	fs.DurationVar(&timeout, "timeout", 0, "wall cap")
-	fs.BoolVar(&asJSON, "json", false, "one JSON object per event")
-	fs.BoolVar(&quiet, "quiet", false, "no event stream")
-	fs.BoolVar(&quietShort, "q", false, "no event stream (short)")
-	fs.BoolVar(&summary, "summary", false, "print the run summary as JSON")
+	fs.StringVar(&model, "model", "", "model for the runtime Seat")
+	fs.StringVar(&effort, "effort", "", "reasoning effort for the runtime Seat")
+	fs.BoolVar(&headlessMode, "headless", false, "run the persistent JSONL runtime protocol")
 	fs.BoolVar(&enableIntern, "intern", false, "run the read-only Intern watcher")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -77,32 +65,25 @@ func main() {
 	if promptShort != "" {
 		prompt = promptShort
 	}
-	quiet = quiet || quietShort
-
 	// Whether a prompt flag was SUPPLIED, not whether it is non-empty: `slbh -p ""` is a
 	// caller who meant to run headless and got the prompt wrong, and silently opening the
 	// TUI instead would strand a script on a terminal it does not have.
 	supplied := false
-	internSupplied := false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "prompt", "p", "prompt-file":
 			supplied = true
-		case "intern":
-			internSupplied = true
 		}
 	})
+	if headlessMode {
+		supplied = true
+	}
 
 	// No prompt flag at all means the interactive TUI, exactly as before.
 	if !supplied {
 		runTUI(enableIntern)
 		return
 	}
-	if internSupplied {
-		fmt.Fprintln(os.Stderr, "slbh: --intern is available only in interactive mode")
-		os.Exit(2)
-	}
-
 	if promptFile != "" {
 		if prompt != "" {
 			fmt.Fprintln(os.Stderr, "slbh: --prompt and --prompt-file are mutually exclusive")
@@ -121,14 +102,14 @@ func main() {
 		}
 		prompt = string(b)
 	}
-	if strings.TrimSpace(prompt) == "" {
+	if supplied && !headlessMode && strings.TrimSpace(prompt) == "" {
 		fmt.Fprintln(os.Stderr, "slbh: the prompt is empty")
 		os.Exit(2)
 	}
-	os.Exit(runHeadless(prompt, workdir, model, effort, timeout, asJSON, quiet, summary))
+	os.Exit(runHeadless(prompt, workdir, model, effort, enableIntern))
 }
 
-func runHeadless(prompt, workdir, model, effort string, timeout time.Duration, asJSON, quiet, summary bool) int {
+func runHeadless(prompt, workdir, model, effort string, enableIntern bool) int {
 	// The runtime takes its working directory from the process, so chdir before New.
 	if workdir != "" {
 		if err := os.Chdir(workdir); err != nil {
@@ -149,7 +130,7 @@ func runHeadless(prompt, workdir, model, effort string, timeout time.Duration, a
 		cfg.SeatEffort = effort
 	}
 	// Fail fast and say what to do about it. Without a policy every route
-	// refuses, and a headless run has no /models menu to author one in, so
+	// refuses, and a headless runtime has no /models menu to author one in, so
 	// discovering that as a wrapped error at the first inference round is a
 	// worse report than refusing up front. This is a usage problem, not a
 	// runtime error, so it takes exit 2.
@@ -178,32 +159,18 @@ func runHeadless(prompt, workdir, model, effort string, timeout time.Duration, a
 		return 1
 	}
 	defer rt.Close()
-
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if enableIntern {
+		stopIntern := runtimeapp.StartIntern(ctx, rt)
+		defer stopIntern()
+	}
 	go func() {
-		<-signals
-		_ = rt.Close()
+		<-ctx.Done()
+		_ = os.Stdin.Close()
 	}()
-
-	res, err := headless.Run(rt, headless.Options{
-		Prompt:  prompt,
-		Timeout: timeout,
-		JSON:    asJSON,
-		Quiet:   quiet,
-		Out:     os.Stdout,
-	})
-	if err != nil {
+	if err := headless.Serve(ctx, rt, os.Stdin, os.Stdout, headless.Options{InitialPrompt: prompt}); err != nil {
 		fmt.Fprintln(os.Stderr, "slbh:", err)
-		return 1
-	}
-	if summary || quiet {
-		printSummary(res)
-	}
-	switch res.StopReason {
-	case "wall_cap":
-		return 124
-	case "error":
 		return 1
 	}
 	return 0
@@ -217,11 +184,8 @@ func runTUI(enableIntern bool) {
 	}
 	defer runtime.Close()
 	if enableIntern {
-		go func() {
-			if err := intern.Run(context.Background(), runtime, intern.Options{}); err != nil {
-				fmt.Fprintln(os.Stderr, "slbh:", err)
-			}
-		}()
+		stopIntern := runtimeapp.StartIntern(context.Background(), runtime)
+		defer stopIntern()
 	}
 
 	signals := make(chan os.Signal, 1)
@@ -242,12 +206,4 @@ func runTUI(enableIntern bool) {
 
 func readAll(f *os.File) ([]byte, error) {
 	return io.ReadAll(f)
-}
-
-func printSummary(res headless.Result) {
-	b, err := json.Marshal(res)
-	if err != nil {
-		return
-	}
-	fmt.Println(string(b))
 }
