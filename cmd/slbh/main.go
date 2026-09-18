@@ -18,6 +18,7 @@ import (
 	"github.com/slbdotdev/slbh/internal/harness"
 	"github.com/slbdotdev/slbh/internal/headless"
 	"github.com/slbdotdev/slbh/internal/intern"
+	"github.com/slbdotdev/slbh/internal/orgcli"
 	"github.com/slbdotdev/slbh/internal/tui"
 )
 
@@ -46,6 +47,10 @@ Exit status: 0 turn completed, 1 error (the seat failed or could not start), 2 u
 `
 
 func main() {
+	if len(os.Args) > 1 && orgcli.IsCommand(os.Args[1]) {
+		os.Exit(orgcli.Run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	}
+
 	fs := flag.NewFlagSet("slbh", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
