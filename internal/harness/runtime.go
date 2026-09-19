@@ -327,14 +327,19 @@ func (r *Runtime) ModelGuidance() string {
 		branches = append(branches, "no provider catalog loaded; use the configured default or honor an explicit user model request")
 	}
 	defaults := fmt.Sprintf("configured application defaults are seat=%q, subagent=%q, leaf=%q", cfg.SeatModel, cfg.SubagentModel, cfg.LeafModel)
-	return "Model guidance: approved native models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". " + rosterLaunchGuidance(cfg.Roster) + " Every launch must name its roster role. The depth-0 Seat may launch only the roster's depth-1 Manager; only a native depth-1 Manager may launch the roster's depth-2 roles. Every depth-2 launch must pass a non-empty model explicitly; configured subagent and leaf defaults are never substituted. Each launch is checked against the selected role's roster harness and pinned or approved model set. Per-launch effort is honored; omission uses the roster role's effort."
+	return "Model guidance: approved native models are " + approved + ". " + defaults + ". Available provider models: " + strings.Join(branches, "; ") + ". " + rosterLaunchGuidance(cfg.Roster) + " Every launch must name its roster role. The depth-0 Seat may launch only the roster's depth-1 Manager; only a native depth-1 Manager may launch the roster's depth-2 roles. Every depth-2 launch must pass a non-empty model explicitly; configured subagent and leaf defaults are never substituted. Each launch is checked against the selected role's roster harness and pinned or approved model set. Per-launch effort is honored; omission uses the model route's defaultEffort, else the roster role's effort."
 }
 
 func rosterLaunchGuidance(roster config.Roster) string {
 	if roster.Source.Kind != config.RosterManaged {
 		return "Managed roster unavailable (" + roster.Source.Describe() + "); child launches refuse."
 	}
-	roles := append(roster.ChildRoles("seat", 1), roster.ChildRoles("manager", 2)...)
+	return "Managed roster launch roles: " + launchRoleList(append(roster.ChildRoles("seat", 1), roster.ChildRoles("manager", 2)...)) + "."
+}
+
+// launchRoleList renders roles as name=depth-N/harness/model, in the order
+// given, for the launch guidance.
+func launchRoleList(roles []config.Role) string {
 	parts := make([]string, 0, len(roles))
 	for _, role := range roles {
 		model := role.Model
@@ -347,7 +352,14 @@ func rosterLaunchGuidance(roster config.Roster) string {
 		}
 		parts = append(parts, fmt.Sprintf("%s=depth-%d/%s/%s", role.Name, role.Depth, harness, model))
 	}
-	return "Managed roster launch roles: " + strings.Join(parts, "; ") + "."
+	return strings.Join(parts, "; ")
+}
+
+// childRoles lists the roster roles an agent may launch; empty for a leaf.
+func (r *Runtime) childRoles(agent *Agent) []config.Role {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.config.Roster.ChildRoles(agent.Role, agent.Depth+1)
 }
 func (r *Runtime) seat() *Agent {
 	r.mu.RLock()

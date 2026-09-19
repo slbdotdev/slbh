@@ -101,6 +101,12 @@ func (r *Runtime) toolDefinitions(agentID string) []provider.Tool {
 		if definitions[index].Name != "launch_subagent" {
 			continue
 		}
+		if len(roleNames) == 0 {
+			// Nothing to launch: a leaf, or no managed roster. Offering the
+			// tool with an empty role enum only costs context on every request.
+			definitions = append(definitions[:index], definitions[index+1:]...)
+			break
+		}
 		properties, _ := definitions[index].Parameters["properties"].(map[string]any)
 		roleSchema, _ := properties["role"].(map[string]any)
 		roleSchema["enum"] = roleNames

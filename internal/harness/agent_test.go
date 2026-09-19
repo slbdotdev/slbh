@@ -120,24 +120,58 @@ func TestCompactMessagesPreservesTurnBoundary(t *testing.T) {
 
 func TestSystemPromptDirectsAsyncChildHandling(t *testing.T) {
 	r := testRuntime(t)
-	prompt := systemPrompt(r.seat())
+	seat := r.seat()
+	prompt := systemPrompt(seat)
 	for _, phrase := range []string{
-		"launch_subagent returns immediately",
-		"do not block this turn waiting for a child",
-		"Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops",
-		"end your turn",
-		"mandatory mid-turn steer",
-		"next API/tool call boundary",
-		"In-flight API and tool calls finish normally",
-		"Deferring a message until the end of a turn is a failure",
-		"responsible for ending each subagent with end_subagent",
-		"subagents stay alive indefinitely",
-		"three relevant words joined by hyphens",
-		"guidance, not a validation rule",
+		"You are seat, a native agent in slbh runtime " + r.ID() + ": roster role seat, depth 0.",
+		"Keep your thinking brief and focused",
+		"use a tool to find out rather than reasoning at length",
+		"next tool or API call boundary",
+		"never defer one to the end",
+		"is sent once and never repeated",
+		"Never sleep, poll, or run wait loops",
+		"end your turn and you will be woken",
+		"End each subagent with end_subagent",
+		"Roles you can launch: manager=depth-1/native/test-manager.",
 	} {
 		if !strings.Contains(prompt, phrase) {
-			t.Fatalf("system prompt missing async guidance %q: %s", phrase, prompt)
+			t.Fatalf("seat system prompt missing %q: %s", phrase, prompt)
 		}
+	}
+	if strings.Contains(prompt, "Keep answers actionable and concise") {
+		t.Fatal("seat system prompt still carries the dropped answer-style line")
+	}
+
+	// A leaf launches nothing: no launch guidance and no launch tool.
+	manager, err := r.launchSubagentSpec(seat.ID, LaunchSpec{Title: "manager", Role: "manager", Brief: "inspect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := r.launchSubagentSpec(manager.ID, LaunchSpec{Title: "leaf", Role: "flex", Model: "test-leaf", Brief: "inspect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := systemPrompt(manager); !strings.Contains(got, "Roles you can launch: flex=depth-2/native/one of [") {
+		t.Fatalf("manager prompt does not list its depth-2 roles: %s", got)
+	}
+	leafPrompt := systemPrompt(leaf)
+	if strings.Contains(leafPrompt, "Roles you can launch") || strings.Contains(leafPrompt, "end_subagent") {
+		t.Fatalf("leaf prompt carries launch guidance: %s", leafPrompt)
+	}
+	if !strings.Contains(leafPrompt, "Keep your thinking brief and focused") {
+		t.Fatalf("leaf prompt lost the shared guidance: %s", leafPrompt)
+	}
+	for _, tool := range r.toolDefinitions(leaf.ID) {
+		if tool.Name == "launch_subagent" {
+			t.Fatal("leaf was offered launch_subagent with nothing to launch")
+		}
+	}
+	offered := false
+	for _, tool := range r.toolDefinitions(manager.ID) {
+		offered = offered || tool.Name == "launch_subagent"
+	}
+	if !offered {
+		t.Fatal("manager lost launch_subagent")
 	}
 }
 

@@ -889,16 +889,21 @@ func systemPrompt(a *Agent) string {
 	return prompt
 }
 
-// bakedSystemPrompt is the harness-mechanics half, authored as one string.
-//
-// It used to be a legacy literal patched by two strings.Replace calls to
-// insert quick_py and long_py. The patches are folded in here: a prompt
-// assembled by search-and-replace has no single readable source, and layering
-// a managed tier on top of a patched string would have made that permanent.
-// The fold was verified byte-identical to the patched output before the
-// legacy form was removed.
+// bakedSystemPrompt is the harness-mechanics half: identity, how to think,
+// how messages arrive, and for a launcher how subagents behave. It states
+// only what the tool descriptions do not; launch rules, message addressing
+// and job-warning details live on the tools themselves.
 func bakedSystemPrompt(a *Agent) string {
-	return fmt.Sprintf("You are %s, an agent in slbh runtime %s. Your frozen roster role is %s and runtime depth is %d. Show reasoning and tool activity as events. Keep answers actionable and concise. Delegated work is asynchronous: launch_subagent returns immediately, so do not block this turn waiting for a child. Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops to watch a child. Continue useful independent work if there is any; otherwise end your turn. Every message, including every [result from ...] message and completed long_job/long_py output, is a mandatory mid-turn steer: read and act on it during your current work. A [warning from long_job ...] or [warning from long_py ...] message means a background job you started has passed its warn_after_seconds and is still running; it is a decision point for you alone. Kill it with kill_job, leave it running and take its result when it finishes, or carry on with other work. It is the only warning that job will send, nothing escalates it, and deciding to keep waiting is a valid decision. Messages enter context in FIFO order at the next API/tool call boundary; idle agents wake immediately. In-flight API and tool calls finish normally. Preserve all inference output and tool results; already-produced tool calls execute in order. Deferring a message until the end of a turn is a failure, never a delivery mode. Use msg_subagent to message any agent by ID, including your parent or siblings. As a parent, choose each subagent's title: use three relevant words joined by hyphens, such as inspect-api-cache. This is guidance, not a validation rule. As a parent, you are responsible for ending each subagent with end_subagent when its task is fully complete; subagents stay alive indefinitely so they can receive follow-up work. %s", a.Title, a.runtime.ID(), a.Role, a.Depth, a.runtime.ModelGuidance())
+	prompt := fmt.Sprintf("You are %s, a native agent in slbh runtime %s: roster role %s, depth %d.", a.Title, a.runtime.ID(), a.Role, a.Depth) +
+		"\n\nKeep your thinking brief and focused, moving directly to the next action or conclusion without unnecessary elaboration. When a question can be settled by looking — reading a file, running a command, checking a result — use a tool to find out rather than reasoning at length about what is likely true." +
+		"\n\nMessages reach you at your next tool or API call boundary, or wake you if you are idle: steers from the owner or other agents, subagent results, and background job output. Act on each in the current turn; never defer one to the end. A warning that a job or subagent is still running is sent once and never repeated. Decide then: kill or end it, keep waiting for its result, or do other work."
+	// Launch guidance only for an agent that has roles to launch. A leaf
+	// cannot launch anything, and the rules themselves are in the
+	// launch_subagent description and enforced at launch.
+	if roles := a.runtime.childRoles(a); len(roles) > 0 {
+		prompt += "\n\nSubagents run asynchronously and report back as messages. Never sleep, poll, or run wait loops to watch one; if there is no other useful work, end your turn and you will be woken. End each subagent with end_subagent once its work is complete. Roles you can launch: " + launchRoleList(roles) + "."
+	}
+	return prompt
 }
 
 // maxToolErrorOutput bounds the output carried back with a failing tool call. A five-second

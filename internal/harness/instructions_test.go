@@ -129,18 +129,17 @@ func TestSystemPromptDeliversOnlyThisAgentsLayer(t *testing.T) {
 }
 
 // The managed document is appended to the mechanics, never substituted for
-// them. A leaf that received only org policy would lose the async delegation
-// contract and the tool prohibitions.
+// them. A leaf that received only org policy would lose the thinking and
+// message-handling guidance every native agent shares.
 func TestSystemPromptKeepsBakedMechanicsAlongsideTheLayerDocument(t *testing.T) {
 	r := runtimeWithInstructions(t, allThreeDocs())
 	for _, depth := range []int{0, 1, 2} {
 		agent := agentAtDepth(t, r, depth)
 		prompt := systemPrompt(agent)
 		for _, mechanic := range []string{
-			"launch_subagent returns immediately",
-			"Do not use quick_bash, long_job, quick_py, long_py, sleep, polling, or shell wait loops",
-			"mandatory mid-turn steer",
-			"Model guidance: approved native models are",
+			"Keep your thinking brief and focused",
+			"next tool or API call boundary",
+			"never defer one to the end",
 		} {
 			if !strings.Contains(prompt, mechanic) {
 				t.Fatalf("depth %d prompt lost baked mechanic %q", depth, mechanic)
