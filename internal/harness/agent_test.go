@@ -87,11 +87,11 @@ func TestContextEstimateAnchorsOnReportedPromptTokens(t *testing.T) {
 
 func TestCompactMessagesPreservesTurnBoundary(t *testing.T) {
 	call := provider.ToolCall{ID: "call-1", Type: "function"}
-	call.Function.Name = "quick_bash"
+	call.Function.Name = "bash"
 	history := []provider.Message{
 		{Role: "user", Content: "old request"},
 		{Role: "assistant", ToolCalls: []provider.ToolCall{call}},
-		{Role: "tool", ToolCallID: "call-1", Name: "quick_bash", Content: "old result"},
+		{Role: "tool", ToolCallID: "call-1", Name: "bash", Content: "old result"},
 		{Role: "user", Content: "recent request"},
 		{Role: "assistant", Content: "recent answer"},
 		{Role: "user", Content: "latest request"},

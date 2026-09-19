@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -22,11 +23,14 @@ const (
 )
 
 type Spec struct {
-	Author   string
-	Script   string
-	Command  []string
-	ToolName string
-	Dir      string
+	Author      string
+	Script      string
+	Command     []string
+	Interpreter string
+	ScriptRoot  string
+	Inline      bool
+	ToolName    string
+	Dir         string
 	// WarnAfter is the one timer a job has, and it warns exactly one party:
 	// the agent named in Author, the agent that started the job. When it
 	// elapses with the job still running, the manager hands the warning
@@ -57,7 +61,8 @@ type Snapshot struct {
 	StderrBytes int
 	// WarnAfter is the interval the warning was armed for, carried so the
 	// message delivered to the authoring agent can name it.
-	WarnAfter time.Duration
+	WarnAfter  time.Duration
+	ScriptPath string
 }
 
 type Job struct {
@@ -75,15 +80,20 @@ type Job struct {
 	// command's own cmd.Stdout and cmd.Stderr rather than copies taken after
 	// cmd.Wait. They carry their own mutex and are never guarded by mu: the
 	// exec copy goroutine writes them while the job runs and Output reads them
-	// at any time, including mid-run, which is the whole point of read_job.
+	// at any time, including mid-run, which is the whole point of job read.
 	// Each is a leaf lock, taken under mu by snapshotLocked and never the other
 	// way round.
-	stdout *limitedBuffer
-	stderr *limitedBuffer
-	cancel context.CancelFunc
-	done   chan struct{}
-	cmd    *exec.Cmd
-	log    *logx.JSONL
+	stdout       *limitedBuffer
+	stderr       *limitedBuffer
+	cancel       context.CancelFunc
+	done         chan struct{}
+	exited       chan struct{}
+	cmd          *exec.Cmd
+	closeProcess func()
+	killProcess  func() error
+	inline       bool
+	log          *logx.JSONL
+	scriptPath   string
 }
 
 func (j *Job) Snapshot() Snapshot {
@@ -122,12 +132,12 @@ func (j *Job) runningSnapshot() (Snapshot, bool) {
 }
 
 func (j *Job) snapshotLocked() Snapshot {
-	return Snapshot{ID: j.id, Author: j.author, Script: j.script, ToolName: j.toolName, Status: j.status, Started: j.started, Finished: j.finished, ExitCode: j.exitCode, StdoutBytes: j.stdout.Len(), StderrBytes: j.stderr.Len(), WarnAfter: j.warnAfter}
+	return Snapshot{ID: j.id, Author: j.author, Script: j.script, ToolName: j.toolName, Status: j.status, Started: j.started, Finished: j.finished, ExitCode: j.exitCode, StdoutBytes: j.stdout.Len(), StderrBytes: j.stderr.Len(), WarnAfter: j.warnAfter, ScriptPath: j.scriptPath}
 }
 
 // Output returns everything captured from the job's two streams so far. It is
 // valid while the job is still running and returns what has been captured up to
-// that instant, which is what read_job answers with; it does not wait for the
+// that instant, which is what job read answers with; it does not wait for the
 // job to finish. Until 2026-09-15 the buffers it reads were filled only after
 // cmd.Wait returned, so a live job answered with two empty strings.
 //
@@ -138,7 +148,8 @@ func (j *Job) Output() (string, string) {
 	return j.stdout.String(), j.stderr.String()
 }
 
-func (j *Job) Done() <-chan struct{} { return j.done }
+func (j *Job) Done() <-chan struct{}   { return j.done }
+func (j *Job) Exited() <-chan struct{} { return j.exited }
 
 func (j *Job) Kill() error {
 	j.mu.Lock()
@@ -148,8 +159,21 @@ func (j *Job) Kill() error {
 	}
 	cancel := j.cancel
 	cmd := j.cmd
+	killProcess := j.killProcess
 	j.status = Killed
 	j.mu.Unlock()
+	// The tree kill goes first: cancel kills only the top process, and once it
+	// is dead the wait goroutine may release the platform process handle.
+	if killProcess != nil {
+		err := killProcess()
+		if cancel != nil {
+			cancel()
+		}
+		if err != nil && cmd != nil {
+			return killCommand(cmd)
+		}
+		return err
+	}
 	if cancel != nil {
 		cancel()
 	}
@@ -220,9 +244,14 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 	if spec.Script == "" {
 		return nil, fmt.Errorf("job script is empty")
 	}
+	if spec.Interpreter == "" && len(spec.Command) == 0 {
+		spec.Interpreter = "bash"
+	}
 	ctx, cancel := context.WithCancel(parent)
 	var cmd *exec.Cmd
 	var err error
+	var scriptPath, tempRoot string
+	jobID := id.New("job")
 	if len(spec.Command) > 0 {
 		if spec.Command[0] == "" {
 			cancel()
@@ -231,9 +260,25 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 		cmd = exec.CommandContext(ctx, spec.Command[0], spec.Command[1:]...)
 		cmd.Dir = spec.Dir
 	} else {
-		cmd, err = shellCommand(ctx, spec.Script, spec.Dir)
+		var root string
+		root = spec.ScriptRoot
+		if root == "" {
+			tempRoot, err = os.MkdirTemp("", "slbh-job-")
+			if err != nil {
+				cancel()
+				return nil, err
+			}
+			root = tempRoot
+		}
+		scriptPath, err = writeScript(root, jobID, spec.Interpreter, spec.Script)
+		if err == nil {
+			cmd, err = scriptCommand(ctx, spec.Interpreter, scriptPath, spec.Dir)
+		}
 	}
 	if err != nil {
+		if tempRoot != "" {
+			_ = os.RemoveAll(tempRoot)
+		}
 		cancel()
 		return nil, err
 	}
@@ -243,7 +288,7 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 	if m.logger != nil {
 		log = m.logger(spec.Author)
 	}
-	job := &Job{id: id.New("job"), author: spec.Author, script: spec.Script, toolName: spec.ToolName, status: Running, started: time.Now().UTC(), warnAfter: spec.WarnAfter, stdout: &limitedBuffer{}, stderr: &limitedBuffer{}, cancel: cancel, done: make(chan struct{}), cmd: cmd, log: log}
+	job := &Job{id: jobID, author: spec.Author, script: spec.Script, toolName: spec.ToolName, status: Running, started: time.Now().UTC(), warnAfter: spec.WarnAfter, stdout: &limitedBuffer{}, stderr: &limitedBuffer{}, cancel: cancel, done: make(chan struct{}), exited: make(chan struct{}), cmd: cmd, log: log, scriptPath: scriptPath, inline: spec.Inline}
 	cmd.Stdout, cmd.Stderr = job.stdout, job.stderr
 	// Registration, the closed check and the warning count are one acquisition.
 	// A Start that lands after Close has begun would otherwise Add to a
@@ -276,10 +321,25 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 		m.mu.Lock()
 		delete(m.jobs, job.id)
 		m.mu.Unlock()
+		if tempRoot != "" {
+			_ = os.RemoveAll(tempRoot)
+		}
 		return nil, err
 	}
+	// The job is already registered, so Kill can reach it from another
+	// goroutine; the process hooks are published under the job lock that Kill
+	// reads them under.
+	closeProcess, killProcess, err := processStarted(cmd)
+	if err != nil {
+		// The process is already registered and must still be reaped. Keep the
+		// job alive and use the platform fallback kill path if needed.
+		closeProcess, killProcess = nil, nil
+	}
+	job.mu.Lock()
+	job.closeProcess, job.killProcess = closeProcess, killProcess
+	job.mu.Unlock()
 	if job.log != nil {
-		_ = job.log.Append(logx.Entry{Agent: spec.Author, Kind: "job_start", Text: spec.Script, Metadata: map[string]any{"job": job.id}})
+		_ = job.log.Append(logx.Entry{Agent: spec.Author, Kind: "job_start", Text: spec.Script, Metadata: map[string]any{"job": job.id, "script_path": scriptPath}})
 	}
 	if warn {
 		go func() {
@@ -339,15 +399,23 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 			}
 		}
 		job.finished = time.Now().UTC()
+		inline := job.inline
+		close(job.exited)
 		job.mu.Unlock()
 		cancel()
+		if job.closeProcess != nil {
+			job.closeProcess()
+		}
+		if tempRoot != "" {
+			_ = os.RemoveAll(tempRoot)
+		}
 		if job.log != nil {
 			_ = job.log.Append(logx.Entry{Agent: spec.Author, Kind: "job_end", Metadata: map[string]any{"job": job.id, "status": job.Snapshot().Status, "exit_code": job.Snapshot().ExitCode}})
 		}
 		m.mu.RLock()
 		handler := m.onComplete
 		m.mu.RUnlock()
-		if handler != nil {
+		if handler != nil && !inline {
 			stdoutText, stderrText := job.Output()
 			handler(job.Snapshot(), stdoutText, stderrText)
 		}
@@ -360,6 +428,26 @@ func (m *Manager) Start(parent context.Context, spec Spec) (*Job, error) {
 		close(job.done)
 	}()
 	return job, nil
+}
+
+// Wait returns a finished result, or marks a still-running job for exactly-once
+// background delivery when the deadline expires.
+func (m *Manager) Wait(j *Job, d time.Duration) (Snapshot, string, string, bool) {
+	if d > 0 {
+		timer := time.NewTimer(d)
+		select {
+		case <-j.exited:
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.status == Running {
+		j.inline = false
+		return j.snapshotLocked(), j.stdout.String(), j.stderr.String(), true
+	}
+	return j.snapshotLocked(), j.stdout.String(), j.stderr.String(), false
 }
 
 func (m *Manager) List() []Snapshot {

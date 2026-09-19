@@ -36,7 +36,7 @@ func TestManagerRunsAndCapturesOutput(t *testing.T) {
 }
 
 // TestJobOutputIsReadableWhileRunning is the regression test for the defect
-// read_job carried until 2026-09-15: Job.Output read buffers that the wait
+// job read carried until 2026-09-15: Job.Output read buffers that the wait
 // goroutine filled only after cmd.Wait returned, so an agent reading a live job
 // got {"stdout":"","stderr":""} and decided on nothing. The test reads the job
 // mid-run on purpose — any test that reads after Done() passes against the
@@ -48,9 +48,6 @@ func TestJobOutputIsReadableWhileRunning(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	script := "echo live-stdout; echo live-stderr 1>&2; sleep 30"
-	if runtime.GOOS == "windows" {
-		script = "echo live-stdout & echo live-stderr 1>&2 & ping 127.0.0.1 -n 30 > nul"
-	}
 	job, err := m.Start(ctx, Spec{Author: "agent-test", Script: script})
 	if err != nil {
 		t.Fatal(err)
@@ -98,9 +95,6 @@ func TestJobOutputRacesTheWriter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	script := "i=1; while [ $i -le 400 ]; do echo line-$i; echo err-$i 1>&2; i=$((i+1)); done"
-	if runtime.GOOS == "windows" {
-		script = "for /l %i in (1,1,400) do @(echo line-%i & echo err-%i 1>&2)"
-	}
 	job, err := m.Start(ctx, Spec{Author: "agent-test", Script: script})
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +139,7 @@ func TestManagerCompletionHandlerReceivesFinishedOutput(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	job, err := m.Start(ctx, Spec{Author: "agent-test", Script: "echo completion-stdout & echo completion-stderr 1>&2", ToolName: "long_py"})
+	job, err := m.Start(ctx, Spec{Author: "agent-test", Script: "echo completion-stdout & echo completion-stderr 1>&2", ToolName: "bash"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +157,7 @@ func TestManagerCompletionHandlerReceivesFinishedOutput(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Done did not close after the completion handler ran")
 	}
-	if got.ID != job.Snapshot().ID || got.Status != Complete || got.ToolName != "long_py" {
+	if got.ID != job.Snapshot().ID || got.Status != Complete || got.ToolName != "bash" {
 		t.Fatalf("snapshot=%#v job=%#v", got, job.Snapshot())
 	}
 	if !strings.Contains(stdout, "completion-stdout") || !strings.Contains(stderr, "completion-stderr") {
@@ -176,9 +170,6 @@ func TestManagerKill(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	script := "sleep 30"
-	if runtime.GOOS == "windows" {
-		script = "ping 127.0.0.1 -n 30 > nul"
-	}
 	job, err := m.Start(ctx, Spec{Author: "agent-test", Script: script})
 	if err != nil {
 		t.Fatal(err)
@@ -203,9 +194,6 @@ func TestManagerWarning(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	script := "sleep 2"
-	if runtime.GOOS == "windows" {
-		script = "ping 127.0.0.1 -n 3 > nul"
-	}
 	j, err := m.Start(ctx, Spec{Author: "agent-test", Script: script, WarnAfter: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +229,7 @@ func TestJobDoneMeansTheEndRecordIsAlreadyWritten(t *testing.T) {
 	m := NewManager(log)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	job, err := m.Start(ctx, Spec{Author: "agent-test", Script: "echo done-ordering", ToolName: "long_py"})
+	job, err := m.Start(ctx, Spec{Author: "agent-test", Script: "echo done-ordering", ToolName: "bash"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,9 +280,6 @@ func TestManagerCloseJoinsAWarningAlreadyInFlight(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	script := "sleep 5"
-	if runtime.GOOS == "windows" {
-		script = "ping 127.0.0.1 -n 6 > nul"
-	}
 	if _, err := m.Start(ctx, Spec{Author: "agent-test", Script: script, WarnAfter: 10 * time.Millisecond}); err != nil {
 		t.Fatal(err)
 	}
@@ -336,9 +321,6 @@ func TestManagerCloseDoesNotWaitForAnUnfiredWarning(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	script := "sleep 30"
-	if runtime.GOOS == "windows" {
-		script = "ping 127.0.0.1 -n 30 > nul"
-	}
 	if _, err := m.Start(ctx, Spec{Author: "agent-test", Script: script, WarnAfter: time.Hour}); err != nil {
 		t.Fatal(err)
 	}
@@ -413,9 +395,6 @@ func TestLimitedBufferCapsAcrossWrites(t *testing.T) {
 }
 
 func TestJobOutputIsCappedAndTheJobCompletes(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("uses a POSIX shell pipeline")
-	}
 	m := NewManager(nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

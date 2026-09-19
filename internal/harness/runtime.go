@@ -374,6 +374,12 @@ func (r *Runtime) seat() *Agent {
 
 func (r *Runtime) newAgent(title, role, parentID string, depth int, model, effort string) (*Agent, error) {
 	agent := newAgent(r, id.NewShort("agent"), title, role, parentID, depth, model, effort)
+	if err := os.MkdirAll(filepath.Join(r.runtimeDir, "agents", agent.ID, "scratch"), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Join(r.runtimeDir, "agents", agent.ID, "jobs"), 0o700); err != nil {
+		return nil, err
+	}
 	session, err := r.openAgentSession(agent.ID)
 	if err != nil {
 		return nil, err

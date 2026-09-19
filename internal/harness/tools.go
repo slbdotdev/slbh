@@ -2,12 +2,12 @@ package harness
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -24,21 +24,22 @@ const scientificPythonPackageNames = "numpy, scipy, pandas, matplotlib, sympy, r
 // ToolDefinitions is the stable tool prefix sent to every provider request.
 // Keep ordering stable: provider prefix caching keys include this schema.
 func ToolDefinitions() []provider.Tool {
+	return buildToolDefinitions()
+}
+
+func buildToolDefinitions() []provider.Tool {
 	stringArg := func(name string) map[string]any {
 		return map[string]any{"type": "object", "properties": map[string]any{name: map[string]any{"type": "string"}}, "required": []string{name}}
 	}
 	definitions := readtools.Definitions()
-	return append(definitions, []provider.Tool{
+	all := append(definitions, []provider.Tool{
 		{Name: "edit_file", Description: "Replace an exact string in a file atomically.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "old": map[string]any{"type": "string"}, "new": map[string]any{"type": "string"}}, "required": []string{"path", "old", "new"}}},
 		{Name: "apply_patch", Description: "Apply a unified patch to the working tree.", Parameters: stringArg("patch")},
 		{Name: "write_file", Description: "Create a new file; refuse to overwrite an existing file.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []string{"path", "content"}}},
-		{Name: "quick_bash", Description: "Run a foreground shell command with a five second timeout.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"script": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}}, "required": []string{"script"}}},
-		{Name: "long_job", Description: "Start a non-blocking background shell job. Returns its job id immediately; the job's captured output is delivered to you automatically when it finishes, and read_job returns what it has captured so far at any point while it runs.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"script": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "warn_after_seconds": map[string]any{"type": "integer", "description": "Seconds to wait before the harness sends YOU, the agent starting this job, one message saying the job is still running. That message is delivered into your context at the next API/tool call boundary and wakes you if you have gone idle. You are the audience: no human is asked to act on it. It is sent once and never repeated, and what to do about it is your decision: kill_job, keep waiting for the job's result, or carry on with other work. Defaults to 5 seconds."}}, "required": []string{"script"}}},
-		{Name: "quick_py", Description: fmt.Sprintf("Run Python code with the managed scientific environment (%s) and a five second timeout.", scientificPythonPackageNames), Parameters: map[string]any{"type": "object", "properties": map[string]any{"script": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}}, "required": []string{"script"}}},
-		{Name: "long_py", Description: fmt.Sprintf("Start a non-blocking background Python job in the managed scientific environment (%s). Returns its job id immediately; the job's captured output is delivered to you automatically when it finishes, and read_job returns what it has captured so far at any point while it runs.", scientificPythonPackageNames), Parameters: map[string]any{"type": "object", "properties": map[string]any{"script": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"}, "warn_after_seconds": map[string]any{"type": "integer", "description": "Seconds to wait before the harness sends YOU, the agent starting this job, one message saying the job is still running. That message is delivered into your context at the next API/tool call boundary and wakes you if you have gone idle. You are the audience: no human is asked to act on it. It is sent once and never repeated, and what to do about it is your decision: kill_job, keep waiting for the job's result, or carry on with other work. Defaults to 5 seconds."}}, "required": []string{"script"}}},
-		{Name: "list_jobs", Description: "List all jobs in this runtime.", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
-		{Name: "read_job", Description: "Read current stdout and stderr for a job.", Parameters: stringArg("job_id")},
-		{Name: "kill_job", Description: "Kill a job owned by the calling agent.", Parameters: stringArg("job_id")},
+		{Name: "bash", Description: commandDescription(job.BashDescription()), Parameters: commandParameters()},
+		{Name: "pwsh", Description: commandDescription("Run a PowerShell 7 (pwsh) script on Windows. exit code is the script's exit value, or the last native command's; 1 after a terminating error."), Parameters: commandParameters()},
+		{Name: "python", Description: commandDescription(fmt.Sprintf("Run a script with the managed scientific Python environment (%s).", scientificPythonPackageNames)), Parameters: commandParameters()},
+		{Name: "job", Description: "Manage jobs with action list, read, or kill. job_id is required for read and kill.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"action": map[string]any{"type": "string", "enum": []string{"list", "read", "kill"}}, "job_id": map[string]any{"type": "string"}}, "required": []string{"action"}}},
 		{Name: "list_subagents", Description: "List this runtime's agent tree.", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
 		{Name: "launch_subagent", Description: "Launch one child and return immediately. Every launch must name a frozen roster role, and the runtime enforces that role's declared depth, launcher, harness, and model constraints. The depth-0 Seat may launch only the manager role. Only a native Manager at depth 1 may launch a depth-2 role. Every depth-2 launch must pass a non-empty model explicitly; configured defaults are never substituted. A depth-2 leaf cannot launch anything. The parent chooses a relevant title made of three words joined by hyphens (for example inspect-api-cache); this is guidance only and is not enforced. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.", Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"title":              map[string]any{"type": "string", "description": "A relevant three-word dashed title chosen by the parent, such as inspect-api-cache. Guidance only; not enforced."},
@@ -53,6 +54,32 @@ func ToolDefinitions() []provider.Tool {
 		{Name: "msg_subagent", Description: "Send a mandatory mid-turn steer to any agent in this runtime, including your parent or siblings. FIFO delivery at the next API/tool call boundary; wakes idle recipients. Never waits for turn completion or cancels in-flight work.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"agent_id": map[string]any{"type": "string"}, "message": map[string]any{"type": "string"}}, "required": []string{"agent_id", "message"}}},
 		{Name: "end_subagent", Description: "Stop a child agent.", Parameters: stringArg("agent_id")},
 	}...)
+	allowed := map[string]bool{}
+	for _, name := range job.AvailableInterpreters() {
+		allowed[name] = true
+	}
+	filtered := all[:0]
+	for _, tool := range all {
+		if tool.Name == "bash" || tool.Name == "pwsh" || tool.Name == "python" {
+			if !allowed[tool.Name] {
+				continue
+			}
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
+}
+
+func commandParameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"script": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"},
+		"wait_seconds":       map[string]any{"type": "integer", "description": "Seconds to wait inline, clamped to 0..30; 0 backgrounds immediately. Defaults to 5."},
+		"warn_after_seconds": map[string]any{"type": "integer", "description": "Seconds before one warning to the agent that started the job; defaults to 60. Disabled when not greater than wait_seconds."},
+	}, "required": []string{"script"}}
+}
+
+func commandDescription(specific string) string {
+	return specific + " The script is written to a file and run; the call waits up to wait_seconds (default 5, maximum 30) and returns its output if it finishes. Otherwise it keeps running as a background job, the call returns its job id and output so far, and the full result is delivered automatically when it finishes."
 }
 
 func seatToolDefinitions() []provider.Tool {
@@ -155,52 +182,28 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 		return r.applyPatch(base, value(a.Values, "patch"))
 	case "write_file":
 		return r.writeFile(base, value(a.Values, "path"), value(a.Values, "content"))
-	case "quick_bash":
-		return r.quickBash(agentID, base, value(a.Values, "script"), valueDefault(a.Values, "cwd", base))
-	case "long_job":
-		seconds := intValue(a.Values, "warn_after_seconds")
-		if seconds == 0 {
-			seconds = 5
+	case "bash", "pwsh", "python":
+		return r.executeCommandTool(agentID, base, name, a.Values)
+	case "job":
+		action := value(a.Values, "action")
+		if action == "list" {
+			return jsonString(r.jobs.List())
 		}
-		workingDir, err := r.resolvePath(base, valueDefault(a.Values, "cwd", base))
-		if err != nil {
-			return "", err
-		}
-		j, err := r.jobs.Start(r.ctx, jobSpec(agentID, value(a.Values, "script"), time.Duration(seconds)*time.Second, workingDir))
-		if err != nil {
-			return "", err
-		}
-		return j.Snapshot().ID, nil
-	case "quick_py":
-		return r.quickPy(agentID, base, value(a.Values, "script"), valueDefault(a.Values, "cwd", base))
-	case "long_py":
-		seconds := intValue(a.Values, "warn_after_seconds")
-		if seconds == 0 {
-			seconds = 5
-		}
-		workingDir, err := r.resolvePath(base, valueDefault(a.Values, "cwd", base))
-		if err != nil {
-			return "", err
-		}
-		j, err := r.jobs.Start(r.ctx, pythonJobSpec(agentID, value(a.Values, "script"), time.Duration(seconds)*time.Second, workingDir))
-		if err != nil {
-			return "", err
-		}
-		return j.Snapshot().ID, nil
-	case "list_jobs":
-		return jsonString(r.jobs.List())
-	case "read_job":
 		j, ok := r.jobs.Get(value(a.Values, "job_id"))
 		if !ok {
 			return "", fmt.Errorf("job not found")
 		}
-		out, stderr := j.Output()
-		return jsonString(map[string]string{"stdout": out, "stderr": stderr})
-	case "kill_job":
-		if err := r.jobs.Kill(value(a.Values, "job_id"), agentID); err != nil {
-			return "", err
+		if action == "read" {
+			out, stderr := j.Output()
+			return jsonString(map[string]string{"stdout": out, "stderr": stderr})
 		}
-		return "killed", nil
+		if action == "kill" {
+			if err := r.jobs.Kill(value(a.Values, "job_id"), agentID); err != nil {
+				return "", err
+			}
+			return "killed", nil
+		}
+		return "", fmt.Errorf("unknown job action %q", action)
 	case "list_subagents":
 		return jsonString(r.Agents())
 	case "launch_subagent":
@@ -375,6 +378,9 @@ func (r *Runtime) resolvePath(base, path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
+	if runtime.GOOS == "windows" && filepath.IsAbs(path) && filepath.VolumeName(path) == "" {
+		return "", fmt.Errorf("rooted path %q has no drive; use a drive-letter path or a relative path", path)
+	}
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(base, path)
 	}
@@ -409,20 +415,23 @@ func (r *Runtime) writeFile(base, path, content string) (string, error) {
 		return "", err
 	}
 	if _, err := os.Stat(file); err == nil {
-		return "", fmt.Errorf("file already exists")
+		return "", fmt.Errorf("file already exists: %s; use edit_file or apply_patch to change it", file)
 	}
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		return "", err
 	}
 	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
+		if os.IsExist(err) {
+			return "", fmt.Errorf("file already exists: %s; use edit_file or apply_patch to change it", file)
+		}
 		return "", err
 	}
 	if _, err = f.WriteString(content); err != nil {
 		_ = f.Close()
 		return "", err
 	}
-	return "created", f.Close()
+	return "created " + file, f.Close()
 }
 
 func infoMode(path string) os.FileMode {
@@ -625,68 +634,73 @@ func findLines(haystack, needle []string) int {
 	return found
 }
 
-func (r *Runtime) quickBash(agentID, base, script, cwd string) (string, error) {
+func (r *Runtime) executeCommandTool(agentID, base, name string, values map[string]any) (string, error) {
+	script := value(values, "script")
 	if script == "" {
 		return "", fmt.Errorf("script is required")
 	}
+	cwd := valueDefault(values, "cwd", base)
 	if cwd == "" {
 		cwd = base
-	} else if cwd != base {
-		var err error
-		cwd, err = r.resolvePath(base, cwd)
-		if err != nil {
-			return "", err
-		}
 	}
-	ctx, cancel := context.WithTimeout(r.ctx, 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, shellName(), shellArgs(script)...)
-	cmd.Dir = cwd
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
-	if ctx.Err() != nil {
-		return "", fmt.Errorf("quick_bash timed out")
-	}
+	cwd, err := r.resolvePath(base, cwd)
 	if err != nil {
-		return stdout.String() + stderr.String(), err
+		return "", err
 	}
-	return stdout.String(), nil
-}
-
-func (r *Runtime) quickPy(agentID, base, script, cwd string) (string, error) {
-	if script == "" {
-		return "", fmt.Errorf("script is required")
+	wait := intValue(values, "wait_seconds")
+	if _, ok := values["wait_seconds"]; !ok {
+		wait = 5
 	}
-	if cwd == "" {
-		cwd = base
-	} else if cwd != base {
-		var err error
-		cwd, err = r.resolvePath(base, cwd)
-		if err != nil {
-			return "", err
-		}
+	if wait < 0 {
+		wait = 0
 	}
-	ctx, cancel := context.WithTimeout(r.ctx, 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, pythonExecutable(), "-c", script)
-	cmd.Dir = cwd
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
-	if ctx.Err() != nil {
-		return "", fmt.Errorf("quick_py timed out")
+	if wait > 30 {
+		wait = 30
 	}
+	warn := intValue(values, "warn_after_seconds")
+	if _, ok := values["warn_after_seconds"]; !ok {
+		warn = 60
+	}
+	if warn <= wait {
+		warn = 0
+	}
+	env := []string{}
+	scratch := filepath.Join(r.runtimeDir, "agents", agentID, "scratch")
+	env = append(env, "TMPDIR="+scratch, "TMP="+scratch, "TEMP="+scratch)
+	if name == "python" {
+		env = append(env, "PYTHONPATH="+cwd+string(os.PathListSeparator)+os.Getenv("PYTHONPATH"))
+	}
+	root := filepath.Join(r.runtimeDir, "agents", agentID, "jobs")
+	j, err := r.jobs.Start(r.ctx, job.Spec{Author: agentID, Script: script, Interpreter: name, ScriptRoot: root, ToolName: name, Dir: cwd, WarnAfter: time.Duration(warn) * time.Second, Environment: env, Inline: wait > 0})
 	if err != nil {
-		return stdout.String() + stderr.String(), err
+		return "", err
 	}
-	return stdout.String(), nil
+	snap, stdout, stderr, background := r.jobs.Wait(j, time.Duration(wait)*time.Second)
+	if background {
+		return backgroundOutput(snap, stdout, stderr, time.Duration(wait)*time.Second), nil
+	}
+	output := stdout
+	if stderr != "" {
+		output += "\nstderr:\n" + stderr
+	}
+	if snap.Status == job.Killed {
+		if output == "" {
+			return fmt.Sprintf("job %s killed", snap.ID), nil
+		}
+		return fmt.Sprintf("job %s killed\n%s", snap.ID, output), nil
+	}
+	if snap.Status == job.Failed {
+		return output, fmt.Errorf("exit status %d", snap.ExitCode)
+	}
+	return output, nil
 }
 
-func jobSpec(agentID, script string, warn time.Duration, dir string) job.Spec {
-	return job.Spec{Author: agentID, Script: script, ToolName: "long_job", WarnAfter: warn, Dir: dir}
+func backgroundOutput(s job.Snapshot, stdout, stderr string, waited time.Duration) string {
+	return fmt.Sprintf("job %s is still running after %s; its result will be delivered automatically when it finishes\nstdout:\n%s\nstderr:\n%s", s.ID, waited, tailOutput(stdout), tailOutput(stderr))
 }
-
-func pythonJobSpec(agentID, script string, warn time.Duration, dir string) job.Spec {
-	return job.Spec{Author: agentID, Script: script, Command: pythonCommand(script), ToolName: "long_py", WarnAfter: warn, Dir: dir}
+func tailOutput(s string) string {
+	if len(s) <= 8000 {
+		return s
+	}
+	return "[output truncated]\n" + s[len(s)-8000:]
 }

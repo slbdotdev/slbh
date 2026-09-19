@@ -324,7 +324,7 @@ func TestInferenceToolBatchIsPreservedWhenMessagesArrive(t *testing.T) {
 		for _, m := range next.request.Messages {
 			if m.Role == "tool" && m.ToolCallID == id {
 				count++
-				if m.Content != "created" {
+				if !strings.HasPrefix(m.Content, "created ") {
 					t.Fatalf("tool was skipped or replayed: %#v", m)
 				}
 			}
@@ -361,56 +361,45 @@ func waitJobResultQueued(t *testing.T, a *Agent, jobID string) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("long_job %q completion never reached the inbox", jobID)
+			t.Fatalf("bash %q completion never reached the inbox", jobID)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
 }
 
-func TestLongJobCompletionIsDeliveredAtNextBoundary(t *testing.T) {
+func TestBackgroundJobCompletionIsDeliveredAtNextBoundary(t *testing.T) {
 	r, p := messagingRuntime(t)
 	a := r.seat()
 	a.SetModel("active")
 	a.WorkDir = t.TempDir()
 	release := filepath.Join(a.WorkDir, "release")
-	if runtime.GOOS == "windows" {
-		// Keep the job alive long enough for the continuation request to start.
-		// cmd.exe's ping is the portable sleep available in the Windows shell.
-		// The output is emitted only after the delay.
-	} else {
-		t.Cleanup(func() { _ = os.WriteFile(release, nil, 0600) })
-	}
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0600) })
 	if err := a.Send("start background work"); err != nil {
 		t.Fatal(err)
 	}
 	first := p.next(t)
 	script := "sleep 1; printf 'job-stdout\\n'; printf 'job-stderr\\n' >&2"
-	if runtime.GOOS == "windows" {
-		script = "ping 127.0.0.1 -n 3 > nul & echo job-stdout & echo job-stderr 1>&2"
-	}
-	args, err := json.Marshal(map[string]any{"script": script, "warn_after_seconds": 10})
+	args, err := json.Marshal(map[string]any{"script": script, "wait_seconds": 0, "warn_after_seconds": 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.finish(t, toolEvent(0, "job-call", "long_job", string(args)))
+	first.finish(t, toolEvent(0, "job-call", "bash", string(args)))
 	second := p.next(t)
 	var jobID string
 	for _, message := range second.request.Messages {
-		if message.Role == "tool" && message.Name == "long_job" {
-			jobID = message.Content
+		if message.Role == "tool" && message.Name == "bash" {
+			jobID = strings.Fields(message.Content)[1]
 			break
 		}
 	}
 	if jobID == "" {
-		t.Fatalf("continuation did not retain long_job result: %#v", second.request.Messages)
+		t.Fatalf("continuation did not retain bash result: %#v", second.request.Messages)
 	}
 	if _, ok := r.jobs.Get(jobID); !ok {
-		t.Fatalf("long_job %q was not registered", jobID)
+		t.Fatalf("bash %q was not registered", jobID)
 	}
-	if runtime.GOOS != "windows" {
-		if err := os.WriteFile(release, nil, 0600); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(release, nil, 0600); err != nil {
+		t.Fatal(err)
 	}
 	waitJobResultQueued(t, a, jobID)
 	second.finish(t, textEvent("continued while job ran"))
@@ -418,16 +407,16 @@ func TestLongJobCompletionIsDeliveredAtNextBoundary(t *testing.T) {
 	continuedAt := requireMessage(t, third.request, "assistant", "continued while job ran")
 	jobResultAt := -1
 	for i, message := range third.request.Messages {
-		if message.Role == "user" && strings.Contains(message.Content, "[result from long_job "+jobID+"]") {
+		if message.Role == "user" && strings.Contains(message.Content, "[result from bash "+jobID+"]") {
 			jobResultAt = i
 			if !strings.Contains(message.Content, "job-stdout") || !strings.Contains(message.Content, "job-stderr") {
-				t.Fatalf("long_job result lost output: %q", message.Content)
+				t.Fatalf("bash result lost output: %q", message.Content)
 			}
 			break
 		}
 	}
 	if jobResultAt != continuedAt+1 {
-		t.Fatalf("long_job result index=%d, want immediately after assistant index=%d; messages=%#v", jobResultAt, continuedAt, third.request.Messages)
+		t.Fatalf("bash result index=%d, want immediately after assistant index=%d; messages=%#v", jobResultAt, continuedAt, third.request.Messages)
 	}
 	requireActiveTurn(t, r, a)
 	third.finish(t, textEvent("done"))
@@ -450,7 +439,7 @@ func TestToolInFlightFinishesAndDeliversBeforeNextTool(t *testing.T) {
 	}
 	first := p.next(t)
 	args, _ := json.Marshal(map[string]string{"script": "touch started; while [ ! -f release ]; do sleep 0.01; done; printf paid-tool-output"})
-	first.finish(t, toolEvent(0, "blocking", "quick_bash", string(args)), toolEvent(1, "following", "write_file", `{"path":"after","content":"retained"}`))
+	first.finish(t, toolEvent(0, "blocking", "bash", string(args)), toolEvent(1, "following", "write_file", `{"path":"after","content":"retained"}`))
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		if _, err := os.Stat(filepath.Join(a.WorkDir, "started")); err == nil {
@@ -601,19 +590,19 @@ func TestHTTPMessageWaitsForResponseCompletionWithinSameTurn(t *testing.T) {
 	}
 }
 
-// TestLongJobWarningWakesIdleAuthoringAgent is the routing contract for
+// TestJobWarningWakesIdleAuthoringAgent is the routing contract for
 // warn_after_seconds.
 //
 // The timer exists for exactly one party: the agent that started the job. That
 // agent is usually idle when it fires, because starting a long job and ending
 // the turn is the documented way to use one — the alternative, blocking the
-// turn on the job, is what long_job exists to avoid. So the warning has to
+// turn on the job, is what background execution exists to avoid. So the warning has to
 // reach the agent's inbox and wake it, by the same path a completion takes.
 //
 // Before the fix the timer's handler only emitted a job_warning event to the
 // TUI, so the one party the timer exists to inform never heard it, and this
 // test failed at the third boundary wait below: nothing ever woke the agent.
-func TestLongJobWarningWakesIdleAuthoringAgent(t *testing.T) {
+func TestJobWarningWakesIdleAuthoringAgent(t *testing.T) {
 	r, p := messagingRuntime(t)
 	a := r.seat()
 	a.SetModel("active")
@@ -626,28 +615,25 @@ func TestLongJobWarningWakesIdleAuthoringAgent(t *testing.T) {
 	// for a job that has NOT finished, so its completion must never be the
 	// thing that wakes the agent.
 	script := "sleep 30"
-	if runtime.GOOS == "windows" {
-		script = "ping 127.0.0.1 -n 30 > nul"
-	}
-	args, err := json.Marshal(map[string]any{"script": script, "warn_after_seconds": 2})
+	args, err := json.Marshal(map[string]any{"script": script, "wait_seconds": 0, "warn_after_seconds": 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.finish(t, toolEvent(0, "job-call", "long_job", string(args)))
+	first.finish(t, toolEvent(0, "job-call", "bash", string(args)))
 	second := p.next(t)
 	jobID := ""
 	for _, message := range second.request.Messages {
-		if message.Role == "tool" && message.Name == "long_job" {
-			jobID = message.Content
+		if message.Role == "tool" && message.Name == "bash" {
+			jobID = strings.Fields(message.Content)[1]
 			break
 		}
 	}
 	if jobID == "" {
-		t.Fatalf("continuation did not retain the long_job id: %#v", second.request.Messages)
+		t.Fatalf("continuation did not retain the bash id: %#v", second.request.Messages)
 	}
 	started, ok := r.jobs.Get(jobID)
 	if !ok {
-		t.Fatalf("long_job %q was not registered", jobID)
+		t.Fatalf("bash %q was not registered", jobID)
 	}
 	t.Cleanup(func() { _ = started.Kill() })
 
@@ -667,7 +653,7 @@ func TestLongJobWarningWakesIdleAuthoringAgent(t *testing.T) {
 	third := p.next(t)
 	warning := ""
 	for _, message := range third.request.Messages {
-		if message.Role == "user" && strings.Contains(message.Content, "[warning from long_job "+jobID+"]") {
+		if message.Role == "user" && strings.Contains(message.Content, "[warning from bash "+jobID+"]") {
 			warning = message.Content
 			break
 		}
@@ -678,7 +664,7 @@ func TestLongJobWarningWakesIdleAuthoringAgent(t *testing.T) {
 	if !strings.Contains(warning, "still running") {
 		t.Fatalf("warning does not say the job is still running: %q", warning)
 	}
-	if !strings.Contains(warning, "kill_job") {
+	if !strings.Contains(warning, "action kill") {
 		t.Fatalf("warning does not name the agent's options: %q", warning)
 	}
 	if status := started.Snapshot().Status; status != job.Running {
@@ -697,37 +683,37 @@ func TestLongJobWarningWakesIdleAuthoringAgent(t *testing.T) {
 	}
 }
 
-// TestJobWarningNamesTheToolThatStartedTheJob covers long_py.
+// TestJobWarningNamesTheToolThatStartedTheJob covers python.
 //
-// long_py and long_job share the whole warning path. The specs differ only in
+// python and bash share the whole warning path. The specs differ only in
 // the command the job runs and the ToolName they carry (jobSpec vs
 // pythonJobSpec), and the warning reads ToolName and nothing else, so this
-// drives the routing with a long_py snapshot rather than spawning a Python
+// drives the routing with a python snapshot rather than spawning a Python
 // interpreter that a development checkout may not have.
 func TestJobWarningNamesTheToolThatStartedTheJob(t *testing.T) {
 	r, p := messagingRuntime(t)
 	a := r.seat()
 	a.SetModel("active")
 	r.deliverJobWarning(job.Snapshot{
-		ID:        "job-long-py",
+		ID:        "job-python",
 		Author:    a.ID,
 		Script:    "print('work')",
-		ToolName:  "long_py",
+		ToolName:  "python",
 		Status:    job.Running,
 		WarnAfter: 3 * time.Second,
 	})
 	call := p.next(t)
 	warning := ""
 	for _, message := range call.request.Messages {
-		if message.Role == "user" && strings.Contains(message.Content, "[warning from long_py job-long-py]") {
+		if message.Role == "user" && strings.Contains(message.Content, "[warning from python job-python]") {
 			warning = message.Content
 			break
 		}
 	}
 	if warning == "" {
-		t.Fatalf("a long_py warning did not reach the agent's context: %#v", call.request.Messages)
+		t.Fatalf("a python warning did not reach the agent's context: %#v", call.request.Messages)
 	}
-	if !strings.Contains(warning, "long_py job-long-py is still running after 3s") {
+	if !strings.Contains(warning, "python job-python is still running after 3s") {
 		t.Fatalf("warning does not name the tool, the job and the interval: %q", warning)
 	}
 	call.finish(t, textEvent("noted"))

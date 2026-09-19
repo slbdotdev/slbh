@@ -4,15 +4,28 @@ package job
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"syscall"
 )
 
-func shellCommand(ctx context.Context, script, dir string) (*exec.Cmd, error) {
-	cmd := exec.CommandContext(ctx, "bash", "-lc", script)
+func scriptCommand(ctx context.Context, interpreter, path, dir string) (*exec.Cmd, error) {
+	var args []string
+	switch interpreter {
+	case "bash":
+		args = []string{"-l", path}
+	case "python":
+		args = []string{"-X", "utf8", "-u", path}
+	default:
+		return nil, fmt.Errorf("interpreter %q is not available on linux", interpreter)
+	}
+	cmd := exec.CommandContext(ctx, map[string]string{"bash": "bash", "python": pythonExecutable()}[interpreter], args...)
 	cmd.Dir = dir
+	cmd.Stdin = nil
 	return cmd, nil
 }
+
+func processStarted(*exec.Cmd) (func(), func() error, error) { return func() {}, nil, nil }
 
 func setProcessGroup(cmd *exec.Cmd) {
 	// Setpgid lets Kill terminate descendants; Pdeathsig covers a hard TUI

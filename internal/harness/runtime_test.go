@@ -237,7 +237,7 @@ func TestJobSnapshotJSONRoundTrip(t *testing.T) {
 		ID:          "job-1234",
 		Author:      "agent-1234",
 		Script:      "printf output",
-		ToolName:    "long_job",
+		ToolName:    "bash",
 		Status:      "complete",
 		Started:     time.Date(2026, 9, 18, 1, 2, 3, 0, time.UTC),
 		Finished:    time.Date(2026, 9, 18, 1, 2, 4, 0, time.UTC),
@@ -271,7 +271,7 @@ func TestJobSnapshotsReturnsCopies(t *testing.T) {
 		Author:   seat.ID,
 		Script:   "printf output",
 		Command:  []string{"sh", "-c", "printf output"},
-		ToolName: "long_job",
+		ToolName: "bash",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -687,101 +687,97 @@ func TestToolsAllowPathsOutsideWorkingDirectory(t *testing.T) {
 	}
 	cwdScript := "pwd"
 	if runtime.GOOS == "windows" {
-		cwdScript = "cd"
+		cwdScript = "pwd -W"
 	}
 	cwdArgs, err := json.Marshal(map[string]string{"script": cwdScript, "cwd": outsideDir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cwdOutput, err := r.ExecuteTool(r.seat().ID, "quick_bash", string(cwdArgs))
+	cwdOutput, err := r.ExecuteTool(r.seat().ID, "bash", string(cwdArgs))
 	if err != nil || !strings.Contains(strings.ReplaceAll(cwdOutput, "\\", "/"), strings.ReplaceAll(filepath.Clean(outsideDir), "\\", "/")) {
-		t.Fatalf("quick_bash cwd=%q err=%v", cwdOutput, err)
+		t.Fatalf("bash cwd=%q err=%v", cwdOutput, err)
 	}
-	jobArgs, err := json.Marshal(map[string]any{"script": cwdScript, "cwd": outsideDir, "warn_after_seconds": 1})
+	jobArgs, err := json.Marshal(map[string]any{"script": cwdScript, "cwd": outsideDir, "wait_seconds": 0, "warn_after_seconds": 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobID, err := r.ExecuteTool(r.seat().ID, "long_job", string(jobArgs))
+	jobResult, err := r.ExecuteTool(r.seat().ID, "bash", string(jobArgs))
 	if err != nil {
 		t.Fatal(err)
 	}
+	jobID := strings.Fields(jobResult)[1]
 	job, ok := r.jobs.Get(jobID)
 	if !ok {
-		t.Fatalf("long_job %q was not registered", jobID)
+		t.Fatalf("bash %q was not registered", jobID)
 	}
 	select {
 	case <-job.Done():
 	case <-time.After(5 * time.Second):
-		t.Fatal("long_job did not finish")
+		t.Fatal("bash did not finish")
 	}
 	jobOutput, _ := job.Output()
 	if !strings.Contains(strings.ReplaceAll(jobOutput, "\\", "/"), strings.ReplaceAll(filepath.Clean(outsideDir), "\\", "/")) {
-		t.Fatalf("long_job cwd=%q", jobOutput)
+		t.Fatalf("bash cwd=%q", jobOutput)
 	}
 	pythonScript := `import os; print(os.getcwd())`
 	pythonArgs, err := json.Marshal(map[string]string{"script": pythonScript, "cwd": outsideDir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	pythonOutput, err := r.ExecuteTool(r.seat().ID, "quick_py", string(pythonArgs))
+	pythonOutput, err := r.ExecuteTool(r.seat().ID, "python", string(pythonArgs))
 	if err != nil || !strings.Contains(strings.ReplaceAll(pythonOutput, "\\", "/"), strings.ReplaceAll(filepath.Clean(outsideDir), "\\", "/")) {
-		t.Fatalf("quick_py cwd=%q err=%v", pythonOutput, err)
+		t.Fatalf("python cwd=%q err=%v", pythonOutput, err)
 	}
-	pythonJobArgs, err := json.Marshal(map[string]any{"script": `print("python job")`, "cwd": outsideDir, "warn_after_seconds": 1})
+	pythonJobArgs, err := json.Marshal(map[string]any{"script": `print("python job")`, "cwd": outsideDir, "wait_seconds": 0, "warn_after_seconds": 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	pythonJobID, err := r.ExecuteTool(r.seat().ID, "long_py", string(pythonJobArgs))
+	pythonJobResult, err := r.ExecuteTool(r.seat().ID, "python", string(pythonJobArgs))
 	if err != nil {
 		t.Fatal(err)
 	}
+	pythonJobID := strings.Fields(pythonJobResult)[1]
 	pythonJob, ok := r.jobs.Get(pythonJobID)
 	if !ok {
-		t.Fatalf("long_py %q was not registered", pythonJobID)
+		t.Fatalf("python %q was not registered", pythonJobID)
 	}
 	select {
 	case <-pythonJob.Done():
 	case <-time.After(5 * time.Second):
-		t.Fatal("long_py did not finish")
+		t.Fatal("python did not finish")
 	}
 	pythonJobOutput, _ := pythonJob.Output()
 	if !strings.Contains(pythonJobOutput, "python job") {
-		t.Fatalf("long_py output=%q", pythonJobOutput)
+		t.Fatalf("python output=%q", pythonJobOutput)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// TestReadJobReturnsOutputOfRunningJob walks the tool path the defect was
-// reported on rather than the package under it: long_job, then read_job while
+// TestJobReadReturnsOutputOfRunningJob walks the tool path the defect was
+// reported on rather than the package under it: bash, then job read while
 // the job is still running. Until 2026-09-15 that answered
 // {"stdout":"","stderr":""}, because Job.Output read buffers the wait goroutine
 // filled only once the job had ended — so the one tool an agent has for looking
 // at a stalled job showed it nothing.
-func TestReadJobReturnsOutputOfRunningJob(t *testing.T) {
+func TestJobReadReturnsOutputOfRunningJob(t *testing.T) {
 	r := testRuntime(t)
 	script := "echo live-marker; sleep 30"
-	if runtime.GOOS == "windows" {
-		script = "echo live-marker & ping 127.0.0.1 -n 30 > nul"
-	}
 	// An hour of warn_after keeps the warning timer out of this test; the
 	// warning is a separate mechanism with its own tests.
-	jobArgs, err := json.Marshal(map[string]any{"script": script, "warn_after_seconds": 3600})
+	jobArgs, err := json.Marshal(map[string]any{"script": script, "wait_seconds": 0, "warn_after_seconds": 3600})
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobID, err := r.ExecuteTool(r.seat().ID, "long_job", string(jobArgs))
+	jobResult, err := r.ExecuteTool(r.seat().ID, "bash", string(jobArgs))
 	if err != nil {
 		t.Fatal(err)
 	}
+	jobID := strings.Fields(jobResult)[1]
 	job, ok := r.jobs.Get(jobID)
 	if !ok {
-		t.Fatalf("long_job %q was not registered", jobID)
-	}
-	readArgs, err := json.Marshal(map[string]string{"job_id": jobID})
-	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("bash %q was not registered", jobID)
 	}
 	var payload struct {
 		Stdout string `json:"stdout"`
@@ -789,31 +785,31 @@ func TestReadJobReturnsOutputOfRunningJob(t *testing.T) {
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		raw, err := r.ExecuteTool(r.seat().ID, "read_job", string(readArgs))
+		raw, err := r.ExecuteTool(r.seat().ID, "job", string(`{"action":"read","job_id":"`+jobID+`"}`))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-			t.Fatalf("read_job returned %q: %v", raw, err)
+			t.Fatalf("job read returned %q: %v", raw, err)
 		}
 		if strings.Contains(payload.Stdout, "live-marker") {
 			break
 		}
 		select {
 		case <-job.Done():
-			t.Fatal("job finished before read_job could see it running")
+			t.Fatal("job finished before job read could see it running")
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
 	if !strings.Contains(payload.Stdout, "live-marker") {
-		t.Fatalf("read_job on a running job returned stdout=%q stderr=%q", payload.Stdout, payload.Stderr)
+		t.Fatalf("job read on a running job returned stdout=%q stderr=%q", payload.Stdout, payload.Stderr)
 	}
 	select {
 	case <-job.Done():
-		t.Fatal("job was no longer running when read_job answered")
+		t.Fatal("job was no longer running when job read answered")
 	default:
 	}
-	if _, err := r.ExecuteTool(r.seat().ID, "kill_job", string(readArgs)); err != nil {
+	if _, err := r.ExecuteTool(r.seat().ID, "job", string(`{"action":"kill","job_id":"`+jobID+`"}`)); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -1236,6 +1232,20 @@ func TestLaunchSubagentToolAdvertisesLeafHarnessModelFields(t *testing.T) {
 	managerRoles := launchRoleEnum(t, r.toolDefinitions(manager.ID))
 	if strings.Join(managerRoles, ",") != "flex,luna,opus,sol" {
 		t.Fatalf("Manager launch role enum = %#v", managerRoles)
+	}
+}
+
+func TestToolDefinitionsDoNotShareRoleSchemas(t *testing.T) {
+	r := testRuntime(t)
+	manager := launchTestManager(t, r)
+	seatRoles := launchRoleEnum(t, r.toolDefinitions(r.seat().ID))
+	managerRoles := launchRoleEnum(t, r.toolDefinitions(manager.ID))
+	if strings.Join(seatRoles, ",") != "manager" || strings.Join(managerRoles, ",") != "flex,luna,opus,sol" {
+		t.Fatalf("role enums=%#v/%#v", seatRoles, managerRoles)
+	}
+	seatRoles[0] = "mutated"
+	if managerRoles[0] == "mutated" {
+		t.Fatal("tool definitions share nested role schemas")
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 func TestPythonToolDescriptionsNameScientificPackages(t *testing.T) {
 	want := strings.Split(scientificPythonPackageNames, ", ")
 	for _, tool := range ToolDefinitions() {
-		if tool.Name != "quick_py" && tool.Name != "long_py" {
+		if tool.Name != "python" {
 			continue
 		}
 		for _, packageName := range want {

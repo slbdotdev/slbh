@@ -267,7 +267,8 @@ These environment variables are read at startup:
 | `SLBH_SUBAGENT_MODEL` | `zai/glm-5.3-flash` | Default child-agent model. |
 | `SLBH_LEAF_MODEL` | `local/q27-UD-Q2_K_XL-64k` | Legacy depth-two default; roster launches require an explicit leaf model. |
 | `SLBH_SUBAGENT_EFFORT` | `medium` | Default child-agent effort. |
-| `SLBH_PYTHON` | managed `~/.local/share/slbh/python` interpreter | Python interpreter used by `quick_py` and `long_py`. |
+| `SLBH_PYTHON` | managed `~/.local/share/slbh/python` interpreter | Python interpreter used by the `python` tool. |
+| `SLBH_BASH` | host Git Bash detection | Optional Windows Git Bash executable override. |
 | `SLBH_ENDPOINT` | OpenRouter chat-completions endpoint | Compatible provider endpoint. |
 | `SLBH_LOCAL_ENDPOINT` | `http://fractal.wyvern-temperature.ts.net:11434/api/chat` | Desktop Ollama endpoint. It must match the route's wire: an `ollama-chat` route needs an `/api/chat` URL. |
 | `SLBH_FRAME_PROFILE` | unset | Optional CSV path for TUI `Update` and `View` durations, frame gaps, message types, and retained event counts. |
@@ -380,8 +381,8 @@ Available tools are:
 
 - Files: `glob`, `grep`, `read_file`, `read_bytes`, `read_lines`, `edit_file`,
   `apply_patch`, and `write_file`.
-- Jobs: `quick_bash`, `long_job`, `list_jobs`, `read_job`, and `kill_job`.
-- Python jobs: `quick_py`, `long_py`, `list_jobs`, `read_job`, and `kill_job`.
+- Jobs: `bash` and, on Windows, `pwsh`; `python` uses the managed scientific
+  environment. `job` lists, reads, or kills jobs with its `action` field.
 - Agents: `list_subagents`, `launch_subagent`, `msg_subagent`, and
   `end_subagent`.
 
@@ -411,7 +412,7 @@ submission acknowledges acceptance; the transcript records context insertion
 as `steer` or `child_result` at the call boundary.
 
 When a tool fails, the model receives the error **and** whatever output the tool produced,
-error first and bounded. This matters most for `quick_bash` and `quick_py`: a non-zero exit
+error first and bounded. This matters most for `bash` and `python`: a non-zero exit
 is routinely informative rather than fatal — `grep` exits 1 when it matches nothing, `test`
 exits 1 on false, a failing suite exits 1 — so an agent given only the exit code cannot tell
 "no matches" from "command not found" and retries blind.
@@ -419,12 +420,10 @@ exits 1 on false, a failing suite exits 1 — so an agent given only the exit co
 File arguments may be absolute or relative; relative paths resolve against the
 active agent's working directory. slbh does not add a filesystem permission
 boundary, so the operating system determines whether a requested path or
-working directory is usable. Reads and job output are bounded. `quick_bash` is
-for short foreground commands with a five-second direct-command timeout;
-`long_job` is the asynchronous option for work that may take longer. `quick_py`
-and `long_py` provide the same two shapes through the Ansible-managed
-scientific Python environment, with the system Python fallback retained for
-unmanaged development checkouts. Jobs and agent activity are recorded in the
+working directory is usable. Reads and job output are bounded. `bash`, `pwsh`,
+and `python` start a job, wait up to `wait_seconds` (default five seconds), and
+background it if it is still running; `wait_seconds: 0` backgrounds immediately.
+Jobs and agent activity are recorded in the
 active session transcript.
 
 A background job has exactly one timer, `warn_after_seconds`, and it warns
@@ -439,11 +438,11 @@ and never sees the ones a subagent runs, so telling a person is the control
 agent's duty rather than the harness's. The TUI still shows a `job_warning`
 event, as a record of the firing and not as the delivery.
 
-A running job's output is readable. `read_job` returns whatever the job has
+A running job's output is readable. `job` with `action: "read"` returns whatever the job has
 captured on each stream at the instant it is asked, finished or not, so a warned
 agent can look at the job before deciding what to do about it. The capture
 buffers are the command's own sinks and carry their own mutex; until
-2026-09-15 they were filled only after the process exited, and `read_job`
+2026-09-15 they were filled only after the process exited, and `job read`
 answered a live job with two empty strings.
 
 ## Headless
@@ -498,6 +497,9 @@ $SLBH_HOME/
                 └── sessions/
                     └── session-.../
                         └── transcript.jsonl
+                ├── jobs/
+                │   └── job-.../script.sh (or script.ps1/script.py)
+                └── scratch/
 ```
 
 Transcripts are append-only JSONL and retain messages, reasoning, tool calls

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -628,7 +630,7 @@ func (a *Agent) receiveJobResult(snapshot job.Snapshot, stdout, stderr string) e
 	text := a.runtime.redactSecrets(formatJobResult(snapshot, stdout, stderr))
 	toolName := snapshot.ToolName
 	if toolName == "" {
-		toolName = "long_job"
+		toolName = "bash"
 	}
 	return a.deliver(agentMessage{
 		prompt:   fmt.Sprintf("[result from %s %s]\n%s", toolName, snapshot.ID, text),
@@ -647,14 +649,14 @@ func (a *Agent) receiveJobResult(snapshot job.Snapshot, stdout, stderr string) e
 // who could act on it.
 //
 // The message is a decision point and says so. It names the three things the
-// agent can do about the job and points at read_job, which since 2026-09-15
+// agent can do about the job and points at job read, which since 2026-09-15
 // answers a running job with what it has captured so far — the evidence the
 // decision wants. Until then the text said the opposite, because the buffers
 // really were unreadable mid-run and the call would have come back empty.
 func (a *Agent) receiveJobWarning(snapshot job.Snapshot) error {
 	toolName := snapshot.ToolName
 	if toolName == "" {
-		toolName = "long_job"
+		toolName = "bash"
 	}
 	// Same reason as a job result: the script is the agent's own text and can
 	// name a credential, and from history it would be marshalled into the next
@@ -678,7 +680,7 @@ func formatJobWarning(snapshot job.Snapshot, toolName string) string {
 	if len(script) > maxJobWarningScript {
 		script = script[:maxJobWarningScript] + "\n[script truncated]"
 	}
-	return fmt.Sprintf("%s %s is still running after %s.\nscript:\n%s\n\nThat is its state as of when this warning was raised; if the job's result has already reached you, the result is the truth and this warning is stale. This is the only warning you get for this job: nothing will send it again and nothing will act for you. Decide now, and you may decide to do nothing. read_job returns what this job has captured so far, so you can look at its output before deciding. Kill it with kill_job if it is stuck or no longer worth waiting for; otherwise leave it and its captured output will be delivered to you automatically when it finishes, or carry on with other work in the meantime.",
+	return fmt.Sprintf("%s %s is still running after %s.\nscript:\n%s\n\nThat is its state as of when this warning was raised; if the job's result has already reached you, the result is the truth and this warning is stale. This is the only warning you get for this job: nothing will send it again and nothing will act for you. Decide now, and you may decide to do nothing. job with action read returns what this job has captured so far. Use job with action kill if it is stuck or no longer worth waiting for; otherwise leave it and its captured output will be delivered to you automatically when it finishes, or carry on with other work in the meantime.",
 		toolName, snapshot.ID, snapshot.WarnAfter, script)
 }
 
@@ -896,6 +898,7 @@ func systemPrompt(a *Agent) string {
 func bakedSystemPrompt(a *Agent) string {
 	prompt := fmt.Sprintf("You are %s, a native agent in slbh runtime %s: roster role %s, depth %d.", a.Title, a.runtime.ID(), a.Role, a.Depth) +
 		"\n\nKeep your thinking brief and focused, moving directly to the next action or conclusion without unnecessary elaboration. When a question can be settled by looking — reading a file, running a command, checking a result — use a tool to find out rather than reasoning at length about what is likely true." +
+		fmt.Sprintf("\n\nThis host is %s. Your command tools are %s. TMPDIR, TMP and TEMP point at your agent scratch directory, %s; use it for temporary files instead of /tmp, your working directory, or your home directory.", runtime.GOOS, strings.Join(job.AvailableInterpreters(), ", "), filepath.Join(a.runtime.runtimeDir, "agents", a.ID, "scratch")) +
 		"\n\nMessages reach you at your next tool or API call boundary, or wake you if you are idle: steers from the owner or other agents, subagent results, and background job output. Act on each in the current turn; never defer one to the end. A warning that a job or subagent is still running is sent once and never repeated. Decide then: kill or end it, keep waiting for its result, or do other work."
 	// Launch guidance only for an agent that has roles to launch. A leaf
 	// cannot launch anything, and the rules themselves are in the
@@ -920,7 +923,7 @@ const maxToolErrorOutput = 8000
 // exit codes are routinely informative rather than fatal -- grep exits 1 when it matches
 // nothing, test exits 1 on false, a failing suite exits 1 -- so a model that sees only the
 // code cannot tell "no matches" from "command not found", and retries blind. Measured on
-// the v7.5 benchmark: 120 of 147 quick_bash calls failed, and 104 of those returned exactly
+// the v7.5 benchmark: 120 of 147 bash calls failed, and 104 of those returned exactly
 // "tool error: exit status 1" with no other content.
 //
 // The error leads so that a long output cannot bury the fact that the call failed.

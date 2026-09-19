@@ -53,7 +53,7 @@ func (e stringError) Error() string { return string(e) }
 
 func errAsError(s string) error { return stringError(s) }
 
-// failingShellProvider asks for one quick_bash that exits non-zero with output on stderr,
+// failingShellProvider asks for one bash call that exits non-zero with output on stderr,
 // then ends the turn. It is the end-to-end regression: the model must receive the command's
 // own diagnostic, not just the exit code.
 type failingShellProvider struct {
@@ -71,7 +71,7 @@ func (p *failingShellProvider) Stream(_ context.Context, request provider.Reques
 		}
 	}
 	return sink(provider.Event{
-		Kind: provider.EventTool, ToolIndex: 0, ToolCallID: "call-1", ToolName: "quick_bash",
+		Kind: provider.EventTool, ToolIndex: 0, ToolCallID: "call-1", ToolName: "bash",
 		Input: `{"script":"echo SENTINEL_STDERR 1>&2; exit 3"}`,
 	})
 }
