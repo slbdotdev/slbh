@@ -30,7 +30,7 @@ go build -o slbh ./cmd/slbh
 ./slbh
 ```
 
-The defaults are a `zai/glm-5.3-flash` Seat at `high` effort and a local
+The defaults are a `zai/glm-5.3-flash` Seat at `medium` effort and a local
 `local/q27-UD-Q2_K_XL-64k` leaf/Intern route. The v0.3 roster is authoritative
 for child roles: the Seat launches the `manager` role, a Manager names each
 leaf role (`luna`, `sol`, `opus`, or `flex`), and every leaf launch supplies an
@@ -255,12 +255,12 @@ These environment variables are read at startup:
 | --- | --- | --- |
 | `SLBH_HOME` | `$HOME/.slbh` | Base directory for configuration, history, and runtime records. |
 | `SLBH_MODEL` | `zai/glm-5.3-flash` | Seat agent model. |
-| `SLBH_EFFORT` | `high` | Seat reasoning effort. |
+| `SLBH_EFFORT` | `medium` | Seat reasoning effort. |
 | `SLBH_INTERN_MODEL` | `local/q27-UD-Q2_K_XL-64k` | Intern model. |
 | `SLBH_INTERN_EFFORT` | `medium` | Intern reasoning effort. |
 | `SLBH_SUBAGENT_MODEL` | `zai/glm-5.3-flash` | Default child-agent model. |
 | `SLBH_LEAF_MODEL` | `local/q27-UD-Q2_K_XL-64k` | Legacy depth-two default; roster launches require an explicit leaf model. |
-| `SLBH_SUBAGENT_EFFORT` | `high` | Default child-agent effort. |
+| `SLBH_SUBAGENT_EFFORT` | `medium` | Default child-agent effort. |
 | `SLBH_PYTHON` | managed `~/.local/share/slbh/python` interpreter | Python interpreter used by `quick_py` and `long_py`. |
 | `SLBH_ENDPOINT` | OpenRouter chat-completions endpoint | Compatible provider endpoint. |
 | `SLBH_LOCAL_ENDPOINT` | `http://fractal.wyvern-temperature.ts.net:11434/api/chat` | Desktop Ollama endpoint. It must match the route's wire: an `ollama-chat` route needs an `/api/chat` URL. |

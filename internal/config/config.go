@@ -109,10 +109,10 @@ func Load() Config {
 		Home:             home,
 		SecretarySession: getenv("SLBH_SECRETARY_SESSION", "secretary"),
 		SecretaryWake:    getenvBool("SLBH_SECRETARY_WAKE", true),
-		// The seat default is `high`, and deliberately not `xhigh`. Two
-		// separate reasons, either of which is enough.
+		// The seat default is `medium`, and deliberately not `high` or
+		// `xhigh`. Two separate reasons, either of which is enough.
 		//
-		// It is the top level the local Ollama route can actually serve.
+		// It is a level the local Ollama route can actually serve.
 		// Ollama's OpenAI-compatible layer rewrites the level before the
 		// model's chat template runs: `high` becomes the template's top rung,
 		// `xhigh` becomes `max`, and the template raises on `max` because it
@@ -127,12 +127,12 @@ func Load() Config {
 		// ladders, its median is +16.1% over `high` but it wins only 67% of
 		// turn-pairs and costs about 48% more wall clock.
 		SeatModel:      getenv("SLBH_MODEL", "zai/glm-5.3-flash"),
-		SeatEffort:     getenv("SLBH_EFFORT", "high"),
+		SeatEffort:     getenv("SLBH_EFFORT", "medium"),
 		InternModel:    getenv("SLBH_INTERN_MODEL", provider.LocalModelID),
 		InternEffort:   getenv("SLBH_INTERN_EFFORT", "medium"),
 		SubagentModel:  getenv("SLBH_SUBAGENT_MODEL", "zai/glm-5.3-flash"),
 		LeafModel:      getenv("SLBH_LEAF_MODEL", provider.LocalModelID),
-		SubagentEffort: getenv("SLBH_SUBAGENT_EFFORT", "high"),
+		SubagentEffort: getenv("SLBH_SUBAGENT_EFFORT", "medium"),
 		Endpoint:       getenv("SLBH_ENDPOINT", provider.OpenRouterEndpoint),
 		ApprovedModels: []string{},
 	}
