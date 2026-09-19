@@ -47,7 +47,6 @@ type EventBatch struct {
 type AgentSnapshot struct {
 	ID              string `json:"id"`
 	Title           string `json:"title"`
-	Role            string `json:"role"`
 	ParentID        string `json:"parent_id"`
 	Depth           int    `json:"depth"`
 	Model           string `json:"model"`

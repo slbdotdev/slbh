@@ -66,7 +66,7 @@ func fakeCodexLeafWithEffort(t *testing.T, r *Runtime, parent *Agent, effort str
 	if parent.Depth != 1 || parent.Harness != "native" {
 		t.Fatalf("fake Codex leaf parent = depth %d harness %q, want native depth-1 Manager", parent.Depth, parent.Harness)
 	}
-	agent, err := r.newAgent("codex", "luna", parent.ID, parent.Depth+1, "gpt-test", effort)
+	agent, err := r.newAgent("codex", parent.ID, parent.Depth+1, "gpt-test", effort)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestManagerCodexLaunchPreservesExplicitChatGPTModel(t *testing.T) {
 	t.Setenv("SLBH_CODEX_MODEL_FILE", modelFile)
 	r, err := New(config.Config{
 		Home: t.TempDir(), SeatModel: "native-seat", SubagentModel: "native-child", LeafModel: "native-leaf",
-		ApprovedModels: []string{"native-seat", "native-child", "native-leaf"}, Roster: testRoster(),
+		ApprovedModels: []string{"native-seat", "native-child", "native-leaf"},
 	}, Options{
 		Provider:     func(string) (provider.Provider, error) { return fakeProvider{}, nil },
 		CodexCommand: os.Args[0],
@@ -207,7 +207,7 @@ func TestManagerCodexLaunchPreservesExplicitChatGPTModel(t *testing.T) {
 				t.Fatal(err)
 			}
 			input, err := json.Marshal(map[string]string{
-				"title": "codex " + test.name, "role": test.name, "harness": "codex", "model": test.model,
+				"title": "codex " + test.name, "harness": "codex", "model": test.model,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -232,7 +232,7 @@ func TestManagerCodexLaunchPreservesExplicitChatGPTModel(t *testing.T) {
 			if got != test.model {
 				t.Fatalf("Codex model = %q, want explicit ChatGPT model %q", got, test.model)
 			}
-			if snapshot := child.Snapshot(); snapshot.Role != test.name || snapshot.Harness != "codex" || snapshot.Model != test.model {
+			if snapshot := child.Snapshot(); snapshot.Harness != "codex" || snapshot.Model != test.model {
 				t.Fatalf("Codex snapshot = %#v", snapshot)
 			}
 			r.endSubagent(manager.ID, child.ID)
@@ -423,7 +423,7 @@ func TestCodexLeafParentToolAndNoDelegation(t *testing.T) {
 		}
 	}
 childMessageRecorded:
-	if _, err := r.launchSubagentSpec(child.ID, LaunchSpec{Title: "nested", Role: "luna", Harness: "codex", Model: "gpt-5.6-luna"}); err == nil {
+	if _, err := r.launchSubagentSpec(child.ID, LaunchSpec{Title: "nested", Harness: "codex", Model: "gpt-5.6-luna"}); err == nil {
 		t.Fatal("Codex leaf was allowed to launch another leaf")
 	}
 }

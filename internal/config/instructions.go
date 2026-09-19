@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// The three instruction layers. These are the org's own role documents, not
-// harness mechanics: what a seat, a manager and a leaf are each permitted to
-// do. Everything that describes how *this build* behaves stays baked into the
+// The three instruction layers. These are the org's own depth documents, not
+// harness mechanics: what a root, depth-one child and deeper child are each
+// permitted to do. Everything that describes how *this build* behaves stays baked into the
 // binary, because a managed file that disagreed with the binary would simply
 // be wrong and only the binary knows.
 const (
@@ -35,8 +35,8 @@ const (
 // LayerForDepth maps an agent's runtime depth to its instruction layer.
 //
 // The mapping remains by depth because these are layer documents shared by
-// several roster roles. The separately loaded roster names launch identity;
-// launch validation requires its declared depth to match the runtime depth.
+// several agents at the same depth. Launch validation uses runtime depth
+// directly and has no external identity catalogue.
 //
 // Depths beyond 2 are leaves rather than an error. The runtime caps delegation
 // at depth 2 today (a parent at depth >= 2 may not launch), so depth 3 cannot

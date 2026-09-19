@@ -31,16 +31,19 @@ go build -o slbh ./cmd/slbh
 ```
 
 The defaults are a `zai/glm-5.3-flash` Seat at `medium` effort and a local
-`local/q27-UD-Q2_K_XL-64k` leaf/Intern route. The v0.3 roster is authoritative
-for child roles: the Seat launches the `manager` role, a Manager names each
-leaf role (`luna`, `sol`, `opus`, or `flex`), and every leaf launch supplies an
-explicit model. A new configuration has no approved models, so the default
-native Seat model stays disabled until models are selected.
+`local/q27-UD-Q2_K_XL-64k` leaf/Intern route. Child delegation is depth-only:
+native agents may launch one level deeper, and a depth-two child must receive
+an explicit model string or managed short name. The optional harness selects
+native slbh, Codex, or Claude Code; no named role catalogue is required. A new
+configuration has no approved models, so the default native Seat model stays
+disabled until models are selected.
 
 After starting a fresh configuration, run `/models` and wait for the catalogs.
-The Seat model can be selected with `/model NAME`; roster-managed child
-launches use the synchronized role data and require the role name plus an
-explicit leaf model. Press `Esc` to save and close the model menu.
+The Seat model can be selected with `/model NAME`; child launches choose their
+model and optional harness directly. If the managed `$SLBH_HOME/models.toml`
+file defines a short name such as `luna`, slbh expands it to the corresponding
+real model string and uses its configured effort when no effort is supplied.
+Press `Esc` to save and close the model menu.
 
 ## Providers and configuration
 
@@ -114,7 +117,7 @@ an OpenRouter route — the routing posture (`zdr`, `data_collection`, `sort`,
 `defaultEffort` is the effort an agent takes when it is put on the route — a
 Seat started on it or switched to it, the Intern, a leaf launched without an
 explicit effort. It outranks the model-agnostic `SLBH_EFFORT`,
-`SLBH_INTERN_EFFORT` and roster role defaults, yields to an effort passed at
+`SLBH_INTERN_EFFORT` and managed model-alias defaults, yields to an effort passed at
 launch or set with `/effort`, and must be a level the route's effort map sends.
 
 `maxOutputTokens` is per route rather than global because the routes differ by
@@ -265,7 +268,7 @@ These environment variables are read at startup:
 | `SLBH_INTERN_MODEL` | `local/q27-UD-Q2_K_XL-64k` | Intern model. |
 | `SLBH_INTERN_EFFORT` | `low` | Intern reasoning effort. A route's policy `defaultEffort` takes precedence. |
 | `SLBH_SUBAGENT_MODEL` | `zai/glm-5.3-flash` | Default child-agent model. |
-| `SLBH_LEAF_MODEL` | `local/q27-UD-Q2_K_XL-64k` | Legacy depth-two default; roster launches require an explicit leaf model. |
+| `SLBH_LEAF_MODEL` | `local/q27-UD-Q2_K_XL-64k` | Legacy child setting retained for config compatibility; depth-two launches require an explicit model. |
 | `SLBH_SUBAGENT_EFFORT` | `medium` | Default child-agent effort. |
 | `SLBH_PYTHON` | managed `~/.local/share/slbh/python` interpreter | Python interpreter used by the `python` tool. |
 | `SLBH_BASH` | host Git Bash detection | Optional Windows Git Bash executable override. |

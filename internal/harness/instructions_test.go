@@ -58,7 +58,6 @@ func runtimeWithInstructionsAndSkills(t *testing.T, docs map[string]string, skil
 		SubagentModel: "test-child", SubagentEffort: "high",
 		Instructions: config.LoadInstructions(home),
 		Skills:       config.LoadSkills(home),
-		Roster:       testRoster(),
 	}
 	r, err := New(cfg, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
 	if err != nil {
@@ -81,9 +80,8 @@ func agentAtDepth(t *testing.T, r *Runtime, depth int) *Agent {
 	t.Helper()
 	agent := r.seat()
 	for i := 0; i < depth; i++ {
-		spec := LaunchSpec{Title: "child-agent-here", Role: "manager"}
+		spec := LaunchSpec{Title: "child-agent-here"}
 		if agent.Depth == 1 {
-			spec.Role = "flex"
 			spec.Model = "explicit-leaf-model"
 		}
 		child, err := r.launchSubagentSpec(agent.ID, spec)

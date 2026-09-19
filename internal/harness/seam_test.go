@@ -93,11 +93,9 @@ func TestSeamQueriesReturnDeepCopies(t *testing.T) {
 		Layers: map[string][]config.Skill{config.LayerSeat: {{Name: "seat-skill", Path: "/skills/seat/SKILL.md"}}},
 		Source: config.SkillSource{Missing: []string{config.LayerLeaf}},
 	}
-	r.config.Roster = config.Roster{
-		Version: 3,
-		Source:  config.RosterSource{Kind: config.RosterManaged, Path: "/managed/roster.toml"},
-		Names: map[string]config.Role{
-			"flex": {Name: "flex", ModelsApproved: []string{"deepseek-v4-flash"}},
+	r.config.Models = config.Models{
+		Aliases: map[string]config.ModelAlias{
+			"luna": {Model: "gpt-5.6-luna", Effort: "high"},
 		},
 	}
 	r.mu.Unlock()
@@ -111,7 +109,7 @@ func TestSeamQueriesReturnDeepCopies(t *testing.T) {
 	firstConfig.Instructions.Source.Missing[0] = "mutated"
 	firstConfig.Skills.Layers[config.LayerSeat][0].Name = "mutated"
 	firstConfig.Skills.Source.Missing[0] = "mutated"
-	firstConfig.Roster.Names["flex"] = config.Role{Name: "mutated"}
+	firstConfig.Models.Aliases["luna"] = config.ModelAlias{Model: "mutated"}
 	secondConfig := r.Config()
 	if secondConfig.ApprovedModels[0] != "test" ||
 		secondConfig.Policy.Routes["test"].Effort.Levels["high"] != "high" ||
@@ -120,7 +118,7 @@ func TestSeamQueriesReturnDeepCopies(t *testing.T) {
 		secondConfig.Instructions.Source.Missing[0] != config.LayerLeaf ||
 		secondConfig.Skills.Layers[config.LayerSeat][0].Name != "seat-skill" ||
 		secondConfig.Skills.Source.Missing[0] != config.LayerLeaf ||
-		secondConfig.Roster.Names["flex"].Name != "flex" {
+		secondConfig.Models.Aliases["luna"].Model != "gpt-5.6-luna" {
 		t.Fatalf("mutating Config query changed runtime state: %#v", secondConfig)
 	}
 

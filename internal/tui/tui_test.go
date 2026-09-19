@@ -26,20 +26,9 @@ type quietProvider struct{}
 
 func (quietProvider) Stream(context.Context, provider.Request, provider.StreamSink) error { return nil }
 
-func testTUIRoster() config.Roster {
-	return config.Roster{
-		Version: 3,
-		Source:  config.RosterSource{Kind: config.RosterManaged, Path: "/test/roster.toml"},
-		Names: map[string]config.Role{
-			"seat":    {Name: "seat", Harness: "slbh", Model: "test", Depth: 0, LaunchedBy: "owner"},
-			"manager": {Name: "manager", Harness: "slbh", Model: "test-manager", Depth: 1, LaunchedBy: "seat"},
-		},
-	}
-}
-
 func launchTestSubagent(t *testing.T, runtime *harness.Runtime, title string) seam.AgentSnapshot {
 	t.Helper()
-	input, err := json.Marshal(map[string]string{"title": title, "brief": "", "role": "manager"})
+	input, err := json.Marshal(map[string]string{"title": title, "brief": ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +113,7 @@ func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 }
 
 func TestAgentPanelKeepsAllAgentsInsideTerminal(t *testing.T) {
-	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high", Roster: testTUIRoster()}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +257,7 @@ func TestModelMenuAssignsSeatSubagentAndLeafSlots(t *testing.T) {
 }
 
 func TestEndedSubagentLeavesActivePanelButKeepsTranscript(t *testing.T) {
-	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high", Roster: testTUIRoster()}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

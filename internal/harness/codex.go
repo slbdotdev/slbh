@@ -26,7 +26,7 @@ const codexParentTool = "slbh_message_parent"
 const codexCallTimeout = 30 * time.Second
 
 // codexReasoningEffort passes slbh's effort through unchanged: every slbh
-// level is one the app-server accepts for the roster's Codex models, and its
+// level is one the app-server accepts for configured Codex models, and its
 // ReasoningEffort is an open string. Empty means inherit Codex's default.
 func codexReasoningEffort(level string) string {
 	return strings.TrimSpace(level)

@@ -20,25 +20,21 @@ control and therefore no daemon.
 
 ## 2. Agents
 
-| Agent | Depth | Harness under it | Model |
-| --- | --- | --- | --- |
-| Seat | 0 | native provider | `zai/glm-5.3-flash` |
-| Manager | 1 | native provider | `zai/glm-5.3-flash` |
-| Luna | 2 | Codex leaf | `gpt-5.6-luna` |
-| Sol | 2 | Codex leaf | `gpt-5.6-sol` |
-| Opus | 2 | Claude Code leaf, headless | `claude-opus-5` |
-| Flex | 2 | native provider | named at dispatch |
-| Intern | outside the tree | native provider | `local/q27-…` |
+The runtime has a root agent at depth 0 and may delegate through depth 1 to
+depth 2. Native agents below depth 2 may launch one child; a depth-2 child
+launches nothing. There is no named-role roster and no configured launcher
+relationship.
 
-All three rungs are occupied. `ConfigureModelSlots`' seat, subagent and
-leaf slots map onto them exactly, and `instructions/manager.md` has a
-reader.
+Each child chooses an optional harness (`native`, `codex`, or `claude_code`)
+and a model. Depth 1 may use the configured child default. Depth 2 must carry
+an explicit real model string or a short name resolved by the managed
+`$SLBH_HOME/models.toml` map. When effort is omitted, route `defaultEffort`,
+the model alias's effort, and the configured child effort are considered in
+that order.
 
-A leaf launches nothing; a Manager may. The existing cap at
-`parent.Depth >= 2` is already correct and is not relaxed.
-
-Several Managers run concurrently against the Z.ai plan alongside the Seat.
-That concurrency has been tested and holds.
+`AgentSnapshot` reports title, depth, harness, model and effort; it does not
+expose a role identity. The Intern remains outside the tree and uses its
+read-only runtime frontend.
 
 ## 3. The seam
 
@@ -79,10 +75,10 @@ instructions, routing policy, local routes — have no Codex equivalent.
 
 ## 4. Leaves
 
-A leaf's model and effort are chosen **per launch**. The runtime's leaf
-default is a fallback for a launch that names none, not the only value
-available. Luna and Sol are the same harness at different models, so the
-roster does not exist unless the launch can say which.
+A deeper child's model and effort are chosen **per launch**. The runtime's
+depth-one child default is a fallback only at depth one, not the only value
+available. A short name is only an alias for a real model string; it is not an
+agent identity.
 
 **A launch always states the model explicitly.** Codex's app-server
 `thread/start` inherits a model when the caller omits one, so an omission
@@ -92,12 +88,10 @@ every leaf launch rather than relying on the default.
 Three leaf kinds:
 
 - **Codex**, over the app-server, as today.
-- **Claude Code**, headless, for Opus. `ANTHROPIC_API_KEY` is not exported
-  on this fleet, so a headless Claude Code leaf runs on the host's
-  claude.ai login and is plan-billed. It must stay that way.
-- **slbh's own provider path**, for Flex. This needs no integration: the
-  routes are already in `policy.json`. Flex names its model at dispatch
-  rather than carrying one, and that model is never the author's family.
+- **Claude Code**, headless, when the launch selects `claude_code`. It uses
+  the host's Claude login and the model supplied by the launch.
+- **slbh's own provider path**, when the launch selects `native`. The model
+  is supplied by the launch or the depth-one configured default.
 
 A leaf receives the managed leaf document appended to the harness-specific
 mechanics slbh supplies, as the Codex leaf already does.
@@ -161,14 +155,15 @@ hold even with no transport in sight.
 
 - `$SLBH_HOME/policy.json` and
   `$SLBH_HOME/instructions/{seat,manager,leaf,intern}.md` are org content. They live in `slb-org` and reach hosts by its sync.
+- `$SLBH_HOME/models.toml` is optional org content containing short names and
+  their real model strings. It has no agent or launch-role data.
 - `$SLBH_HOME/skills/{seat,manager,leaf,intern}/<skill>/` is org content
-  too. The sync fills each layer's directory from the roster: the skills
-  of the slbh name that reads that layer's document.
+  too. The sync fills each depth layer's directory with the complete skill
+  catalogue; slbh does no name filtering.
 - `$SLBH_HOME/config.json` stays application-owned. slbh writes it.
 
-**Skills.** An slbh agent's skills are the directory for its layer, chosen
-exactly as its instruction document is: by depth, and by name for the
-Intern. slbh does no filtering; the directory is the role's set.
+**Skills.** An slbh agent's skills are the directory for its layer, chosen by
+depth, and the Intern's directory by name. slbh does no filtering.
 
 - At prompt assembly slbh lists each skill in that directory: its name, the
   `description` from the front matter of its `SKILL.md`, and the absolute
@@ -202,8 +197,8 @@ Intern. slbh does no filtering; the directory is the role's set.
 
 Measured at `e672775` on `main`, into which `v0.3-draft` merged at
 `ac58fab`. The code-bearing delta is built, one unit per commit, each checked with `gofmt`, build, vet, the full suite and the
-race detector. The current tip also records the role-aware TUI fixture
-migration needed by the runtime's managed roster contract:
+race detector. The current tip also records the depth-aware TUI fixture
+migration used by the runtime's delegation contract:
 
 | unit | commit | what it delivers |
 | --- | --- | --- |
@@ -222,9 +217,9 @@ migration needed by the runtime's managed roster contract:
 | the seat runs glm | `c1fe614` | the Seat's compiled default is `zai/glm-5.3-flash` |
 | skill loading | `cc030fc` | layer skill metadata loads from `$SLBH_HOME`; native agents and the Intern receive names, descriptions and absolute `SKILL.md` paths without bodies |
 | JSON-safe polling seam | `5d64de6` | `PollEvents(EventQuery) EventBatch` replaces live subscription channels; TUI, headless and Intern consume cursor-based event batches |
-| role-aware runtime | `c70e239` | managed roster loading and role metadata; role, harness, model, depth and launcher constraints are enforced at runtime |
-| runtime documentation | `d7042f1` | README and operational defaults describe the current v0.3 roster, local model and org-sync ownership |
-| role-aware test fixtures | `7989857` | TUI launch tests provide the managed Seat/Manager roster roles required by the runtime |
+| role-aware runtime | `c70e239` | historical roster implementation, retired by the depth-only launch contract |
+| runtime documentation | `d7042f1` | historical v0.3 roster documentation, superseded by model aliases and depth-only delegation |
+| role-aware test fixtures | `7989857` | historical fixtures, superseded by role-free launch tests |
 | subagent stall warnings | `ce9c1ca` | `launch_subagent.warn_after_seconds` defaults to five seconds, warns the parent once through its inbox, and cancels on child completion, error, stop or runtime shutdown |
 | persistent headless | `a397d17` | `slbh --headless` is a long-lived JSONL protocol over the seam: initialize, prompts, polled events and `close`, with the Intern inside the same runtime |
 | job output cap | `0e0bd76` | each job stream keeps at most 4 MiB and consumes the rest, so the cap holds past the first full write and the child is never blocked on a short write |

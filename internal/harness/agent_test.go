@@ -123,7 +123,7 @@ func TestSystemPromptDirectsAsyncChildHandling(t *testing.T) {
 	seat := r.seat()
 	prompt := systemPrompt(seat)
 	for _, phrase := range []string{
-		"You are seat, a native agent in slbh runtime " + r.ID() + ": roster role seat, depth 0.",
+		"You are seat, a native agent in slbh runtime " + r.ID() + " at depth 0.",
 		"Keep your thinking brief and focused",
 		"use a tool to find out rather than reasoning at length",
 		"next tool or API call boundary",
@@ -132,7 +132,7 @@ func TestSystemPromptDirectsAsyncChildHandling(t *testing.T) {
 		"Never sleep, poll, or run wait loops",
 		"end your turn and you will be woken",
 		"End each subagent with end_subagent",
-		"Roles you can launch: manager=depth-1/native/test-manager.",
+		"Launch one child at the next depth with a relevant title.",
 	} {
 		if !strings.Contains(prompt, phrase) {
 			t.Fatalf("seat system prompt missing %q: %s", phrase, prompt)
@@ -143,16 +143,16 @@ func TestSystemPromptDirectsAsyncChildHandling(t *testing.T) {
 	}
 
 	// A leaf launches nothing: no launch guidance and no launch tool.
-	manager, err := r.launchSubagentSpec(seat.ID, LaunchSpec{Title: "manager", Role: "manager", Brief: "inspect"})
+	manager, err := r.launchSubagentSpec(seat.ID, LaunchSpec{Title: "manager", Brief: "inspect"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	leaf, err := r.launchSubagentSpec(manager.ID, LaunchSpec{Title: "leaf", Role: "flex", Model: "test-leaf", Brief: "inspect"})
+	leaf, err := r.launchSubagentSpec(manager.ID, LaunchSpec{Title: "leaf", Model: "test-leaf", Brief: "inspect"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := systemPrompt(manager); !strings.Contains(got, "Roles you can launch: flex=depth-2/native/one of [") {
-		t.Fatalf("manager prompt does not list its depth-2 roles: %s", got)
+	if got := systemPrompt(manager); !strings.Contains(got, "deeper children must name a real model or short name explicitly") {
+		t.Fatalf("manager prompt does not describe model selection: %s", got)
 	}
 	leafPrompt := systemPrompt(leaf)
 	if strings.Contains(leafPrompt, "Roles you can launch") || strings.Contains(leafPrompt, "end_subagent") {

@@ -91,11 +91,10 @@ func cloneConfig(cfg config.Config) config.Config {
 		}
 	}
 	cloned.Skills.Source.Missing = append([]string(nil), cfg.Skills.Source.Missing...)
-	if cfg.Roster.Names != nil {
-		cloned.Roster.Names = make(map[string]config.Role, len(cfg.Roster.Names))
-		for name, role := range cfg.Roster.Names {
-			role.ModelsApproved = append([]string(nil), role.ModelsApproved...)
-			cloned.Roster.Names[name] = role
+	if cfg.Models.Aliases != nil {
+		cloned.Models.Aliases = make(map[string]config.ModelAlias, len(cfg.Models.Aliases))
+		for name, alias := range cfg.Models.Aliases {
+			cloned.Models.Aliases[name] = alias
 		}
 	}
 	return cloned

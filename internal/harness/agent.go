@@ -36,7 +36,6 @@ type Agent struct {
 	runtime  *Runtime
 	ID       string
 	Title    string
-	Role     string
 	ParentID string
 	Depth    int
 	Model    string
@@ -68,8 +67,8 @@ type Agent struct {
 	claude        *claudeLeaf
 }
 
-func newAgent(runtime *Runtime, agentID, title, role, parentID string, depth int, model, effort string) *Agent {
-	return &Agent{runtime: runtime, ID: agentID, Title: title, Role: role, ParentID: parentID, Depth: depth, Model: model, Effort: effort, Harness: "native", WorkDir: runtime.workDir, status: "idle", wake: make(chan struct{}, 1), done: make(chan struct{})}
+func newAgent(runtime *Runtime, agentID, title, parentID string, depth int, model, effort string) *Agent {
+	return &Agent{runtime: runtime, ID: agentID, Title: title, ParentID: parentID, Depth: depth, Model: model, Effort: effort, Harness: "native", WorkDir: runtime.workDir, status: "idle", wake: make(chan struct{}, 1), done: make(chan struct{})}
 }
 
 func (a *Agent) start() {
@@ -177,7 +176,6 @@ func (a *Agent) Snapshot() seam.AgentSnapshot {
 	return seam.AgentSnapshot{
 		ID:              a.ID,
 		Title:           a.Title,
-		Role:            a.Role,
 		ParentID:        a.ParentID,
 		Depth:           a.Depth,
 		Model:           a.Model,
@@ -870,7 +868,7 @@ func systemPrompt(a *Agent) string {
 	prompt := bakedSystemPrompt(a)
 	layer := a.runtime.LayerInstructions(a.Depth)
 	if strings.TrimSpace(layer) != "" {
-		prompt += fmt.Sprintf("\n\nOrg instructions for your layer (%s). These are managed by the fleet and define what an agent at this layer may and may not do. Where they appear to contradict the runtime mechanics above, the mechanics are facts about this build and stand; the role policy governs everything else.\n\n%s", config.LayerForDepth(a.Depth), layer)
+		prompt += fmt.Sprintf("\n\nOrg instructions for your layer (%s). These are managed by the fleet and define what an agent at this depth may and may not do. Where they appear to contradict the runtime mechanics above, the mechanics are facts about this build and stand; the layer policy governs everything else.\n\n%s", config.LayerForDepth(a.Depth), layer)
 	}
 	if skills := a.runtime.LayerSkillPrompt(a.Depth); skills != "" {
 		prompt += "\n\n" + skills
@@ -885,15 +883,15 @@ func systemPrompt(a *Agent) string {
 // only what the tool descriptions do not; launch rules, message addressing
 // and job-warning details live on the tools themselves.
 func bakedSystemPrompt(a *Agent) string {
-	prompt := fmt.Sprintf("You are %s, a native agent in slbh runtime %s: roster role %s, depth %d.", a.Title, a.runtime.ID(), a.Role, a.Depth) +
+	prompt := fmt.Sprintf("You are %s, a native agent in slbh runtime %s at depth %d.", a.Title, a.runtime.ID(), a.Depth) +
 		"\n\nKeep your thinking brief and focused, moving directly to the next action or conclusion without unnecessary elaboration. When a question can be settled by looking — reading a file, running a command, checking a result — use a tool to find out rather than reasoning at length about what is likely true." +
 		fmt.Sprintf("\n\nThis host is %s. Your command tools are %s. TMPDIR, TMP and TEMP point at your agent scratch directory, %s; use it for temporary files instead of /tmp, your working directory, or your home directory.", runtime.GOOS, strings.Join(job.AvailableInterpreters(), ", "), filepath.Join(a.runtime.runtimeDir, "agents", a.ID, "scratch")) +
 		"\n\nMessages reach you at your next tool or API call boundary, or wake you if you are idle: steers from the owner or other agents, subagent results, and background job output. Act on each in the current turn; never defer one to the end. A warning that a job or subagent is still running is sent once and never repeated. Decide then: kill or end it, keep waiting for its result, or do other work."
-	// Launch guidance only for an agent that has roles to launch. A leaf
-	// cannot launch anything, and the rules themselves are in the
+	// Launch guidance only for an agent that can launch a child. A leaf
+	// cannot launch anything, and the mechanics themselves are in the
 	// launch_subagent description and enforced at launch.
-	if roles := a.runtime.childRoles(a); len(roles) > 0 {
-		prompt += "\n\nSubagents run asynchronously and report back as messages. Never sleep, poll, or run wait loops to watch one; if there is no other useful work, end your turn and you will be woken. End each subagent with end_subagent once its work is complete. Roles you can launch: " + launchRoleList(roles) + "."
+	if a.runtime.canLaunch(a) {
+		prompt += "\n\nSubagents run asynchronously and report back as messages. Never sleep, poll, or run wait loops to watch one; if there is no other useful work, end your turn and you will be woken. End each subagent with end_subagent once its work is complete. Launch one child at the next depth with a relevant title. Depth-1 children may use the configured child model; deeper children must name a real model or short name explicitly and may select native, Codex, or Claude Code with the harness field."
 	}
 	return prompt
 }

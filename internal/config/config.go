@@ -89,9 +89,10 @@ type Config struct {
 	// Only name, description and absolute SKILL.md path are retained; skill
 	// bodies remain on disk until an agent chooses to read one.
 	Skills Skills
-	// Roster is the managed launch identity and compatibility policy read from
-	// $SLBH_HOME/roster.toml. It is derived and never persisted by slbh.
-	Roster Roster
+	// Models is the optional managed short-name map read from
+	// $SLBH_HOME/models.toml. It contains model identities only; launch
+	// relationships belong to the runtime's depth mechanics, not a roster.
+	Models Models
 }
 
 func Load() Config {
@@ -182,7 +183,7 @@ func Load() Config {
 	cfg.Policy, cfg.PolicySource = ResolvePolicy(home, cfg.LocalPolicy)
 	cfg.Instructions = LoadInstructions(home)
 	cfg.Skills = LoadSkills(home)
-	cfg.Roster = LoadRoster(home)
+	cfg.Models = LoadModels(home)
 	return cfg
 }
 
