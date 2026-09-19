@@ -1394,3 +1394,48 @@ func TestOutputLimitStopIsAWarningInTheTranscript(t *testing.T) {
 		})
 	}
 }
+
+// A route's defaultEffort outranks the model-agnostic seat and role defaults
+// wherever an agent is put on that route, and yields to an effort named for
+// the placement.
+func TestRouteDefaultEffortAppliesOnPlacement(t *testing.T) {
+	policy := provider.Policy{Version: provider.PolicyVersion, Routes: map[string]provider.RoutePolicy{
+		"test-leaf": {DefaultEffort: "low"},
+	}}
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high", SubagentModel: "test-child", SubagentEffort: "high", Roster: testRoster(), Policy: policy},
+		Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	seat := r.seat()
+	if got := seat.Snapshot().Effort; got != "high" {
+		t.Fatalf("seat on a route without defaultEffort = %q, want the seat default high", got)
+	}
+
+	manager, err := r.launchSubagentSpec(seat.ID, LaunchSpec{Title: "manager", Role: "manager", Brief: "inspect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := r.launchSubagentSpec(manager.ID, LaunchSpec{Title: "leaf", Role: "flex", Model: "test-leaf", Brief: "inspect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := leaf.Snapshot().Effort; got != "low" {
+		t.Fatalf("leaf on the route = %q, want defaultEffort low over the role's high", got)
+	}
+	explicit, err := r.launchSubagentSpec(manager.ID, LaunchSpec{Title: "explicit", Role: "flex", Model: "test-leaf", Effort: "high", Brief: "inspect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := explicit.Snapshot().Effort; got != "high" {
+		t.Fatalf("leaf launched with an explicit effort = %q, want high", got)
+	}
+
+	if err := r.configureModelSlots("test-leaf", "test-child", "test-leaf", []string{"test", "test-leaf", "test-child"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := seat.Snapshot(); got.Model != "test-leaf" || got.Effort != "low" {
+		t.Fatalf("seat switched onto the route = %s at %q, want test-leaf at low", got.Model, got.Effort)
+	}
+}

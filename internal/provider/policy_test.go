@@ -358,3 +358,19 @@ func TestCommittedPolicyArtifactsValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestRouteDefaultEffortMustBeSendable(t *testing.T) {
+	route := RoutePolicy{
+		Endpoint: "http://localhost:11434/api/chat",
+		Wire:     WireOllamaChat,
+		Effort:   EffortDescriptor{Field: effortFieldForWire[WireOllamaChat], Levels: map[string]string{"low": "low", "medium": "medium"}},
+	}
+	route.DefaultEffort = "low"
+	if err := route.validate("local/x"); err != nil {
+		t.Fatalf("mapped defaultEffort refused: %v", err)
+	}
+	route.DefaultEffort = "xhigh"
+	if err := route.validate("local/x"); err == nil || !strings.Contains(err.Error(), "defaultEffort") {
+		t.Fatalf("unmapped defaultEffort = %v, want a defaultEffort refusal", err)
+	}
+}

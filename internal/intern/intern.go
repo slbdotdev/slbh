@@ -60,6 +60,13 @@ func Run(ctx context.Context, rt seam.Runtime, opts Options) error {
 	}
 	effort := strings.TrimSpace(opts.Effort)
 	if effort == "" {
+		if key, ok := provider.RouteKey(model); ok {
+			if route, found := cfg.Policy.Route(key); found {
+				effort = strings.TrimSpace(route.DefaultEffort)
+			}
+		}
+	}
+	if effort == "" {
 		effort = strings.TrimSpace(cfg.InternEffort)
 	}
 	if effort == "" {

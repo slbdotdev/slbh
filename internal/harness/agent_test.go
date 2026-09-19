@@ -23,8 +23,65 @@ func TestContextBudgetUsesSeventyPercentOfDiscoveredWindow(t *testing.T) {
 	for i := range history {
 		history[i] = provider.Message{Role: "user", Content: strings.Repeat("x", 5000)}
 	}
-	if contextLimitReached(1000000, "system", history, nil) {
+	if contextLimitReached(1000000, "system", history, nil, contextAnchor{}) {
 		t.Fatal("history of roughly 33k estimated tokens reached the 700k-token budget")
+	}
+}
+
+// The run that motivated anchoring: a thinking model on a 64k local window
+// replayed ~65k estimated tokens of reasoning the template never sent, while
+// the server reported 13.5k. The real count must win for the prefix it
+// measured, and only the messages after it may be estimated.
+func TestContextEstimateAnchorsOnReportedPromptTokens(t *testing.T) {
+	const window = 65536
+	system := "system"
+	reasoning := strings.Repeat("r", 240000) // ~60k estimated tokens
+	history := []provider.Message{
+		{Role: "user", Content: "question"},
+		{Role: "assistant", Content: "", ReasoningContent: reasoning},
+	}
+	if !contextLimitReached(window, system, history, nil, contextAnchor{}) {
+		t.Fatal("fixture does not reach the budget unanchored, so the anchor is not what this test measures")
+	}
+
+	agent := &Agent{}
+	agent.recordRequestContext(provider.Request{System: system, Messages: history}, window)
+	agent.recordUsage(map[string]any{"prompt_tokens": float64(13500)})
+	anchor := agent.contextAnchor
+	if anchor.tokens != 13500 || anchor.messages != len(history) {
+		t.Fatalf("anchor = %+v, want 13500 tokens over %d messages", anchor, len(history))
+	}
+	if got := estimateContextTokens(system, nil, history, anchor); got != 13500 {
+		t.Fatalf("estimate of the measured prompt = %d, want the reported 13500", got)
+	}
+
+	// Messages appended after the measured request are estimated on top.
+	grown := append(append([]provider.Message(nil), history...), provider.Message{Role: "tool", ToolCallID: "c1", Content: strings.Repeat("x", 4000)})
+	got := estimateContextTokens(system, nil, grown, anchor)
+	if got <= 13500 || got > 13500+1100 {
+		t.Fatalf("anchored estimate = %d, want 13500 plus roughly 1k for the new tool result", got)
+	}
+	if contextLimitReached(window, system, grown, nil, anchor) {
+		t.Fatal("compaction fired on a 14.5k-token prompt in a 64k window")
+	}
+	agent.recordRequestContext(provider.Request{System: system, Messages: grown}, window)
+	if agent.contextUsed != got {
+		t.Fatalf("status line context = %d, want the anchored %d", agent.contextUsed, got)
+	}
+
+	// A changed prefix (compaction, another system prompt) voids the anchor.
+	compacted := append([]provider.Message{{Role: "user", Content: "[compacted]"}}, grown[1:]...)
+	if got := estimateContextTokens(system, nil, compacted, anchor); got < 60000 {
+		t.Fatalf("estimate over a changed prefix = %d, want the unanchored byte estimate", got)
+	}
+	if got := estimateContextTokens("other system", nil, grown, anchor); got < 60000 {
+		t.Fatalf("estimate under another system prompt = %d, want the unanchored byte estimate", got)
+	}
+
+	// A new model or a cleared session starts over.
+	agent.SetModel("other/model")
+	if agent.contextAnchor != (contextAnchor{}) || agent.pendingAnchor != (contextAnchor{}) {
+		t.Fatal("anchor survived a model change")
 	}
 }
 
@@ -225,10 +282,10 @@ func TestCompactionFiresAtSeventyPercentOfThePinnedWindow(t *testing.T) {
 	for i := range history {
 		history[i] = provider.Message{Role: "user", Content: strings.Repeat("x", 5000)}
 	}
-	if !contextLimitReached(provider.FallbackContextWindow, "system", history, nil) {
+	if !contextLimitReached(provider.FallbackContextWindow, "system", history, nil, contextAnchor{}) {
 		t.Fatal("history did not reach the fallback budget, so the pin is not what this test measures")
 	}
-	if contextLimitReached(window, "system", history, nil) {
+	if contextLimitReached(window, "system", history, nil, contextAnchor{}) {
 		t.Fatalf("compaction fired below 70%% of the pinned %d-token window", window)
 	}
 }

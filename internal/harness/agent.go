@@ -56,6 +56,8 @@ type Agent struct {
 	contextModel  string
 	contextWindow int
 	contextUsed   int
+	contextAnchor contextAnchor
+	pendingAnchor contextAnchor
 	cacheHits     int
 	cacheMisses   int
 	historyEpoch  uint64
@@ -194,6 +196,9 @@ func (a *Agent) SetModel(model string) {
 	a.Model = strings.TrimSpace(model)
 	a.contextModel = ""
 	a.contextWindow = 0
+	// Another model means another tokenizer; its counts do not carry over.
+	a.contextAnchor = contextAnchor{}
+	a.pendingAnchor = contextAnchor{}
 	a.mu.Unlock()
 }
 
@@ -222,6 +227,8 @@ func (a *Agent) ClearHistory() {
 	a.mu.Lock()
 	a.history = nil
 	a.contextUsed = 0
+	a.contextAnchor = contextAnchor{}
+	a.pendingAnchor = contextAnchor{}
 	a.historyEpoch++
 	turnCancel := a.turnCancel
 	a.mu.Unlock()
@@ -509,14 +516,16 @@ func (a *Agent) setStatus(status string) {
 }
 
 func (a *Agent) recordRequestContext(req provider.Request, contextWindow int) {
-	encoded, err := provider.ContextPayload(req)
+	prefix, err := contextPrefixKey(req.System, req.Tools, req.Messages)
 	if err != nil {
 		return
 	}
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.contextWindow = contextWindow
-	a.contextUsed = (len(encoded) + 3) / 4
-	a.mu.Unlock()
+	a.contextUsed = estimateContextTokens(req.System, req.Tools, req.Messages, a.contextAnchor)
+	// The usage this request reports measures exactly this prompt.
+	a.pendingAnchor = contextAnchor{messages: len(req.Messages), prefix: prefix}
 }
 
 func (a *Agent) recordUsage(usage map[string]any) {
@@ -524,6 +533,10 @@ func (a *Agent) recordUsage(usage map[string]any) {
 	defer a.mu.Unlock()
 	if promptTokens, ok := usageInt(usage, "prompt_tokens"); ok {
 		a.contextUsed = promptTokens
+		if a.pendingAnchor.prefix != "" && promptTokens > 0 {
+			a.contextAnchor = a.pendingAnchor
+			a.contextAnchor.tokens = promptTokens
+		}
 	}
 	hit, hitOK := usageInt(usage, "prompt_cache_hit_tokens")
 	miss, missOK := usageInt(usage, "prompt_cache_miss_tokens")
@@ -703,8 +716,9 @@ func (a *Agent) Compact(keep int) int {
 func (a *Agent) maybeCompact(contextWindow int, system string, tools []provider.Tool) {
 	a.mu.RLock()
 	history := append([]provider.Message(nil), a.history...)
+	anchor := a.contextAnchor
 	a.mu.RUnlock()
-	compacted, dropped := compactHistory(history, contextWindow, system, tools, 24)
+	compacted, dropped := compactHistory(history, contextWindow, system, tools, 24, anchor)
 	if dropped == 0 {
 		return
 	}
@@ -715,7 +729,10 @@ func (a *Agent) maybeCompact(contextWindow int, system string, tools []provider.
 }
 
 func (a *Agent) compactHistoryIfNeeded(history []provider.Message, contextWindow int, system string, tools []provider.Tool) []provider.Message {
-	compacted, dropped := compactHistory(history, contextWindow, system, tools, 24)
+	a.mu.RLock()
+	anchor := a.contextAnchor
+	a.mu.RUnlock()
+	compacted, dropped := compactHistory(history, contextWindow, system, tools, 24, anchor)
 	if dropped > 0 {
 		a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
 		return compacted
@@ -723,8 +740,8 @@ func (a *Agent) compactHistoryIfNeeded(history []provider.Message, contextWindow
 	return history
 }
 
-func compactHistory(history []provider.Message, contextWindow int, system string, tools []provider.Tool, keep int) ([]provider.Message, int) {
-	if !contextLimitReached(contextWindow, system, history, tools) {
+func compactHistory(history []provider.Message, contextWindow int, system string, tools []provider.Tool, keep int, anchor contextAnchor) ([]provider.Message, int) {
+	if !contextLimitReached(contextWindow, system, history, tools, anchor) {
 		return history, 0
 	}
 	return compactMessages(history, keep)
@@ -734,17 +751,51 @@ func contextBudget(contextWindow int) int {
 	return contextWindow * compactAtNumerator / compactAtDenominator
 }
 
-func contextLimitReached(contextWindow int, system string, history []provider.Message, tools []provider.Tool) bool {
-	encoded, err := json.Marshal(struct {
-		System   string             `json:"system"`
-		Messages []provider.Message `json:"messages"`
-		Tools    []provider.Tool    `json:"tools"`
-	}{System: system, Messages: history, Tools: tools})
-	if err != nil {
-		return false
+func contextLimitReached(contextWindow int, system string, history []provider.Message, tools []provider.Tool, anchor contextAnchor) bool {
+	return estimateContextTokens(system, tools, history, anchor) >= contextBudget(contextWindow)
+}
+
+// contextAnchor is the provider's own prompt_tokens for one request, together
+// with the exact prompt it measured. Counting bytes overstates a thinking
+// model badly: replayed reasoning_content is serialized into every request,
+// but chat templates drop it from earlier turns, so it never reaches the
+// model. One run on the local route estimated 82k tokens against a real
+// 13.5k and would have compacted for nothing. The real count is the truth
+// for the prefix it measured; only messages added since are estimated.
+type contextAnchor struct {
+	tokens   int
+	messages int
+	prefix   string
+}
+
+// estimateContextTokens returns the anchored count plus an estimate of the
+// messages appended after it. Without an anchor that still matches the
+// history — none yet, compaction, a cleared session — it falls back to
+// estimating the whole prompt at four bytes per token.
+func estimateContextTokens(system string, tools []provider.Tool, history []provider.Message, anchor contextAnchor) int {
+	if anchor.tokens > 0 && anchor.messages <= len(history) {
+		if prefix, err := contextPrefixKey(system, tools, history[:anchor.messages]); err == nil && prefix == anchor.prefix {
+			if anchor.messages == len(history) {
+				return anchor.tokens
+			}
+			if tail, err := json.Marshal(history[anchor.messages:]); err == nil {
+				return anchor.tokens + (len(tail)+3)/4
+			}
+		}
 	}
-	estimatedTokens := (len(encoded) + 3) / 4
-	return estimatedTokens >= contextBudget(contextWindow)
+	encoded, err := provider.ContextPayload(provider.Request{System: system, Messages: history, Tools: tools})
+	if err != nil {
+		return 0
+	}
+	return (len(encoded) + 3) / 4
+}
+
+func contextPrefixKey(system string, tools []provider.Tool, messages []provider.Message) (string, error) {
+	encoded, err := provider.ContextPayload(provider.Request{System: system, Messages: messages, Tools: tools})
+	if err != nil {
+		return "", err
+	}
+	return provider.PayloadSHA256(encoded), nil
 }
 
 func (a *Agent) resolveContextWindow(ctx context.Context, p provider.Provider) int {

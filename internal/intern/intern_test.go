@@ -398,6 +398,22 @@ func TestExactToolListAndUnknownToolRefusal(t *testing.T) {
 	finishIntern(t, rt, done)
 }
 
+func TestRouteDefaultEffortOutranksInternEffort(t *testing.T) {
+	rt := newFakeRuntime(t)
+	rt.config.InternEffort = "high"
+	rt.config.Policy = provider.Policy{Version: provider.PolicyVersion, Routes: map[string]provider.RoutePolicy{
+		"local/test-intern": {ContextWindow: 65536, DefaultEffort: "low"},
+	}}
+	p := newScriptedProvider(func(int, context.Context, provider.Request, provider.StreamSink) error { return nil })
+	done := startIntern(t, rt, p)
+	rt.emit(seam.Event{AgentID: "seat", Kind: "turn_done"})
+	waitCall(t, p)
+	if got := p.request(0).Effort; got != "low" {
+		t.Fatalf("intern effort = %q, want the route's defaultEffort low", got)
+	}
+	finishIntern(t, rt, done)
+}
+
 func TestEveryRequestCarriesMediumEffortAndRouteOutputBound(t *testing.T) {
 	rt := newFakeRuntime(t)
 	rt.config.Policy = provider.Policy{Version: provider.PolicyVersion, Routes: map[string]provider.RoutePolicy{

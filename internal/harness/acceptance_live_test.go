@@ -840,15 +840,15 @@ func TestAcceptanceContextPin(t *testing.T) {
 	system := "acceptance"
 	below := acceptHistoryOfEstimatedTokens(650_000)
 	above := acceptHistoryOfEstimatedTokens(720_000)
-	if contextLimitReached(snapshot.ContextWindow, system, below, nil) {
+	if contextLimitReached(snapshot.ContextWindow, system, below, nil, contextAnchor{}) {
 		t.Fatalf("compaction fired below the threshold")
 	}
-	if !contextLimitReached(snapshot.ContextWindow, system, above, nil) {
+	if !contextLimitReached(snapshot.ContextWindow, system, above, nil, contextAnchor{}) {
 		t.Fatalf("compaction did not fire above the threshold")
 	}
 	// The same histories against the old 128,000 fallback, to show the pin is
 	// what moved the line rather than the histories being trivially small.
-	if !contextLimitReached(provider.FallbackContextWindow, system, below, nil) {
+	if !contextLimitReached(provider.FallbackContextWindow, system, below, nil, contextAnchor{}) {
 		t.Fatalf("the 650k history does not exceed the 128k fallback budget; the fixture is wrong")
 	}
 

@@ -171,7 +171,13 @@ type RoutePolicy struct {
 	// is rather than as a hang.
 	MaxOutputTokens int              `json:"maxOutputTokens,omitempty"`
 	Effort          EffortDescriptor `json:"effort"`
-	Provider        *ProviderPosture `json:"provider,omitempty"`
+	// DefaultEffort is the effort an agent takes when it is put on this route
+	// without an effort named for that placement. It outranks the seat,
+	// intern and role defaults, which are model-agnostic, and yields to an
+	// effort passed explicitly at launch or set later with /effort. Empty
+	// leaves those defaults in force.
+	DefaultEffort string           `json:"defaultEffort,omitempty"`
+	Provider      *ProviderPosture `json:"provider,omitempty"`
 	// Options is the sampler block an ollama-chat route sends in `options`,
 	// verbatim. It is policy rather than code because it is a per-model fact
 	// that changes with the tag, and it is refused on every other wire: the
@@ -263,6 +269,11 @@ func (r RoutePolicy) validate(key string) error {
 	}
 	if len(r.Effort.Levels) == 0 {
 		return fmt.Errorf("route %q has an empty effort level map, so no effort could ever be sent", key)
+	}
+	if r.DefaultEffort != "" {
+		if _, err := r.EffortValue(key, r.DefaultEffort); err != nil {
+			return fmt.Errorf("route %q defaultEffort: %w", key, err)
+		}
 	}
 	if len(r.Options) > 0 {
 		if r.Wire != WireOllamaChat {

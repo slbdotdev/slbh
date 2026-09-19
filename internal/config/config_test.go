@@ -141,7 +141,7 @@ func TestSecretaryWakeAndInternEffortDefaultsEnvironmentAndPersistence(t *testin
 	t.Setenv("SLBH_SECRETARY_WAKE", "")
 	t.Setenv("SLBH_INTERN_EFFORT", "")
 	got := Load()
-	if !got.SecretaryWake || got.InternEffort != "medium" {
+	if !got.SecretaryWake || got.InternEffort != "low" {
 		t.Fatalf("defaults = SecretaryWake %v, InternEffort %q", got.SecretaryWake, got.InternEffort)
 	}
 
@@ -155,12 +155,12 @@ func TestSecretaryWakeAndInternEffortDefaultsEnvironmentAndPersistence(t *testin
 	t.Setenv("SLBH_SECRETARY_WAKE", "")
 	t.Setenv("SLBH_INTERN_EFFORT", "")
 	got.SecretaryWake = false
-	got.InternEffort = "low"
+	got.InternEffort = "medium"
 	if err := got.Save(); err != nil {
 		t.Fatal(err)
 	}
 	got = Load()
-	if got.SecretaryWake || got.InternEffort != "low" {
+	if got.SecretaryWake || got.InternEffort != "medium" {
 		t.Fatalf("persisted = SecretaryWake %v, InternEffort %q", got.SecretaryWake, got.InternEffort)
 	}
 }
@@ -176,8 +176,8 @@ func TestDefaultEffortsAreServableLocally(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	got := Load()
-	if got.SeatEffort != "medium" || got.InternEffort != "medium" || got.SubagentEffort != "medium" {
-		t.Fatalf("default efforts = seat %q, intern %q, subagent %q; want medium everywhere", got.SeatEffort, got.InternEffort, got.SubagentEffort)
+	if got.SeatEffort != "medium" || got.InternEffort != "low" || got.SubagentEffort != "medium" {
+		t.Fatalf("default efforts = seat %q, intern %q, subagent %q; want medium, low, medium", got.SeatEffort, got.InternEffort, got.SubagentEffort)
 	}
 	if got.SeatEffort == "xhigh" || got.SeatEffort == "max" {
 		t.Fatalf("default seat effort %q cannot be served by the local route", got.SeatEffort)

@@ -129,7 +129,7 @@ func Load() Config {
 		SeatModel:      getenv("SLBH_MODEL", "zai/glm-5.3-flash"),
 		SeatEffort:     getenv("SLBH_EFFORT", "medium"),
 		InternModel:    getenv("SLBH_INTERN_MODEL", provider.LocalModelID),
-		InternEffort:   getenv("SLBH_INTERN_EFFORT", "medium"),
+		InternEffort:   getenv("SLBH_INTERN_EFFORT", "low"),
 		SubagentModel:  getenv("SLBH_SUBAGENT_MODEL", "zai/glm-5.3-flash"),
 		LeafModel:      getenv("SLBH_LEAF_MODEL", provider.LocalModelID),
 		SubagentEffort: getenv("SLBH_SUBAGENT_EFFORT", "medium"),

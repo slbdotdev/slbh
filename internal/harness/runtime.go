@@ -132,7 +132,11 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	if !cfg.ModelApproved(seatModel) {
 		seatModel = ""
 	}
-	seat, err := r.newAgent("seat", "seat", "", 0, seatModel, cfg.SeatEffort)
+	seatEffort := cfg.SeatEffort
+	if routeEffort := routeDefaultEffort(cfg.Policy, seatModel); routeEffort != "" {
+		seatEffort = routeEffort
+	}
+	seat, err := r.newAgent("seat", "seat", "", 0, seatModel, seatEffort)
 	if err != nil {
 		cancel()
 		_ = os.Remove(filepath.Join(r.runtimeDir, "runtime.json"))
@@ -240,8 +244,25 @@ func (r *Runtime) configureModelSlots(seatModel, subagentModel, leafModel string
 			model = ""
 		}
 		seat.SetModel(model)
+		if routeEffort := routeDefaultEffort(cfg.Policy, model); routeEffort != "" {
+			seat.SetEffort(routeEffort)
+		}
 	}
 	return nil
+}
+
+// routeDefaultEffort is the policy's defaultEffort for the route a model
+// addresses, or empty when the route has none.
+func routeDefaultEffort(policy provider.Policy, model string) string {
+	key, ok := provider.RouteKey(model)
+	if !ok {
+		return ""
+	}
+	route, found := policy.Route(key)
+	if !found {
+		return ""
+	}
+	return strings.TrimSpace(route.DefaultEffort)
 }
 
 // LayerInstructions returns the managed role document for an agent at the
@@ -466,6 +487,11 @@ func (r *Runtime) launchSubagentSpec(parentID string, spec LaunchSpec) (*Agent, 
 		model = role.Model
 	} else if model != role.Model {
 		return nil, fmt.Errorf("roster role %q requires model %q, got %q", role.Name, role.Model, model)
+	}
+	if effort == "" {
+		r.mu.RLock()
+		effort = routeDefaultEffort(r.config.Policy, model)
+		r.mu.RUnlock()
 	}
 	if effort == "" {
 		effort = role.Effort

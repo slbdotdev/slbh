@@ -106,10 +106,16 @@ an edit changed nothing.
 Per route the policy carries the endpoint, the wire protocol, a separate
 catalog endpoint where one cannot be derived from the other, a context window
 where the provider's catalog cannot report one, an optional `maxOutputTokens`
-bound on one generation, an effort descriptor, on an `ollama-chat` route an
+bound on one generation, an effort descriptor, an optional `defaultEffort`, on an `ollama-chat` route an
 `options` block of sampler settings, and — for
 an OpenRouter route — the routing posture (`zdr`, `data_collection`, `sort`,
 `ignore`, `max_price`). No credential appears in either file.
+
+`defaultEffort` is the effort an agent takes when it is put on the route — a
+Seat started on it or switched to it, the Intern, a leaf launched without an
+explicit effort. It outranks the model-agnostic `SLBH_EFFORT`,
+`SLBH_INTERN_EFFORT` and roster role defaults, yields to an effort passed at
+launch or set with `/effort`, and must be a level the route's effort map sends.
 
 `maxOutputTokens` is per route rather than global because the routes differ by
 more than an order of magnitude in what an unbounded generation costs: a cloud
@@ -257,7 +263,7 @@ These environment variables are read at startup:
 | `SLBH_MODEL` | `zai/glm-5.3-flash` | Seat agent model. |
 | `SLBH_EFFORT` | `medium` | Seat reasoning effort. |
 | `SLBH_INTERN_MODEL` | `local/q27-UD-Q2_K_XL-64k` | Intern model. |
-| `SLBH_INTERN_EFFORT` | `medium` | Intern reasoning effort. |
+| `SLBH_INTERN_EFFORT` | `low` | Intern reasoning effort. A route's policy `defaultEffort` takes precedence. |
 | `SLBH_SUBAGENT_MODEL` | `zai/glm-5.3-flash` | Default child-agent model. |
 | `SLBH_LEAF_MODEL` | `local/q27-UD-Q2_K_XL-64k` | Legacy depth-two default; roster launches require an explicit leaf model. |
 | `SLBH_SUBAGENT_EFFORT` | `medium` | Default child-agent effort. |
