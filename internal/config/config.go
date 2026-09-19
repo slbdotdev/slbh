@@ -91,7 +91,7 @@ type Config struct {
 	Skills Skills
 	// Models is the optional managed short-name map read from
 	// $SLBH_HOME/models.toml. It contains model identities only; launch
-	// relationships belong to the runtime's depth mechanics, not a roster.
+	// relationships belong to the runtime's depth mechanics, not this file.
 	Models Models
 }
 

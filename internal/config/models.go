@@ -10,7 +10,7 @@ import (
 )
 
 // ModelsFile is an optional managed map from a human short name to a real
-// provider model string. It is deliberately separate from the retired roster:
+// provider model string. It is deliberately separate from retired identities:
 // an alias identifies a model, not an agent or a launch relationship.
 const ModelsFile = "models.toml"
 

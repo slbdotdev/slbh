@@ -1108,7 +1108,7 @@ func TestSubagentWarningCancelsAfterChildResult(t *testing.T) {
 	t.Fatal("child did not finish before warning interval")
 }
 
-func TestLaunchWorksWithoutRoster(t *testing.T) {
+func TestLaunchWorksWithoutNamedCatalogue(t *testing.T) {
 	r := testRuntime(t)
 	child, err := r.launchSubagentSpec(r.seat().ID, LaunchSpec{Title: "child"})
 	if err != nil {

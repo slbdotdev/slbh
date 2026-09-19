@@ -312,7 +312,7 @@ func (r *Runtime) ModelGuidance() string {
 }
 
 // canLaunch is the runtime's only delegation topology: a native agent may
-// launch one child at each of the first two depths. No roster identity is
+// launch one child at each of the first two depths. No external identity is
 // consulted or required.
 func (r *Runtime) canLaunch(agent *Agent) bool {
 	return agent != nil && agent.Harness == "native" && agent.Depth < 2

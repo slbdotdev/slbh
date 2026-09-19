@@ -22,7 +22,7 @@ control and therefore no daemon.
 
 The runtime has a root agent at depth 0 and may delegate through depth 1 to
 depth 2. Native agents below depth 2 may launch one child; a depth-2 child
-launches nothing. There is no named-role roster and no configured launcher
+launches nothing. There is no named-role catalogue and no configured launcher
 relationship.
 
 Each child chooses an optional harness (`native`, `codex`, or `claude_code`)
@@ -217,8 +217,8 @@ migration used by the runtime's delegation contract:
 | the seat runs glm | `c1fe614` | the Seat's compiled default is `zai/glm-5.3-flash` |
 | skill loading | `cc030fc` | layer skill metadata loads from `$SLBH_HOME`; native agents and the Intern receive names, descriptions and absolute `SKILL.md` paths without bodies |
 | JSON-safe polling seam | `5d64de6` | `PollEvents(EventQuery) EventBatch` replaces live subscription channels; TUI, headless and Intern consume cursor-based event batches |
-| role-aware runtime | `c70e239` | historical roster implementation, retired by the depth-only launch contract |
-| runtime documentation | `d7042f1` | historical v0.3 roster documentation, superseded by model aliases and depth-only delegation |
+| role-aware runtime | `c70e239` | historical identity implementation, retired by the depth-only launch contract |
+| runtime documentation | `d7042f1` | historical v0.3 identity documentation, superseded by model aliases and depth-only delegation |
 | role-aware test fixtures | `7989857` | historical fixtures, superseded by role-free launch tests |
 | subagent stall warnings | `ce9c1ca` | `launch_subagent.warn_after_seconds` defaults to five seconds, warns the parent once through its inbox, and cancels on child completion, error, stop or runtime shutdown |
 | persistent headless | `a397d17` | `slbh --headless` is a long-lived JSONL protocol over the seam: initialize, prompts, polled events and `close`, with the Intern inside the same runtime |
