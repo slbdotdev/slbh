@@ -15,7 +15,6 @@ import (
 	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/harness"
 	"github.com/slbdotdev/slbh/internal/headless"
-	"github.com/slbdotdev/slbh/internal/orgcli"
 	"github.com/slbdotdev/slbh/internal/runtimeapp"
 	"github.com/slbdotdev/slbh/internal/tui"
 )
@@ -40,10 +39,6 @@ Exit status: 0 clean shutdown, 1 runtime or protocol error, 2 usage.
 `
 
 func main() {
-	if len(os.Args) > 1 && orgcli.IsCommand(os.Args[1]) {
-		os.Exit(orgcli.Run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
-	}
-
 	fs := flag.NewFlagSet("slbh", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }

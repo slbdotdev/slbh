@@ -10,10 +10,10 @@ import (
 
 const testRosterTOML = `version = 3
 
-[names.secretary]
-harness = "codex"
-model = "gpt-5.6-luna"
-effort = "high"
+[names.intern]
+harness = "slbh"
+model = "local/q27-UD-Q2_K_XL-64k"
+effort = "low"
 depth = "outside"
 launched_by = "owner"
 
@@ -61,9 +61,9 @@ func TestLoadRosterNormalizesLaunchData(t *testing.T) {
 	if !ok || manager.Name != "manager" || manager.Depth != 1 || manager.Harness != "slbh" || manager.Model != "zai/glm-5.3-flash" {
 		t.Fatalf("manager role = %#v, present=%v", manager, ok)
 	}
-	secretary, ok := roster.Role("secretary")
-	if !ok || secretary.Depth != -1 {
-		t.Fatalf("outside role = %#v, present=%v", secretary, ok)
+	intern, ok := roster.Role("intern")
+	if !ok || intern.Depth != -1 {
+		t.Fatalf("outside role = %#v, present=%v", intern, ok)
 	}
 	children := roster.ChildRoles("manager", 2)
 	if names := []string{children[0].Name, children[1].Name}; !reflect.DeepEqual(names, []string{"flex", "luna"}) {

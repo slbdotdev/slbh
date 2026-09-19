@@ -15,7 +15,6 @@ import (
 	"github.com/slbdotdev/slbh/internal/id"
 	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/logx"
-	"github.com/slbdotdev/slbh/internal/orgstore"
 	"github.com/slbdotdev/slbh/internal/provider"
 	"github.com/slbdotdev/slbh/internal/seam"
 )
@@ -65,10 +64,6 @@ type Runtime struct {
 	claudeCommand      string
 	catalog            []provider.Catalog
 	closeOnce          sync.Once
-	orgStore           *orgstore.Store
-	requestWatchStop   chan struct{}
-	requestWatchDone   chan struct{}
-	requestPoll        time.Duration
 	subagentWarningsMu sync.Mutex
 	subagentWarnings   map[string]*time.Timer
 }
@@ -78,9 +73,6 @@ type Options struct {
 	Provider      func(model string) (provider.Provider, error)
 	CodexCommand  string
 	ClaudeCommand string
-	// RequestPollInterval defaults to two seconds. Tests and embedders may use
-	// a shorter interval; production callers should leave it zero.
-	RequestPollInterval time.Duration
 }
 
 var _ seam.Runtime = (*Runtime)(nil)
@@ -96,16 +88,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	store, err := orgstore.Open(cfg.Home)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	poll := options.RequestPollInterval
-	if poll <= 0 {
-		poll = 2 * time.Second
-	}
-	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), eventNotify: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand, orgStore: store, requestWatchStop: make(chan struct{}), requestWatchDone: make(chan struct{}), requestPoll: poll, subagentWarnings: make(map[string]*time.Timer)}
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), eventNotify: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand, subagentWarnings: make(map[string]*time.Timer)}
 	if r.provider == nil {
 		// The current config is read per call rather than captured, so a policy
 		// authored from /models on an unmanaged host takes effect on the next
@@ -148,7 +131,6 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	r.mu.Unlock()
 	seat.start()
 	r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "runtime", Text: "runtime started"})
-	go r.watchOrgRequests()
 	return r, nil
 }
 
@@ -980,85 +962,9 @@ func (r *Runtime) deliverJobResult(snapshot job.Snapshot, stdout, stderr string)
 	}
 }
 
-func (r *Runtime) watchOrgRequests() {
-	defer close(r.requestWatchDone)
-	watchRequestQueue(r.requestWatchStop, r.requestPoll, r.orgStore, func(request orgstore.Request) bool {
-		seat, ok := r.lookupAgent(r.seatID)
-		if !ok {
-			return false
-		}
-		if err := seat.receiveOrgRequest(request); err != nil {
-			r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "delivery_error", Text: err.Error(), Metadata: map[string]any{"request": request.ID}})
-			return false
-		}
-		return true
-	}, func(err error) {
-		r.emitStatus("org_requests", err.Error())
-	})
-}
-
-type requestQueueStore interface {
-	Requests() ([]orgstore.Request, error)
-	RequestsState() (orgstore.RequestLogState, error)
-}
-
-func watchRequestQueue(stop <-chan struct{}, poll time.Duration, store requestQueueStore, handle func(orgstore.Request) bool, reportError func(error)) {
-	seen := make(map[uint64]struct{})
-	deliver := func() {
-		requests, err := store.Requests()
-		if err != nil {
-			reportError(err)
-			return
-		}
-		for _, request := range requests {
-			if request.Status != orgstore.StatusQueued {
-				continue
-			}
-			if _, delivered := seen[request.ID]; delivered {
-				continue
-			}
-			if !handle(request) {
-				continue
-			}
-			seen[request.ID] = struct{}{}
-		}
-	}
-
-	// Establish the baseline before the first scan. If an external append lands
-	// between these operations, the scan sees it now; if it lands after the
-	// scan, the next state check differs from this baseline. Scanning first can
-	// lose an append that lands before the baseline is sampled forever.
-	state, err := store.RequestsState()
-	if err != nil {
-		reportError(err)
-	}
-	deliver()
-	ticker := time.NewTicker(poll)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-ticker.C:
-			next, statErr := store.RequestsState()
-			if statErr != nil {
-				reportError(statErr)
-				continue
-			}
-			if next.Size == state.Size && next.ModTime.Equal(state.ModTime) {
-				continue
-			}
-			state = next
-			deliver()
-		}
-	}
-}
-
 func (r *Runtime) Close() error {
 	var err error
 	r.closeOnce.Do(func() {
-		close(r.requestWatchStop)
-		<-r.requestWatchDone
 		r.queueEvent(seam.Event{Kind: "runtime", Text: "runtime stopping"}, true)
 		r.cancel()
 		r.cancelAllSubagentWarnings()

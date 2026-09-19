@@ -12,11 +12,9 @@ import (
 	"time"
 
 	"github.com/slbdotdev/slbh/internal/job"
-	"github.com/slbdotdev/slbh/internal/orgstore"
 	"github.com/slbdotdev/slbh/internal/provider"
 	"github.com/slbdotdev/slbh/internal/readtools"
 	"github.com/slbdotdev/slbh/internal/seam"
-	"github.com/slbdotdev/slbh/internal/secretarywake"
 )
 
 const scientificPythonPackageNames = "numpy, scipy, pandas, matplotlib, sympy, rebound, astropy, skyfield, jplephem"
@@ -82,35 +80,6 @@ func commandDescription(specific string) string {
 	return specific + " The script is written to a file and run; the call waits up to wait_seconds (default 5, maximum 30) and returns its output if it finishes. Otherwise it keeps running as a background job, the call returns its job id and output so far, and the full result is delivered automatically when it finishes."
 }
 
-func seatToolDefinitions() []provider.Tool {
-	return []provider.Tool{
-		{Name: "report_to_secretary", Description: "Append a durable Seat report to the org inbox. Supply exactly one of invalidates or invalidates_none.", Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"text":             map[string]any{"type": "string"},
-				"invalidates":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-				"invalidates_none": map[string]any{"type": "boolean"},
-			},
-			"required": []string{"text"},
-		}},
-		{Name: "org_requests", Description: "Return the Secretary request queue with current status and full history as JSON.", Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"open_only": map[string]any{"type": "boolean"},
-			},
-		}},
-		{Name: "update_request", Description: "Append an accepted, declined, or done status to a Secretary request.", Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"id":     map[string]any{"type": "integer", "minimum": 1},
-				"status": map[string]any{"type": "string", "enum": []string{"accepted", "declined", "done"}},
-				"note":   map[string]any{"type": "string"},
-			},
-			"required": []string{"id", "status"},
-		}},
-	}
-}
-
 func (r *Runtime) toolDefinitions(agentID string) []provider.Tool {
 	definitions := ToolDefinitions()
 	agent, ok := r.lookupAgent(agentID)
@@ -139,10 +108,7 @@ func (r *Runtime) toolDefinitions(agentID string) []provider.Tool {
 		roleSchema["enum"] = roleNames
 		break
 	}
-	if agent.Depth != 0 {
-		return definitions
-	}
-	return append(definitions, seatToolDefinitions()...)
+	return definitions
 }
 
 type args struct{ Values map[string]any }
@@ -168,12 +134,6 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 		base = agent.WorkDir
 	}
 	switch name {
-	case "report_to_secretary", "org_requests", "update_request":
-		agent, ok := r.lookupAgent(agentID)
-		if !ok || agent.Depth != 0 {
-			return "", fmt.Errorf("tool %q is available only to the depth-0 Seat", name)
-		}
-		return r.executeSeatTool(name, a.Values)
 	case "glob", "grep", "read_file", "read_bytes", "read_lines":
 		return readtools.Execute(base, name, raw)
 	case "edit_file":
@@ -236,71 +196,6 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 		return "stopped", nil
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
-	}
-}
-
-func (r *Runtime) executeSeatTool(name string, values map[string]any) (string, error) {
-	if r.orgStore == nil {
-		return "", fmt.Errorf("org store is unavailable")
-	}
-	switch name {
-	case "report_to_secretary":
-		text := strings.TrimSpace(value(values, "text"))
-		if text == "" {
-			return "", fmt.Errorf("text is required")
-		}
-		invalidates, err := stringSliceValue(values, "invalidates")
-		if err != nil {
-			return "", err
-		}
-		report, err := r.orgStore.AppendReport("seat", text, invalidates, boolValue(values, "invalidates_none"))
-		if err != nil {
-			return "", err
-		}
-		pending, err := r.orgStore.Pending()
-		if err != nil {
-			return "", err
-		}
-		if r.Config().SecretaryWake {
-			message := secretarywake.InboxMessage(len(pending))
-			go func() {
-				_, wakeErr := secretarywake.Wake(r.ctx, secretarywake.Options{CodexCommand: r.codexCommand, SessionName: r.Config().SecretarySession}, message)
-				if wakeErr != nil {
-					r.emitStatus("secretary_wake", wakeErr.Error())
-				}
-			}()
-		}
-		return jsonString(report)
-	case "org_requests":
-		requests, err := r.orgStore.Requests()
-		if err != nil {
-			return "", err
-		}
-		if boolValue(values, "open_only") {
-			open := requests[:0]
-			for _, request := range requests {
-				if request.Status == orgstore.StatusQueued || request.Status == orgstore.StatusAccepted {
-					open = append(open, request)
-				}
-			}
-			requests = open
-		}
-		if requests == nil {
-			requests = []orgstore.Request{}
-		}
-		return jsonString(requests)
-	case "update_request":
-		id, err := uint64Value(values, "id")
-		if err != nil {
-			return "", err
-		}
-		change, err := r.orgStore.UpdateRequestStatus(id, orgstore.Status(value(values, "status")), value(values, "note"))
-		if err != nil {
-			return "", err
-		}
-		return jsonString(change)
-	default:
-		return "", fmt.Errorf("unknown Seat tool %q", name)
 	}
 }
 

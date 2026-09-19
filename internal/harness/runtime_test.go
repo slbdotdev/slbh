@@ -141,14 +141,13 @@ func testRoster() config.Roster {
 		Version: 3,
 		Source:  config.RosterSource{Kind: config.RosterManaged, Path: "/test/roster.toml"},
 		Names: map[string]config.Role{
-			"secretary": {Name: "secretary", Harness: "codex", Model: "gpt-5.6-luna", Effort: "high", Depth: -1, LaunchedBy: "owner"},
-			"seat":      {Name: "seat", Harness: "slbh", Model: "test", Effort: "high", Depth: 0, LaunchedBy: "owner"},
-			"manager":   {Name: "manager", Harness: "slbh", Model: "test-manager", Effort: "high", Depth: 1, LaunchedBy: "seat"},
-			"luna":      {Name: "luna", Harness: "codex", Model: "gpt-5.6-luna", Effort: "high", Depth: 2, LaunchedBy: "manager"},
-			"sol":       {Name: "sol", Harness: "codex", Model: "gpt-5.6-sol", Effort: "high", Depth: 2, LaunchedBy: "manager"},
-			"opus":      {Name: "opus", Harness: "claude_code", Model: "claude-opus-5", Effort: "high", Depth: 2, LaunchedBy: "manager"},
-			"flex":      {Name: "flex", Harness: "slbh", Model: "at_dispatch", ModelsApproved: []string{"test-leaf", "passive", "explicit-flex", "explicit-leaf-model", "deepseek-v4-flash", "z-ai/glm-5.3-flash"}, Effort: "high", Depth: 2, LaunchedBy: "manager"},
-			"intern":    {Name: "intern", Harness: "slbh", Model: "local/test", Effort: "medium", Depth: -1, LaunchedBy: "owner"},
+			"seat":    {Name: "seat", Harness: "slbh", Model: "test", Effort: "high", Depth: 0, LaunchedBy: "owner"},
+			"manager": {Name: "manager", Harness: "slbh", Model: "test-manager", Effort: "high", Depth: 1, LaunchedBy: "seat"},
+			"luna":    {Name: "luna", Harness: "codex", Model: "gpt-5.6-luna", Effort: "high", Depth: 2, LaunchedBy: "manager"},
+			"sol":     {Name: "sol", Harness: "codex", Model: "gpt-5.6-sol", Effort: "high", Depth: 2, LaunchedBy: "manager"},
+			"opus":    {Name: "opus", Harness: "claude_code", Model: "claude-opus-5", Effort: "high", Depth: 2, LaunchedBy: "manager"},
+			"flex":    {Name: "flex", Harness: "slbh", Model: "at_dispatch", ModelsApproved: []string{"test-leaf", "passive", "explicit-flex", "explicit-leaf-model", "deepseek-v4-flash", "z-ai/glm-5.3-flash"}, Effort: "high", Depth: 2, LaunchedBy: "manager"},
+			"intern":  {Name: "intern", Harness: "slbh", Model: "local/test", Effort: "medium", Depth: -1, LaunchedBy: "owner"},
 		},
 	}
 }
@@ -1045,7 +1044,6 @@ func TestRosterRoleLaunchRejections(t *testing.T) {
 	}{
 		{name: "missing role", spec: LaunchSpec{Title: "missing"}, want: "launch_subagent.role is required"},
 		{name: "unknown role", spec: LaunchSpec{Title: "unknown", Role: "invented"}, want: "unknown roster role"},
-		{name: "secretary outside tree", spec: LaunchSpec{Title: "secretary", Role: "secretary"}, want: "cannot be launched at depth 1"},
 		{name: "intern outside tree", spec: LaunchSpec{Title: "intern", Role: "intern"}, want: "cannot be launched at depth 1"},
 		{name: "seat skips manager", spec: LaunchSpec{Title: "luna", Role: "luna", Model: "gpt-5.6-luna"}, want: "cannot be launched at depth 1"},
 		{name: "manager wrong model", spec: LaunchSpec{Title: "manager", Role: "manager", Model: "other"}, want: "requires model"},

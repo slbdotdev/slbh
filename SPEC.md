@@ -1,11 +1,11 @@
 # slbh for org v0.3
 
 Live on `main` since the org's v0.3 cutover on 2026-09-18; the owner's final
-acceptance is pending. The companion is `SPEC.md` in
+acceptance is pending. The companion is `SKILL.md` in
 `slb-org`, which specifies the organization this serves; where the two
 disagree, that one is about the org and this one is about the program.
 
-State of the tree, with evidence, is section 11. Open questions are 12.
+State of the tree, with evidence, is section 10. Open questions are 11.
 
 ## 1. Role
 
@@ -43,9 +43,8 @@ That concurrency has been tested and holds.
 ## 3. The seam
 
 slbh has one runtime and several front ends. That is already its shape;
-v0.3 makes the boundary between them explicit, because new consumers — the
-Intern's watcher, and the org inbox's write side — are front ends on the
-same runtime.
+v0.3 makes the boundary between them explicit, because a new consumer — the
+Intern's watcher — is a front end on the same runtime.
 
 Three rules define the seam:
 
@@ -112,7 +111,7 @@ question when it believes the Seat is making a mistake.
   depth cap does not apply to it and it launches nothing.
 - The owner starts it inside the Seat's slbh process. It cannot run as a
   separate invocation, because a separate invocation cannot see live
-  runtime state (§8).
+  runtime state (§7).
 - Having no depth, it takes no layer document by depth. slbh loads
   `instructions/intern.md` by name.
 - Its tools are **read-only**, supplied by slbh as a harness feature rather
@@ -138,85 +137,27 @@ vocabulary.
 
 ## 6. Messages
 
-Two different things are called an inbox and must not be conflated.
+**The agent inbox** is the one inbox: per agent (`agent.go`), in memory,
+carrying steers and child results, and `job/manager.go` uses it to wake an
+idle agent. It is runtime-scoped and dies with the run.
 
-**The agent inbox** exists: `agent.go:46`, per agent, in memory, carrying
-steers and child results, and `job/manager.go:34` uses it to wake an idle
-agent. It is runtime-scoped and dies with the run. Nothing about it
-changes.
+The durable org inbox and request queue, which carried the Seat's reports
+to the Secretary and the Secretary's requests back, were retired with the
+Secretary: `internal/orgstore`, the `slbh inbox`, `ack`, `request` and
+`requests` subcommands, the Codex wake, and the Seat's
+`report_to_secretary`, `org_requests` and `update_request` tools are gone.
+Files a past run left under `$SLBH_HOME/org` are inert.
 
-**The org inbox** is new. It is durable, survives the process, and carries
-the Seat's reports to the Secretary. It:
+## 7. Separate invocations
 
-- accrues while the Secretary is detached and is intact when it returns,
-- is append-only,
-- is drained by **acknowledgement, not by reading**, through a cursor, so a
-  Secretary that dies mid-drain loses nothing and repeats nothing.
-- can be explicitly cleared with `slbh inbox --clear`, which advances the
-  cursor through the reports currently present without rewriting the log;
-  reports appended after the clear remain pending.
+slbh has no subcommands: every invocation is a front end on its own
+runtime. A separate invocation therefore cannot see another's live runtime
+state, and nothing needs it to. The Intern observes from inside; the owner
+observes at the tmux session. Should that ever change, §3's rules make a
+transport a marshalling layer rather than a redesign — which is why they
+hold even with no transport in sight.
 
-A Seat report names the org page its change invalidates, or states that
-none is.
-
-Both the org inbox and the Secretary's request queue are files under
-`$SLBH_HOME`. slbh owns their format and their cursors; nothing else parses
-the shape on disk. The running Seat and a separate `slbh` invocation both
-touch them, so append-only writes and an atomic cursor update are load
-bearing rather than incidental.
-
-Request status is written back into the queue as the Seat works it. That is
-deliberate: anything the Secretary needs to know is made durable rather than
-made reachable in memory.
-
-## 7. Reaching the Secretary
-
-The Secretary is a Codex session, not an slbh agent. MCP cannot start its
-turn: notifications reach the Codex process and stop at its logging
-handler, and elicitation reaches the owner rather than the model. Both were
-measured on 2026-09-17.
-
-So slbh wakes the Secretary as a **client of Codex's app-server**, through
-the queue method, addressing the session by a stable name. This is the same
-connection kind slbh already makes for its Codex leaves and adds no new
-dependency class.
-
-The wake is measured, not assumed. On 2026-09-18 a queued message started a
-turn in an idle session **43 ms** after the queue command returned. Queued
-mid-turn it did not interrupt: it waited for the active response and was
-taken up as soon as that turn completed.
-
-The Secretary's session runs on the devbox, beside the Seat.
-
-A session is addressed by UUID or by an exact name, and a name is assigned
-with `/rename` **after the session's first turn** — there is no launch-time
-flag for it. So the Secretary's session is named once at startup, and the
-Seat addresses that name rather than hunting for the newest session, which
-is not an identity test.
-
-## 8. The Secretary's interface
-
-`slbh` subcommands, invoked from the Secretary's shell. Read the inbox,
-acknowledge or clear it, and request work. There is no MCP server and no IPC.
-
-The Secretary is a Codex session with full shell access, and slbh is a
-binary on the same machine. MCP's only remaining job would have been pull,
-which a command does — at the price of a server, a transport, a lifecycle
-and a capability surface, for an agent whose instruction document can simply
-name the commands.
-
-**A subcommand does not construct a `harness.Runtime`.** It is file work
-against `$SLBH_HOME`, so the inbox and queue code must be usable without
-`internal/harness`. That is a package-dependency rule, not a process
-boundary, and it is what keeps the TUI and the CLI one binary.
-
-A separate invocation therefore cannot see live runtime state, and nothing
-needs it to. The Intern observes from inside; the owner observes at the tmux
-session. Should that ever change, §3's rules make a transport a marshalling
-layer rather than a redesign — which is why they hold even with no
-transport in sight.
-
-## 9. Documents and ownership
+## 8. Documents and ownership
 
 - `$SLBH_HOME/policy.json` and
   `$SLBH_HOME/instructions/{seat,manager,leaf,intern}.md` are org content. They live in `slb-org` and reach hosts by its sync.
@@ -246,7 +187,7 @@ Intern. slbh does no filtering; the directory is the role's set.
 - The **binary** is deployed by `ansible-slb`, cross-built on the
   controller. Binary deployment is what remains Ansible's.
 
-## 10. Constraints carried from the org
+## 9. Constraints carried from the org
 
 - No key, token or vault content enters a prompt, a log, or a transcript.
 - Codex uses the host's own login. `~/.codex/auth.json` is never copied and
@@ -257,7 +198,7 @@ Intern. slbh does no filtering; the directory is the role's set.
 - Commits are the owner's, signed, one line, one to five lowercase words.
   No agent is a contributor.
 
-## 11. State of the tree
+## 10. State of the tree
 
 Measured at `e672775` on `main`, into which `v0.3-draft` merged at
 `ac58fab`. The code-bearing delta is built, one unit per commit, each checked with `gofmt`, build, vet, the full suite and the
@@ -292,9 +233,10 @@ migration needed by the runtime's managed roster contract:
 | Codex final answer | `89101df` | a Codex leaf returns its turn's `final_answer` message, read with the turn id the app-server sends beside the item; commentary no longer runs into the result |
 | native Ollama wire | `e672775` | `ollama-chat` speaks `/api/chat`: NDJSON stream, effort as the `think` string, a policy `options` sampler block sent verbatim and refused on other wires or for unknown keys, `num_ctx` and `num_predict` from `contextWindow` and `maxOutputTokens`; the compiled local default moves to it. An output-limit stop on any wire raises a `warning` event into the transcript. Live against Ollama 0.34.1: reply ends `stop`, tool call round-trips, a 16-token bound ends `length`, and a seeded A/B shows `presence_penalty` reaches the sampler |
 
-`internal/tui`, `headless`, `seam`, `orgstore`, `orgcli`, `readtools`,
-`intern` and `secretarywake` import nothing from `internal/harness`; a
-`go list -deps` check proves it on every unit.
+`internal/tui`, `headless`, `seam`, `readtools` and `intern` import
+nothing from `internal/harness`. The org store, the Secretary subcommands,
+the wake and the Seat's org tools in the table above have since been
+removed with the Secretary (§6).
 
 **Run as the org** on 2026-09-18, recorded in `slb-org`
 `org/v03-cutover-readiness-2026-09-18.md`: a headless GLM Seat launched a
@@ -302,7 +244,7 @@ native Manager and a Sol Codex leaf, reported to a live named Secretary that
 was woken, drained its inbox once and filed a request the Seat carried to
 done, and the Intern watched that Seat and asked it a live question.
 
-## 12. Open
+## 11. Open
 
 No design question is open. One operational risk is unmeasured rather than
 unanswered, and what remains of it is the model's, not slbh's:
