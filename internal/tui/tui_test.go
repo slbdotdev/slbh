@@ -178,6 +178,53 @@ func TestAgentPanelUsesPinkTreeMarkers(t *testing.T) {
 	}
 }
 
+func TestReceiveEventsMergesStreamsAndBoundsDisplayHistory(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	seat := seatID(runtime)
+	m := New(runtime)
+	m.receiveEvents([]seam.Event{
+		{AgentID: seat, Kind: "user", Text: "question"},
+		{AgentID: seat, Kind: "assistant", Text: "first"},
+		{AgentID: seat, Kind: "assistant", Text: " second"},
+		{AgentID: seat, Kind: "status", Text: "idle"},
+	})
+	if len(m.events) != 2 {
+		t.Fatalf("display history retained %d events, want user plus merged assistant", len(m.events))
+	}
+	if got := m.events[1].Text; got != "first second" {
+		t.Fatalf("merged assistant text=%q, want %q", got, "first second")
+	}
+
+	toolEvents := make([]seam.Event, maxRetainedViewportEvents+100)
+	for i := range toolEvents {
+		toolEvents[i] = seam.Event{
+			AgentID: seat,
+			Kind:    "tool_result",
+			Text:    fmt.Sprintf("result-%d", i),
+			Metadata: map[string]any{
+				"call_id": fmt.Sprintf("call-%d", i),
+			},
+		}
+	}
+	m.receiveEvents(toolEvents)
+	if got := len(m.events); got != maxRetainedViewportEvents {
+		t.Fatalf("display history length=%d, want bounded length %d", got, maxRetainedViewportEvents)
+	}
+	if got := m.events[len(m.events)-1].Text; got != "result-611" {
+		t.Fatalf("display history lost newest event: %q", got)
+	}
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+	if got := ansi.Strip(m.View().Content); !strings.Contains(got, "result-611") {
+		t.Fatalf("stream disappeared after its user anchor was evicted: %q", got)
+	}
+}
+
 func TestModelMenuAssignsSeatSubagentAndLeafSlots(t *testing.T) {
 	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "seat", SeatEffort: "high", SubagentModel: "child"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
 	if err != nil {

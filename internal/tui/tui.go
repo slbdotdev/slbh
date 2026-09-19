@@ -36,7 +36,15 @@ var (
 
 const nonChatBlockHeight = 10
 
+// maxRetainedViewportEvents bounds the interactive display state. The runtime
+// transcript and event stream remain durable and complete; the TUI only needs
+// a recent window to stay responsive while a tool-heavy turn emits thousands
+// of control records.
+const maxRetainedViewportEvents = 512
+
 const markdownRenderCacheLimit = 512
+
+const renderedEventCacheLimit = maxRetainedViewportEvents * 2
 
 // markdownThrottle bounds how often a streamed message is re-rendered.
 const markdownThrottle = 100 * time.Millisecond
@@ -94,6 +102,17 @@ type markdownRecentRender struct {
 	rendered string
 }
 
+type renderedEventCacheKey struct {
+	cursor     seam.EventCursor
+	agentID    string
+	agentTitle string
+	kind       string
+	text       string
+	tool       string
+	width      int
+	forwarded  bool
+}
+
 type Model struct {
 	runtime            seam.Runtime
 	viewport           viewport.Model
@@ -134,6 +153,8 @@ type Model struct {
 	markdownRenderedAt time.Time
 	markdownStale      bool
 	markdownTicking    bool
+	eventRenderCache   map[renderedEventCacheKey]string
+	frameProfiler      *frameProfiler
 	// mouseCapture is off by default so the terminal keeps its own click and
 	// drag, which is what selecting and copying text needs. Turning it on
 	// trades that away for wheel scrolling.
@@ -157,7 +178,7 @@ func New(runtime seam.Runtime) Model {
 		historyPath = filepath.Join(runtime.Home(), historyFileName)
 		history, _ = loadHistory(historyPath)
 	}
-	return Model{runtime: runtime, viewport: view, input: input, viewAgentID: viewID, agents: activeAgents(runtime.Agents()), history: history, historyPath: historyPath, historyIndex: -1, modelCatalog: runtime.ModelCatalog(), modelExpanded: make(map[string]bool), markdownCache: make(map[markdownCacheKey]string), markdownRecent: make(map[string]markdownRecentRender)}
+	return Model{runtime: runtime, viewport: view, input: input, viewAgentID: viewID, agents: activeAgents(runtime.Agents()), history: history, historyPath: historyPath, historyIndex: -1, modelCatalog: runtime.ModelCatalog(), modelExpanded: make(map[string]bool), markdownCache: make(map[markdownCacheKey]string), markdownRecent: make(map[string]markdownRecentRender), eventRenderCache: make(map[renderedEventCacheKey]string), frameProfiler: newFrameProfiler()}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -174,7 +195,17 @@ func waitEvents(runtime seam.Runtime, cursor seam.EventCursor) tea.Cmd {
 // refreshes the view can leave a block holding a throttled, stale render —
 // switching the viewed agent is one — and a path that returned no command of
 // its own would otherwise strand that block until the next keystroke.
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) Update(msg tea.Msg) (result tea.Model, command tea.Cmd) {
+	started := time.Now()
+	defer func() {
+		eventCount := len(m.events)
+		if next, ok := result.(Model); ok {
+			eventCount = len(next.events)
+		} else if next, ok := result.(*Model); ok && next != nil {
+			eventCount = len(next.events)
+		}
+		m.frameProfiler.record("update", fmt.Sprintf("%T", msg), started, time.Now(), eventCount)
+	}()
 	updated, cmd := m.update(msg)
 	// The model-menu paths have a pointer receiver and return *Model, so both
 	// forms have to be handled or those paths skip scheduling entirely.
@@ -244,11 +275,25 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) receiveEvents(events []seam.Event) {
-	m.events = append(m.events, events...)
+	footerBefore := -1
+	if m.width > 0 && m.height > 0 {
+		footerBefore = m.footerHeight()
+	}
+	viewChanged := false
+	for _, event := range events {
+		if !isViewportEvent(event) {
+			continue
+		}
+		m.appendViewportEvent(event)
+		if event.AgentID == m.viewAgentID {
+			viewChanged = true
+		}
+	}
 	m.agents = activeAgents(m.runtime.Agents())
 	if !containsAgent(m.agents, m.viewAgentID) {
 		m.viewAgentID = seatID(m.runtime)
 		m.userScrolled = false
+		viewChanged = true
 	}
 	if m.selected >= len(m.agents) {
 		m.selected = max(0, len(m.agents)-1)
@@ -256,9 +301,69 @@ func (m *Model) receiveEvents(events []seam.Event) {
 	// Agent and job events can change the footer height. Reflow the chat
 	// viewport before rendering so newly spawned agents cannot push the last
 	// panel row below the terminal.
-	m.resize()
-	if m.width < 1 || m.height < 1 {
+	footerAfter := -1
+	if m.width > 0 && m.height > 0 {
+		footerAfter = m.footerHeight()
+	}
+	if footerBefore != footerAfter {
+		m.resize()
+	} else if viewChanged {
 		m.refreshView()
+	}
+	if m.width < 1 || m.height < 1 {
+		if viewChanged {
+			m.refreshView()
+		}
+	}
+}
+
+// appendViewportEvent folds streamed fragments before they enter the bounded
+// display history. This prevents a long assistant or reasoning stream from
+// losing its beginning merely because it crossed the retention boundary.
+func (m *Model) appendViewportEvent(event seam.Event) {
+	if len(m.events) > 0 {
+		previous := &m.events[len(m.events)-1]
+		if canMergeViewportEvents(*previous, event) {
+			previous.Text += event.Text
+			if event.Kind == "thinking" {
+				start := previous.Time
+				if previous.Metadata != nil {
+					if saved, ok := previous.Metadata[thinkingStartMetadataKey].(time.Time); ok {
+						start = saved
+					}
+				}
+				metadata := make(map[string]any, len(previous.Metadata)+1)
+				for key, value := range previous.Metadata {
+					metadata[key] = value
+				}
+				metadata[thinkingStartMetadataKey] = start
+				previous.Metadata = metadata
+				if !event.Time.IsZero() {
+					previous.Time = event.Time
+				}
+			}
+			return
+		}
+	}
+	m.events = append(m.events, event)
+	if len(m.events) > maxRetainedViewportEvents {
+		drop := len(m.events) - maxRetainedViewportEvents
+		copy(m.events, m.events[drop:])
+		m.events = m.events[:maxRetainedViewportEvents]
+	}
+}
+
+func canMergeViewportEvents(previous, event seam.Event) bool {
+	if previous.AgentID != event.AgentID || previous.Kind != event.Kind {
+		return false
+	}
+	switch event.Kind {
+	case "assistant", "thinking":
+		return true
+	case "tool":
+		return toolIndex(previous) == toolIndex(event)
+	default:
+		return false
 	}
 }
 
@@ -577,7 +682,7 @@ func (m *Model) handleCommand(command string) tea.Cmd {
 }
 
 func (m *Model) addLocal(kind, text string) {
-	m.events = append(m.events, seam.Event{Time: time.Now(), AgentID: m.viewAgentID, AgentTitle: "local", Kind: kind, Text: text})
+	m.appendViewportEvent(seam.Event{Time: time.Now(), AgentID: m.viewAgentID, AgentTitle: "local", Kind: kind, Text: text})
 	m.refreshView()
 }
 
@@ -975,8 +1080,10 @@ func (m *Model) syncInputHeight() {
 		m.viewport.SetWidth(width)
 		if m.height > 0 {
 			m.viewport.SetHeight(m.chatHeight())
+			if !m.userScrolled {
+				m.viewport.GotoBottom()
+			}
 		}
-		m.refreshView()
 	}
 }
 
@@ -1013,8 +1120,19 @@ func (m *Model) refreshView() {
 	}
 	width := max(1, m.chatWidth())
 	m.markdownRendererForWidth(width)
+	// A bounded display history can evict the original user event while a
+	// tool-heavy turn is still producing output. In that case the remaining
+	// stream is still useful and must not disappear merely because the normal
+	// conversation anchor is gone.
+	hasUser := false
+	for _, event := range m.events {
+		if event.AgentID == m.viewAgentID && event.Kind == "user" {
+			hasUser = true
+			break
+		}
+	}
 	var visible []seam.Event
-	userSeen := false
+	userSeen := !hasUser
 	for _, event := range m.events {
 		if event.AgentID != m.viewAgentID {
 			continue
@@ -1028,7 +1146,7 @@ func (m *Model) refreshView() {
 			}
 			userSeen = true
 		}
-		if len(visible) > 0 && visible[len(visible)-1].AgentID == event.AgentID && visible[len(visible)-1].Kind == event.Kind && (event.Kind == "assistant" || event.Kind == "thinking" || (event.Kind == "tool" && toolIndex(visible[len(visible)-1]) == toolIndex(event))) {
+		if len(visible) > 0 && canMergeViewportEvents(visible[len(visible)-1], event) {
 			visible[len(visible)-1].Text += event.Text
 			if event.Kind == "thinking" {
 				// Keep the start of a streamed reasoning span while moving the
@@ -1061,7 +1179,7 @@ func (m *Model) refreshView() {
 			end := i
 			parts := make([]string, 0, 1)
 			for end < len(visible) && !isMessage(visible[end]) {
-				parts = append(parts, m.renderEvent(visible[end], width))
+				parts = append(parts, m.renderEventCached(visible[end], width))
 				end++
 			}
 			if len(lines) > 0 {
@@ -1074,7 +1192,7 @@ func (m *Model) refreshView() {
 		if len(lines) > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, m.renderEvent(visible[i], width))
+		lines = append(lines, m.renderEventCached(visible[i], width))
 		i++
 	}
 	m.viewport.SetContent(strings.Join(lines, "\n"))
@@ -1094,6 +1212,7 @@ func (m *Model) clearCurrentView() {
 	m.userScrolled = false
 	clear(m.markdownCache)
 	clear(m.markdownRecent)
+	clear(m.eventRenderCache)
 	m.refreshView()
 }
 
@@ -1124,6 +1243,49 @@ func (m *Model) renderEvent(event seam.Event, width int) string {
 		return rollingBlock(event.Text, width)
 	default:
 		return rollingBlock(event.Text, width)
+	}
+}
+
+func (m *Model) renderEventCached(event seam.Event, width int) string {
+	// Markdown blocks can be served by the throttle with a deliberately stale
+	// render while a stream is active. Keep their cache in renderMarkdown, where
+	// the source and catch-up tick are visible, rather than caching that stale
+	// outer chat block here.
+	if isMarkdownEvent(event) {
+		return m.renderEvent(event, width)
+	}
+	key := renderedEventCacheKey{
+		cursor:     event.Cursor,
+		agentID:    event.AgentID,
+		agentTitle: event.AgentTitle,
+		kind:       event.Kind,
+		text:       event.Text,
+		tool:       metadataString(event, "tool"),
+		width:      width,
+		forwarded:  isForwardedAgentMessage(event),
+	}
+	if rendered, ok := m.eventRenderCache[key]; ok {
+		return rendered
+	}
+	rendered := m.renderEvent(event, width)
+	if m.eventRenderCache == nil {
+		m.eventRenderCache = make(map[renderedEventCacheKey]string)
+	}
+	if len(m.eventRenderCache) >= renderedEventCacheLimit {
+		clear(m.eventRenderCache)
+	}
+	m.eventRenderCache[key] = rendered
+	return rendered
+}
+
+func isMarkdownEvent(event seam.Event) bool {
+	switch event.Kind {
+	case "assistant", "child_result", "job_result":
+		return true
+	case "steer":
+		return isForwardedAgentMessage(event)
+	default:
+		return false
 	}
 }
 
@@ -1223,6 +1385,7 @@ func (m *Model) markdownRendererForWidth(width int) *glamour.TermRenderer {
 	m.markdownRender = nil
 	m.markdownCache = make(map[markdownCacheKey]string)
 	m.markdownRecent = make(map[string]markdownRecentRender)
+	clear(m.eventRenderCache)
 	renderer, err := glamour.NewTermRenderer(
 		glamour.WithStyles(backgroundFreeMarkdownStyle()),
 		glamour.WithWordWrap(width),
@@ -1331,7 +1494,11 @@ func toolIndex(event seam.Event) string {
 	return fmt.Sprint(event.Metadata["index"])
 }
 
-func (m Model) View() tea.View {
+func (m Model) View() (view tea.View) {
+	started := time.Now()
+	defer func() {
+		m.frameProfiler.record("view", "frame", started, time.Now(), len(m.events))
+	}()
 	var content string
 	if m.quitting {
 		content = dim.Render("shutting down…")
@@ -1354,7 +1521,7 @@ func (m Model) View() tea.View {
 		parts = append(parts, status)
 		content = strings.Join(parts, "\n")
 	}
-	view := tea.NewView(content)
+	view = tea.NewView(content)
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeNone
 	if m.mouseCapture {
@@ -1397,8 +1564,8 @@ func wrapToWidth(text string, width int) string {
 }
 
 // rollingBlock keeps non-chat output from expanding the message viewport.
-// The complete event remains in Model.events (and in the runtime transcript);
-// only this rendered copy is limited to the newest visual lines.
+// The complete event remains in the runtime transcript; the TUI's display
+// history is intentionally bounded so rendering cost cannot grow forever.
 func rollingBlock(text string, width int) string {
 	wrapped := wrapToWidth(text, width)
 	lines := strings.Split(wrapped, "\n")

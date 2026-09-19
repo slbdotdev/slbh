@@ -264,6 +264,7 @@ These environment variables are read at startup:
 | `SLBH_PYTHON` | managed `~/.local/share/slbh/python` interpreter | Python interpreter used by `quick_py` and `long_py`. |
 | `SLBH_ENDPOINT` | OpenRouter chat-completions endpoint | Compatible provider endpoint. |
 | `SLBH_LOCAL_ENDPOINT` | `http://fractal.wyvern-temperature.ts.net:11434/api/chat` | Desktop Ollama endpoint. It must match the route's wire: an `ollama-chat` route needs an `/api/chat` URL. |
+| `SLBH_FRAME_PROFILE` | unset | Optional CSV path for TUI `Update` and `View` durations, frame gaps, message types, and retained event counts. |
 
 The model policy is persisted at `$SLBH_HOME/config.json`. `/models` always
 shows the configured local Ollama model and refreshes catalogs for providers
@@ -301,7 +302,8 @@ Agent output in chat blocks renders as markdown; the owner's own input and
 non-chat blocks stay literal, because tool results and payloads are not
 markdown. A streamed message re-renders at most once every 100ms, so a long
 response styles itself as it arrives without the render cost growing with its
-length.
+length. The viewport keeps a bounded recent display window for responsiveness;
+the complete transcript remains available through the runtime transcript.
 
 | Key | Action |
 | --- | --- |
