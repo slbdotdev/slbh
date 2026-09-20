@@ -623,3 +623,168 @@ func TestCodingWireInStreamErrorWithATypeIsClassified(t *testing.T) {
 		t.Fatal("an in-stream rate limit was classified as retryable")
 	}
 }
+
+// remoteTestPolicy is testPolicy plus one pod route, spelled as the managed
+// policy spells it: an Ollama native wire, a pinned window and no credential
+// anywhere in the entry.
+func remoteTestPolicy(endpoint string, window int) Policy {
+	policy := testPolicy()
+	policy.Routes[remoteTestModel] = RoutePolicy{
+		Endpoint:      endpoint,
+		Wire:          WireOllamaChat,
+		ContextWindow: window,
+		Effort:        EffortDescriptor{Field: "think", Levels: identityLevels()},
+	}
+	return policy
+}
+
+const remoteTestModel = "remote/q27-UD-Q4_K_XL-256k"
+
+func TestRemoteRouteCarriesNoCredentialEvenWithEveryKeySet(t *testing.T) {
+	// This is the reason the flavor exists rather than a property of it. A pod
+	// route spelled any other way is not native, so it took the OpenRouter arm
+	// at the bottom of ResolveRoute — which stamps the OpenRouter flavor and
+	// OPENROUTER_API_KEY onto whatever endpoint the policy named. That would
+	// have sent the org's OpenRouter credential to a rented third-party host
+	// on the first turn, and nothing downstream would have reported it,
+	// because a request with a bearer token looks like every other request.
+	const endpoint = "http://pod.wyvern-temperature.ts.net:11434/api/chat"
+	t.Setenv("OPENROUTER_API_KEY", "or-key-not-a-credential")
+	t.Setenv("ZAI_API_KEY", "zai-key-not-a-credential")
+	t.Setenv("DEEPSEEK_API_KEY", "ds-key-not-a-credential")
+
+	route, err := ResolveRoute(remoteTestModel, OpenRouterEndpoint, false, remoteTestPolicy(endpoint, 262144))
+	if err != nil {
+		t.Fatalf("remote route refused: %v", err)
+	}
+	if route.APIKey != "" {
+		t.Fatal("remote route carries a credential")
+	}
+	if route.Flavor != RemoteProviderName {
+		t.Fatalf("remote route flavor = %q, want %q", route.Flavor, RemoteProviderName)
+	}
+	if route.Endpoint != endpoint {
+		t.Fatalf("remote endpoint = %q, want the policy's %q", route.Endpoint, endpoint)
+	}
+	if route.Wire != WireOllamaChat {
+		t.Fatalf("remote wire = %q, want the policy's %q", route.Wire, WireOllamaChat)
+	}
+	if route.ContextWindow != 262144 {
+		t.Fatalf("remote pin = %d, want 262144", route.ContextWindow)
+	}
+}
+
+func TestRemoteRouteRoutesWithEveryProviderKeyAbsent(t *testing.T) {
+	// The other half of the same property: needing no credential means an
+	// empty environment must not refuse it. Fail-closed is about credentials a
+	// route needs, and this one needs none.
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("ZAI_API_KEY", "")
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	const endpoint = "http://pod.wyvern-temperature.ts.net:11434/api/chat"
+	if _, err := ResolveRoute(remoteTestModel, "", false, remoteTestPolicy(endpoint, 65536)); err != nil {
+		t.Fatalf("remote route refused with no keys present: %v", err)
+	}
+}
+
+func TestRemoteRouteRefusesWithoutAPinnedWindow(t *testing.T) {
+	// An unpinned remote route cannot be sized by anything: it sends no
+	// credential, and Ollama's OpenAI-compatible catalog publishes no context
+	// length. Without this refusal the request takes the compiled 128,000 —
+	// over a 64k pod's real window, and half of a 256k one's.
+	t.Setenv("OPENROUTER_API_KEY", "or-key-not-a-credential")
+	_, err := ResolveRoute(remoteTestModel, "", false, remoteTestPolicy("http://pod:11434/api/chat", 0))
+	if err == nil {
+		t.Fatal("an unpinned remote route did not refuse")
+	}
+	if !strings.Contains(err.Error(), "contextWindow") {
+		t.Fatalf("refusal does not name the missing pin: %v", err)
+	}
+}
+
+func TestRemoteRouteRefusesWithoutAnEndpointRatherThanUsingTheDesktops(t *testing.T) {
+	// There is deliberately no compiled default for this flavor. Falling back
+	// would point a pod route at the desktop, which is a different machine
+	// serving a different quant under a different tag.
+	t.Setenv("OPENROUTER_API_KEY", "or-key-not-a-credential")
+	t.Setenv("SLBH_LOCAL_ENDPOINT", "http://127.0.0.1:11434/api/chat")
+	_, err := ResolveRoute(remoteTestModel, "", false, remoteTestPolicy("", 65536))
+	if err == nil {
+		t.Fatal("a remote route with no endpoint did not refuse")
+	}
+	if !strings.Contains(err.Error(), "no endpoint") {
+		t.Fatalf("refusal does not name the missing endpoint: %v", err)
+	}
+}
+
+func TestSlbhLocalEndpointDoesNotRepointRemoteRoutes(t *testing.T) {
+	// One variable must not move every credential-free route at once. The
+	// developer hatch belongs to the desktop route it was written for;
+	// SLBH_ENDPOINT already overrides a single route deliberately.
+	const endpoint = "http://pod.wyvern-temperature.ts.net:11434/api/chat"
+	t.Setenv("OPENROUTER_API_KEY", "or-key-not-a-credential")
+	t.Setenv("SLBH_LOCAL_ENDPOINT", "http://127.0.0.1:11434/api/chat")
+	route, err := ResolveRoute(remoteTestModel, "", false, remoteTestPolicy(endpoint, 65536))
+	if err != nil {
+		t.Fatalf("remote route refused: %v", err)
+	}
+	if route.Endpoint != endpoint {
+		t.Fatalf("SLBH_LOCAL_ENDPOINT repointed a remote route: %q", route.Endpoint)
+	}
+}
+
+func TestRemoteWireModelDropsThePrefix(t *testing.T) {
+	// Ollama is asked for the bare tag. Sending the route key would ask the
+	// server for a model named "remote/q27-...", which it does not have.
+	if got := (&HTTPProvider{Flavor: RemoteProviderName}).modelID(remoteTestModel); got != "q27-UD-Q4_K_XL-256k" {
+		t.Fatalf("remote wire model = %q, want q27-UD-Q4_K_XL-256k", got)
+	}
+}
+
+func TestRemoteRouteIsNeverFetchedWithTheOpenRouterKey(t *testing.T) {
+	// catalogSpecsFor buckets any non-native route into the OpenRouter family.
+	// A remote route that fell into it would have its catalog fetched at the
+	// pod's endpoint with OPENROUTER_API_KEY attached — the same leak as
+	// above, on the metadata path rather than the inference one.
+	t.Setenv("OPENROUTER_API_KEY", "or-key-not-a-credential")
+	t.Setenv("ZAI_API_KEY", "")
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	for _, spec := range catalogSpecsFor(remoteTestPolicy("http://pod.wyvern-temperature.ts.net:11434/api/chat", 65536)) {
+		if strings.Contains(spec.endpoint, "pod.wyvern-temperature") || strings.Contains(spec.catalogEndpoint, "pod.wyvern-temperature") {
+			t.Fatalf("a remote route was scheduled for a credentialed catalog fetch: %#v", spec)
+		}
+	}
+}
+
+func TestDiscoverCatalogListsRemoteRoutesAsTheirOwnBranch(t *testing.T) {
+	// The pod has to appear in /models or nothing can select it, and it must
+	// not be folded into the local branch, which asserts the desktop serves it.
+	const endpoint = "http://pod.wyvern-temperature.ts.net:11434/api/chat"
+	catalog := remoteCatalog(remoteTestPolicy(endpoint, 262144))
+	if catalog.Name != RemoteProviderName {
+		t.Fatalf("remote branch name = %q", catalog.Name)
+	}
+	if len(catalog.Models) != 1 || catalog.Models[0].ID != remoteTestModel {
+		t.Fatalf("remote branch models = %#v", catalog.Models)
+	}
+	if catalog.Models[0].ContextWindow != 262144 {
+		t.Fatalf("remote branch window = %d, want the policy pin", catalog.Models[0].ContextWindow)
+	}
+	// A policy with no pod in it produces no branch at all, rather than an
+	// empty one or a compiled-in guess at a pod that is not running.
+	if empty := remoteCatalog(testPolicy()); len(empty.Models) != 0 {
+		t.Fatalf("a policy naming no remote route produced %#v", empty.Models)
+	}
+}
+
+func TestLocalCatalogStillExcludesRemoteRoutes(t *testing.T) {
+	// windows_verify reads local/* out of the policy and fails the Windows
+	// converge if the desktop does not serve each one. A pod leaking into this
+	// branch would be a red converge describing a machine Ansible does not
+	// manage.
+	for _, model := range localCatalog(remoteTestPolicy("http://pod:11434/api/chat", 65536)).Models {
+		if strings.HasPrefix(model.ID, RemoteProviderName+"/") {
+			t.Fatalf("a remote route appeared in the local branch: %q", model.ID)
+		}
+	}
+}

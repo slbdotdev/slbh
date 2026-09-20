@@ -304,6 +304,12 @@ func nativeRouteFor(key string) (nativeRoute, bool) {
 	switch {
 	case strings.HasPrefix(key, LocalProviderName+"/"):
 		return nativeRoute{flavor: LocalProviderName}, true
+	case strings.HasPrefix(key, RemoteProviderName+"/"):
+		// No endpoint and no keyEnv, exactly as the local arm: both are
+		// answered from the policy, and the empty keyEnv is what keeps this
+		// flavor out of every credential path below rather than being
+		// something the caller must remember.
+		return nativeRoute{flavor: RemoteProviderName}, true
 	case strings.HasPrefix(key, "deepseek/") || strings.HasPrefix(key, "deepseek-"):
 		return nativeRoute{flavor: "deepseek", endpoint: "https://api.deepseek.com/chat/completions", keyEnv: "DEEPSEEK_API_KEY"}, true
 	case strings.HasPrefix(key, "zai/"):
@@ -370,6 +376,32 @@ func ResolveRoute(model, endpoint string, endpointExplicit bool, policy Policy) 
 			route.Flavor, route.Endpoint = LocalProviderName, entry.Endpoint
 			if override := strings.TrimSpace(os.Getenv("SLBH_LOCAL_ENDPOINT")); override != "" {
 				route.Endpoint = override
+			}
+			return route, nil
+		}
+		if native.flavor == RemoteProviderName {
+			// The policy is the only source for this route. SLBH_LOCAL_ENDPOINT
+			// is deliberately not honoured here: it is one variable, and a
+			// second tailnet engine would make it repoint every credential-free
+			// route at once. SLBH_ENDPOINT still overrides a single route by
+			// name, which is the escape hatch that already exists.
+			route.Flavor, route.Endpoint = RemoteProviderName, strings.TrimSpace(entry.Endpoint)
+			if route.Endpoint == "" {
+				return Route{}, fmt.Errorf(
+					"route %q states no endpoint in the routing policy: refusing rather than falling back to the desktop's, which is a different machine serving a different quant. A remote route has no compiled default by design",
+					key)
+			}
+			// The pin is mandatory on this flavor, where it is merely advisable
+			// on the others. A remote Ollama sends no credential and its
+			// OpenAI-compatible catalog publishes no context length, so
+			// discovery cannot answer for it; an unpinned route would silently
+			// take the compiled fallback and size a window the engine does not
+			// serve. The desktop had exactly this bug described in prose and
+			// caught by a pin; here it refuses instead.
+			if route.ContextWindow <= 0 {
+				return Route{}, fmt.Errorf(
+					"route %q states no contextWindow: refusing, because this flavor sends no credential and publishes no window, so nothing can discover one and the request would silently take the compiled fallback of %d",
+					key, FallbackContextWindow)
 			}
 			return route, nil
 		}
@@ -491,12 +523,33 @@ func ResolveRoute(model, endpoint string, endpointExplicit bool, policy Policy) 
 // did not have. A compiled-in name is a claim about another machine and goes
 // stale silently; the policy is the answer, and this is the floor under it.
 const (
-	LocalProviderName  = "local"
+	LocalProviderName = "local"
+	// RemoteProviderName is the second credential-free flavor: an Ollama the
+	// fleet reaches over the tailnet that is not the desktop. It exists
+	// because `local/` is not a spelling, it is an assertion — the Windows
+	// converge fails if a `local/` route names a tag the desktop does not
+	// serve — so a rented pod routed under that prefix would turn a converge
+	// red to describe a machine Ansible does not manage. It carries no
+	// credential for the same reason `local/` does not: the tailnet is the
+	// boundary, and a route that sent a bearer token would be minting one for
+	// an endpoint no key was issued for.
+	RemoteProviderName = "remote"
 	LocalModelID       = "local/q27-UD-Q2_K_XL-64k"
 	localWireModelID   = "q27-UD-Q2_K_XL-64k"
 	LocalContextWindow = 65536
 	localDefaultURL    = "http://fractal.wyvern-temperature.ts.net:11434/api/chat"
 )
+
+// CredentialFreeFlavor reports whether a flavor reaches its endpoint over the
+// tailnet with no credential at all. Both such flavors are Ollama servers the
+// fleet owns the network path to, and neither was ever issued a key — so a
+// guard that demanded one would refuse the two routes that are correct
+// without it. It is a predicate rather than an equality test because the
+// second flavor was added by widening exactly these call sites, and the next
+// one must not be able to miss any.
+func CredentialFreeFlavor(flavor string) bool {
+	return flavor == LocalProviderName || flavor == RemoteProviderName
+}
 
 func localEndpoint() string {
 	if endpoint := strings.TrimSpace(os.Getenv("SLBH_LOCAL_ENDPOINT")); endpoint != "" {
@@ -661,6 +714,8 @@ func (p *HTTPProvider) modelID(model string) string {
 	switch p.Flavor {
 	case LocalProviderName:
 		return strings.TrimPrefix(model, LocalProviderName+"/")
+	case RemoteProviderName:
+		return strings.TrimPrefix(model, RemoteProviderName+"/")
 	case "deepseek":
 		return strings.TrimPrefix(model, "deepseek/")
 	case "zai":
@@ -879,7 +934,7 @@ func PayloadSHA256(payload []byte) string {
 }
 
 func (p *HTTPProvider) Stream(ctx context.Context, req Request, sink StreamSink) error {
-	if p.Flavor != LocalProviderName && p.APIKey == "" {
+	if !CredentialFreeFlavor(p.Flavor) && p.APIKey == "" {
 		return fmt.Errorf("provider API key is not configured (set OPENROUTER_API_KEY, DEEPSEEK_API_KEY, or ZAI_API_KEY)")
 	}
 	// OpenRouter accepts prompt_cache_key; native providers safely ignore the

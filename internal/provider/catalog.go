@@ -57,6 +57,9 @@ type catalogSpec struct {
 // round trips for one answer.
 func DiscoverCatalog(ctx context.Context, policy Policy) ([]Catalog, error) {
 	catalogs := []Catalog{localCatalog(policy)}
+	if remote := remoteCatalog(policy); len(remote.Models) > 0 {
+		catalogs = append(catalogs, remote)
+	}
 
 	var firstErr error
 	for _, spec := range catalogSpecsFor(policy) {
@@ -105,6 +108,35 @@ func localCatalog(policy Policy) Catalog {
 	return catalog
 }
 
+// remoteCatalog lists the credential-free routes that are not the desktop, on
+// the same reasoning as localCatalog and with one difference that matters: it
+// has no compiled fallback. localCatalog falls back to LocalModelID so that a
+// stripped-down policy still reaches the desktop, which is a machine the fleet
+// always has. A remote engine is a pod that exists for an afternoon, so naming
+// one in the binary would list a model that is almost never there. An empty
+// remote branch is therefore correct and is dropped from the tree entirely
+// rather than shown empty.
+func remoteCatalog(policy Policy) Catalog {
+	catalog := Catalog{Name: RemoteProviderName}
+	for _, key := range sortedKeys(policy.Routes) {
+		native, isNative := nativeRouteFor(key)
+		if !isNative || native.flavor != RemoteProviderName {
+			continue
+		}
+		route := policy.Routes[key]
+		if route.ContextWindow <= 0 {
+			// ResolveRoute refuses this route, so listing it would offer a
+			// menu entry that can only fail on selection.
+			continue
+		}
+		if catalog.Endpoint == "" {
+			catalog.Endpoint = route.Endpoint
+		}
+		catalog.Models = append(catalog.Models, ModelInfo{ID: key, ContextWindow: route.ContextWindow, Preferred: true})
+	}
+	return catalog
+}
+
 // catalogSpecsFor derives one spec per provider family the policy describes
 // and a credential is present for. A route whose wire this build cannot speak
 // is skipped rather than fetched: its catalog document would not decode, and
@@ -120,7 +152,7 @@ func catalogSpecsFor(policy Policy) []catalogSpec {
 		native, isNative := nativeRouteFor(key)
 		family, keyEnv := "openrouter", "OPENROUTER_API_KEY"
 		if isNative {
-			if native.flavor == LocalProviderName {
+			if CredentialFreeFlavor(native.flavor) {
 				continue // already listed, and it needs no credential
 			}
 			family, keyEnv = native.flavor, native.keyEnv
