@@ -55,6 +55,10 @@ Provider routing is automatic:
 - `DEEPSEEK_API_KEY` routes `deepseek/` and `deepseek-` model names to
   DeepSeek.
 - `ZAI_API_KEY` routes `zai/` and `glm-` model names to Z.ai.
+- `CEREBRAS_API_KEY` routes `cerebras/` model names to Cerebras. Only the
+  prefixed spelling routes there: the models it serves are open-weight ones
+  OpenRouter and the desktop serve too, so a bare `qwen-3.8-27b` would be
+  ambiguous where `glm-` is not.
 - Other models use `SLBH_ENDPOINT` with `OPENROUTER_API_KEY`. The endpoint
   defaults to the OpenRouter chat-completions endpoint.
 
@@ -62,6 +66,18 @@ The synchronized Z.ai Coding Plan policy exposes both
 `zai/glm-5.3-flash` and `zai/glm-5.3-flashx` on the Anthropic Messages wire.
 FlashX is available when approved; it does not replace the Seat or Manager
 default.
+
+The Cerebras route is optional in the ordinary sense — no key, no branch in
+`/models` and no route — and in one that is particular to it: its endpoint
+accepts `reasoning_effort` at `low`, `medium` and `high` only, so the managed
+route maps those three and leaves `max` and `xhigh` unmapped. Asking for one of
+those refuses by name rather than quietly running at `high`. It also rejects
+both reasoning round-trip fields (`include_reasoning` outbound,
+`reasoning_content` on a replayed assistant turn), which slbh omits on this
+flavor alone; reasoning still streams, but the model does not see its own
+earlier thinking on a later turn. Its catalog publishes ids and no context
+length, so the window comes from the policy pin — 131,072 tokens, the ceiling
+the endpoint itself reports — and `/models` shows the pin rather than a blank.
 
 A matching native route takes precedence over the configured endpoint,
 including when the same model is also listed by OpenRouter. A custom

@@ -99,6 +99,22 @@
         "top_p": 0.95,
         "presence_penalty": 1.5
       }
+    },
+    "cerebras/qwen-3.8-27b": {
+      "catalogEndpoint": "https://api.cerebras.ai/v1/models",
+      "contextWindow": 131072,
+      "defaultEffort": "medium",
+      "effort": {
+        "field": "reasoning_effort",
+        "levels": {
+          "high": "high",
+          "low": "low",
+          "medium": "medium"
+        }
+      },
+      "endpoint": "https://api.cerebras.ai/v1/chat/completions",
+      "maxOutputTokens": 32768,
+      "wire": "openai-chat"
     }
   }
 }

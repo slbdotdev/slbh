@@ -242,7 +242,8 @@ const openRouterEndpoint = OpenRouterEndpoint
 type Route struct {
 	// Key is the authoritative route key, such as "zai/glm-5.3-flash".
 	Key string
-	// Flavor is the provider family: zai, deepseek, openrouter or local.
+	// Flavor is the provider family: zai, deepseek, cerebras, openrouter or
+	// local.
 	Flavor string
 	// Endpoint is the URL this route posts inference to.
 	Endpoint string
@@ -314,6 +315,14 @@ func nativeRouteFor(key string) (nativeRoute, bool) {
 		return nativeRoute{flavor: "deepseek", endpoint: "https://api.deepseek.com/chat/completions", keyEnv: "DEEPSEEK_API_KEY"}, true
 	case strings.HasPrefix(key, "zai/"):
 		return nativeRoute{flavor: "zai", endpoint: "https://api.z.ai/api/coding/paas/v4/chat/completions", keyEnv: "ZAI_API_KEY"}, true
+	case strings.HasPrefix(key, "cerebras/"):
+		// Only the prefixed spelling addresses this family, deliberately. The
+		// models Cerebras serves are open-weight ones whose bare names are
+		// served by OpenRouter and by the desktop too — `qwen-3.8-27b` is not
+		// Cerebras's model, it is Cerebras's copy of it — so folding the bare
+		// name here would capture a name that legitimately addresses three
+		// different routes. `glm-` can fold because that slug names one plan.
+		return nativeRoute{flavor: "cerebras", endpoint: "https://api.cerebras.ai/v1/chat/completions", keyEnv: "CEREBRAS_API_KEY"}, true
 	}
 	return nativeRoute{}, false
 }
@@ -720,6 +729,8 @@ func (p *HTTPProvider) modelID(model string) string {
 		return strings.TrimPrefix(model, "deepseek/")
 	case "zai":
 		return strings.TrimPrefix(model, "zai/")
+	case "cerebras":
+		return strings.TrimPrefix(model, "cerebras/")
 	case "openrouter":
 		if strings.HasPrefix(model, "deepseek-") {
 			return "deepseek/" + model

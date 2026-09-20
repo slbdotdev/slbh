@@ -72,6 +72,7 @@ func DiscoverCatalog(ctx context.Context, policy Policy) ([]Catalog, error) {
 		}
 		catalogs = append(catalogs, catalog)
 	}
+	fillPinnedWindows(catalogs, policy)
 	markPreferred(catalogs)
 	sort.Slice(catalogs, func(i, j int) bool { return catalogs[i].Name < catalogs[j].Name })
 	return catalogs, firstErr
@@ -181,7 +182,7 @@ func catalogSpecsFor(policy Policy) []catalogSpec {
 		}
 	}
 	specs := make([]catalogSpec, 0, len(byFamily))
-	for _, family := range []string{"deepseek", "zai", "openrouter"} {
+	for _, family := range []string{"deepseek", "zai", "cerebras", "openrouter"} {
 		if spec, ok := byFamily[family]; ok {
 			specs = append(specs, spec)
 			delete(byFamily, family)
@@ -255,6 +256,29 @@ func fetchCatalog(ctx context.Context, spec catalogSpec) (Catalog, error) {
 	}
 	sort.Slice(catalog.Models, func(i, j int) bool { return catalog.Models[i].ID < catalog.Models[j].ID })
 	return catalog, nil
+}
+
+// fillPinnedWindows answers, from the routing policy, for a model whose own
+// catalog publishes no context length.
+//
+// Cerebras is the case that needed it: its /v1/models lists ids and nothing
+// else, so every entry arrived with a zero window and the menu offered a model
+// whose size it could not state — while the policy pinned that route at
+// 131,072 and the request would have been sized correctly all along. Listing
+// what the request will actually do is the point, so the pin answers here as
+// it does in resolveContextWindow, and a window the catalog did publish is
+// never overwritten: that one is the endpoint's own answer for the model.
+func fillPinnedWindows(catalogs []Catalog, policy Policy) {
+	for i := range catalogs {
+		for j := range catalogs[i].Models {
+			if catalogs[i].Models[j].ContextWindow > 0 {
+				continue
+			}
+			if route, found := policy.Route(catalogs[i].Models[j].ID); found && route.ContextWindow > 0 {
+				catalogs[i].Models[j].ContextWindow = route.ContextWindow
+			}
+		}
+	}
 }
 
 func markPreferred(catalogs []Catalog) {

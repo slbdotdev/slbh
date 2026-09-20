@@ -110,7 +110,7 @@ func (e *StatusError) Retryable() bool { return e.Status >= 500 }
 type retryable interface{ Retryable() bool }
 
 // openAIChatWire is the OpenAI-shaped chat-completions protocol: OpenRouter,
-// DeepSeek and Z.ai's coding endpoint. The local Ollama server left it for
+// DeepSeek, Cerebras and Z.ai's coding endpoint. The local Ollama server left it for
 // ollama-chat on 2026-09-18, because Ollama's /v1 shim discards sampler
 // options.
 type openAIChatWire struct{}
@@ -133,9 +133,9 @@ func (openAIChatWire) payload(p *HTTPProvider, req Request) ([]byte, error) {
 	body := wireRequest{
 		Model:            p.modelID(req.Model),
 		Stream:           true,
-		Messages:         append([]Message{{Role: "system", Content: req.System}}, req.Messages...),
+		Messages:         messagesFor(p.Flavor, req),
 		ReasoningEffort:  effort,
-		IncludeReasoning: effort != "",
+		IncludeReasoning: effort != "" && sendsReasoningFields(p.Flavor),
 		PromptCacheKey:   req.CacheKey,
 		MaxTokens:        p.maxOutputTokens(req, DefaultMaxOutputTokens),
 		Temperature:      req.Temperature,
@@ -156,6 +156,56 @@ func (openAIChatWire) payload(p *HTTPProvider, req Request) ([]byte, error) {
 		}
 	}
 	return json.Marshal(body)
+}
+
+// sendsReasoningFields reports whether a flavor's endpoint accepts the two
+// reasoning round-trip fields this wire otherwise carries: OpenRouter's
+// `include_reasoning` opt-in on the way out, and `reasoning_content` on an
+// assistant turn replayed on the way back in.
+//
+// It is a per-flavor fact rather than a per-wire one, because one wire carries
+// several vendors' idea of the OpenAI shape. Cerebras refuses both outright,
+// measured 2026-09-20 against qwen-3.8-27b:
+//
+//	include_reasoning: property 'include_reasoning' is unsupported
+//	messages.2.assistant.reasoning_content: property '...' is unsupported
+//
+// Both are HTTP 400 before a token streams, and the second one fires only on
+// the second turn of a tool round trip — the first turn of a conversation
+// carries no assistant message — so it is the sort of failure that reaches
+// production looking like a tool bug.
+//
+// Nothing is lost on the way out: Cerebras streams `delta.reasoning` unasked,
+// which parseSSE already reads beside DeepSeek's `reasoning_content`. What is
+// given up is the replay — the model does not see its own earlier thinking on
+// a later turn, because this endpoint has nowhere to put it. That is this
+// endpoint's design rather than slbh's choice, and the alternative is not
+// having the route.
+//
+// Omitting rather than tolerating is scoped deliberately: the fields are
+// dropped only where they are known to be refused, so a vendor that starts
+// honouring them is a one-line change here and not a silent loss of reasoning
+// on every route.
+func sendsReasoningFields(flavor string) bool {
+	return flavor != "cerebras"
+}
+
+// messagesFor renders the conversation this flavor's endpoint will accept,
+// with the system turn ahead of it. It copies rather than editing req.Messages
+// in place: the caller's history is the harness's own, replayed on every turn
+// and transcripted, and stripping a field from it here would delete the
+// reasoning from the record as well as from the request.
+func messagesFor(flavor string, req Request) []Message {
+	messages := append([]Message{{Role: "system", Content: req.System}}, req.Messages...)
+	if sendsReasoningFields(flavor) {
+		return messages
+	}
+	stripped := make([]Message, len(messages))
+	for i, message := range messages {
+		message.ReasoningContent = ""
+		stripped[i] = message
+	}
+	return stripped
 }
 
 func (openAIChatWire) requestFromPayload(payload []byte) (Request, error) {
