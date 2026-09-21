@@ -65,6 +65,10 @@ type Runtime struct {
 	closeOnce          sync.Once
 	subagentWarningsMu sync.Mutex
 	subagentWarnings   map[string]*time.Timer
+	// toolShape is fixed for the runtime's life: changing the primary tools
+	// mid-run would strand every call already in history.
+	toolShape string
+	shape     *shapeState
 }
 
 type Options struct {
@@ -80,6 +84,10 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	if cfg.Home == "" {
 		cfg = config.Load()
 	}
+	toolShape, err := config.NormalizeToolShape(cfg.ToolShape)
+	if err != nil {
+		return nil, err
+	}
 	runtimeID := id.NewShort("run")
 	dir := filepath.Join(cfg.Home, "runtimes", runtimeID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -87,7 +95,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), eventNotify: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand, subagentWarnings: make(map[string]*time.Timer)}
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), eventNotify: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand, subagentWarnings: make(map[string]*time.Timer), toolShape: toolShape, shape: newShapeState()}
 	if r.provider == nil {
 		// The current config is read per call rather than captured, so a policy
 		// authored from /models on an unmanaged host takes effect on the next
@@ -129,13 +137,16 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	r.seatID = seat.ID
 	r.mu.Unlock()
 	seat.start()
-	r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "runtime", Text: "runtime started"})
+	r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "runtime", Text: "runtime started", Metadata: map[string]any{"tool_shape": r.toolShape}})
 	return r, nil
 }
 
 func (r *Runtime) ID() string   { return r.id }
 func (r *Runtime) Dir() string  { return r.runtimeDir }
 func (r *Runtime) Home() string { return r.config.Home }
+
+// ToolShape is the runtime's primary tool shape.
+func (r *Runtime) ToolShape() string { return r.toolShape }
 
 func (r *Runtime) Config() config.Config {
 	r.mu.RLock()

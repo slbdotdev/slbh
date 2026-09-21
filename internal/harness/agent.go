@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -485,8 +486,17 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			}
 			history = append(history, message)
 			result, toolErr := a.runtime.ExecuteTool(a.ID, call.Function.Name, call.Function.Arguments)
-			if toolErr != nil {
+			failed, flagged := toolErr != nil, false
+			var shaped *shapedToolError
+			if errors.As(toolErr, &shaped) {
+				// A shaped tool's failure is already in its harness's own words.
+				result, flagged = shaped.text, shaped.flag
+			} else if toolErr != nil {
 				result = toolFailure(toolErr, result)
+			}
+			resultMetadata := map[string]any{"name": call.Function.Name, "call_id": call.ID, "error": failed || toolResultFailed(call.Function.Name, result)}
+			if code, ok := toolResultExitCode(call.Function.Name, result, toolErr); ok {
+				resultMetadata["exit_code"] = code
 			}
 			// Before it is emitted and before it enters history. A tool runs
 			// with the parent environment by design, so `env` — or any script
@@ -494,8 +504,8 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			// would be marshalled into the next request, reaching both the
 			// transcript and the provider itself.
 			result = a.runtime.redactSecrets(result)
-			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool_result", Text: result, Metadata: map[string]any{"name": call.Function.Name, "call_id": call.ID}})
-			history = append(history, provider.Message{Role: "tool", ToolCallID: call.ID, Name: call.Function.Name, Content: result})
+			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool_result", Text: result, Metadata: resultMetadata})
+			history = append(history, provider.Message{Role: "tool", ToolCallID: call.ID, Name: call.Function.Name, Content: result, IsError: flagged})
 			history = a.appendMessages(history, a.takeMessages())
 		}
 		round++
@@ -885,7 +895,7 @@ func systemPrompt(a *Agent) string {
 func bakedSystemPrompt(a *Agent) string {
 	prompt := fmt.Sprintf("You are %s, a native agent in slbh runtime %s at depth %d.", a.Title, a.runtime.ID(), a.Depth) +
 		"\n\nKeep your thinking brief and focused, moving directly to the next action or conclusion without unnecessary elaboration. When a question can be settled by looking — reading a file, running a command, checking a result — use a tool to find out rather than reasoning at length about what is likely true." +
-		fmt.Sprintf("\n\nThis host is %s. Your command tools are %s. TMPDIR, TMP and TEMP point at your agent scratch directory, %s; use it for temporary files instead of /tmp, your working directory, or your home directory.", runtime.GOOS, strings.Join(job.AvailableInterpreters(), ", "), filepath.Join(a.runtime.runtimeDir, "agents", a.ID, "scratch")) +
+		fmt.Sprintf("\n\nThis host is %s. Your command tools are %s. TMPDIR, TMP and TEMP point at your agent scratch directory, %s; use it for temporary files instead of /tmp, your working directory, or your home directory.", runtime.GOOS, strings.Join(commandToolNames(a.runtime.toolShape), ", "), filepath.Join(a.runtime.runtimeDir, "agents", a.ID, "scratch")) +
 		"\n\nMessages reach you at your next tool or API call boundary, or wake you if you are idle: steers from the owner or other agents, subagent results, and background job output. Act on each in the current turn; never defer one to the end. A warning that a job or subagent is still running is sent once and never repeated. Decide then: kill or end it, keep waiting for its result, or do other work."
 	// Launch guidance only for an agent that can launch a child. A leaf
 	// cannot launch anything, and the mechanics themselves are in the

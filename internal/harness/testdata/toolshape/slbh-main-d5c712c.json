@@ -1,0 +1,314 @@
+[
+ {
+  "name": "glob",
+  "description": "List files and directories matching a glob pattern. `**` matches any number of directory levels, so `**/*.py` finds every Python file in the tree and `**/*` lists the whole tree. Directories come back with a trailing separator. Says so explicitly when nothing matches.",
+  "parameters": {
+   "properties": {
+    "pattern": {
+     "description": "Glob pattern, relative to the working directory unless it is absolute. Supports *, ?, [...] within one path segment and ** across segments.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "pattern"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "grep",
+  "description": "Search text using a regular expression.",
+  "parameters": {
+   "properties": {
+    "path": {
+     "type": "string"
+    },
+    "pattern": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "pattern"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "read_file",
+  "description": "Read a whole file up to 100k bytes.",
+  "parameters": {
+   "properties": {
+    "path": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "read_bytes",
+  "description": "Read an inclusive byte range from a file.",
+  "parameters": {
+   "properties": {
+    "end": {
+     "type": "integer"
+    },
+    "path": {
+     "type": "string"
+    },
+    "start": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "path",
+    "start",
+    "end"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "read_lines",
+  "description": "Read an inclusive line range from a file.",
+  "parameters": {
+   "properties": {
+    "end": {
+     "type": "integer"
+    },
+    "path": {
+     "type": "string"
+    },
+    "start": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "path",
+    "start",
+    "end"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "edit_file",
+  "description": "Replace an exact string in a file atomically.",
+  "parameters": {
+   "properties": {
+    "new": {
+     "type": "string"
+    },
+    "old": {
+     "type": "string"
+    },
+    "path": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "path",
+    "old",
+    "new"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "apply_patch",
+  "description": "Apply a unified patch to the working tree.",
+  "parameters": {
+   "properties": {
+    "patch": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "patch"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "write_file",
+  "description": "Create a new file; refuse to overwrite an existing file.",
+  "parameters": {
+   "properties": {
+    "content": {
+     "type": "string"
+    },
+    "path": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "path",
+    "content"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "bash",
+  "description": "Run a Bash script with GNU Bash on Linux. The script is written to a file and run; the call waits up to wait_seconds (default 5, maximum 30) and returns its output if it finishes. Otherwise it keeps running as a background job, the call returns its job id and output so far, and the full result is delivered automatically when it finishes.",
+  "parameters": {
+   "properties": {
+    "cwd": {
+     "type": "string"
+    },
+    "script": {
+     "type": "string"
+    },
+    "wait_seconds": {
+     "description": "Seconds to wait inline, clamped to 0..30; 0 backgrounds immediately. Defaults to 5.",
+     "type": "integer"
+    },
+    "warn_after_seconds": {
+     "description": "Seconds before one warning to the agent that started the job; defaults to 60. Disabled when not greater than wait_seconds.",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "script"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "python",
+  "description": "Run a script with the managed scientific Python environment (numpy, scipy, pandas, matplotlib, sympy, rebound, astropy, skyfield, jplephem). The script is written to a file and run; the call waits up to wait_seconds (default 5, maximum 30) and returns its output if it finishes. Otherwise it keeps running as a background job, the call returns its job id and output so far, and the full result is delivered automatically when it finishes.",
+  "parameters": {
+   "properties": {
+    "cwd": {
+     "type": "string"
+    },
+    "script": {
+     "type": "string"
+    },
+    "wait_seconds": {
+     "description": "Seconds to wait inline, clamped to 0..30; 0 backgrounds immediately. Defaults to 5.",
+     "type": "integer"
+    },
+    "warn_after_seconds": {
+     "description": "Seconds before one warning to the agent that started the job; defaults to 60. Disabled when not greater than wait_seconds.",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "script"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "job",
+  "description": "Manage jobs with action list, read, or kill. job_id is required for read and kill.",
+  "parameters": {
+   "properties": {
+    "action": {
+     "enum": [
+      "list",
+      "read",
+      "kill"
+     ],
+     "type": "string"
+    },
+    "job_id": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "list_subagents",
+  "description": "List this runtime's agent tree.",
+  "parameters": {
+   "properties": {},
+   "type": "object"
+  }
+ },
+ {
+  "name": "launch_subagent",
+  "description": "Launch one child and return immediately. Native agents may launch one child at each of the first two depths; a depth-2 child cannot launch anything. Choose a relevant title made of three words joined by hyphens (for example inspect-api-cache); this is guidance only and is not enforced. A depth-1 child may use the configured child model. A depth-2 child must receive a non-empty real model string or managed short name. The optional harness selects native, Codex, or Claude Code. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.",
+  "parameters": {
+   "properties": {
+    "brief": {
+     "type": "string"
+    },
+    "effort": {
+     "type": "string"
+    },
+    "harness": {
+     "description": "Harness for the child. Omit for the native slbh provider; use codex or claude_code for a native harness leaf.",
+     "enum": [
+      "native",
+      "codex",
+      "claude_code"
+     ],
+     "type": "string"
+    },
+    "model": {
+     "description": "Real provider model ID or a managed short name. Required and non-empty for every depth-2 child; depth 1 may use the configured child default.",
+     "type": "string"
+    },
+    "title": {
+     "description": "A relevant three-word dashed title chosen by the parent, such as inspect-api-cache. Guidance only; not enforced.",
+     "type": "string"
+    },
+    "warn_after_seconds": {
+     "description": "Seconds before the parent receives one warning that this child is still running; defaults to 5.",
+     "type": "integer"
+    },
+    "working_dir": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "title",
+    "brief"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "msg_subagent",
+  "description": "Send a mandatory mid-turn steer to any agent in this runtime, including your parent or siblings. FIFO delivery at the next API/tool call boundary; wakes idle recipients. Never waits for turn completion or cancels in-flight work.",
+  "parameters": {
+   "properties": {
+    "agent_id": {
+     "type": "string"
+    },
+    "message": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "agent_id",
+    "message"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "name": "end_subagent",
+  "description": "Stop a child agent.",
+  "parameters": {
+   "properties": {
+    "agent_id": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "agent_id"
+   ],
+   "type": "object"
+  }
+ }
+]

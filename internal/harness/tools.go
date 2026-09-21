@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/provider"
 	"github.com/slbdotdev/slbh/internal/readtools"
@@ -22,19 +23,28 @@ const scientificPythonPackageNames = "numpy, scipy, pandas, matplotlib, sympy, r
 // ToolDefinitions is the stable tool prefix sent to every provider request.
 // Keep ordering stable: provider prefix caching keys include this schema.
 func ToolDefinitions() []provider.Tool {
-	return buildToolDefinitions()
+	return buildToolDefinitions(config.ToolShapeSlbh)
 }
 
-func buildToolDefinitions() []provider.Tool {
+// ShapeToolDefinitions is ToolDefinitions for a named tool shape.
+func ShapeToolDefinitions(shape string) []provider.Tool {
+	return buildToolDefinitions(shape)
+}
+
+func buildToolDefinitions(shape string) []provider.Tool {
 	stringArg := func(name string) map[string]any {
 		return map[string]any{"type": "object", "properties": map[string]any{name: map[string]any{"type": "string"}}, "required": []string{name}}
 	}
-	definitions := readtools.Definitions()
-	all := append(definitions, []provider.Tool{
-		{Name: "edit_file", Description: "Replace an exact string in a file atomically.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "old": map[string]any{"type": "string"}, "new": map[string]any{"type": "string"}}, "required": []string{"path", "old", "new"}}},
-		{Name: "apply_patch", Description: "Apply a unified patch to the working tree.", Parameters: stringArg("patch")},
-		{Name: "write_file", Description: "Create a new file; refuse to overwrite an existing file.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []string{"path", "content"}}},
-		{Name: "bash", Description: commandDescription(job.BashDescription()), Parameters: commandParameters()},
+	var all []provider.Tool
+	switch shape {
+	case config.ToolShapeAnthropic:
+		all = anthropicPrimaryTools()
+	case config.ToolShapeCodex:
+		all = codexPrimaryTools()
+	default:
+		all = append(readtools.Definitions(), slbhPrimaryTools(stringArg)...)
+	}
+	all = append(all, []provider.Tool{
 		{Name: "pwsh", Description: commandDescription("Run a PowerShell 7 (pwsh) script on Windows. exit code is the script's exit value, or the last native command's; 1 after a terminating error."), Parameters: commandParameters()},
 		{Name: "python", Description: commandDescription(fmt.Sprintf("Run a script with the managed scientific Python environment (%s).", scientificPythonPackageNames)), Parameters: commandParameters()},
 		{Name: "job", Description: "Manage jobs with action list, read, or kill. job_id is required for read and kill.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"action": map[string]any{"type": "string", "enum": []string{"list", "read", "kill"}}, "job_id": map[string]any{"type": "string"}}, "required": []string{"action"}}},
@@ -57,14 +67,30 @@ func buildToolDefinitions() []provider.Tool {
 	}
 	filtered := all[:0]
 	for _, tool := range all {
-		if tool.Name == "bash" || tool.Name == "pwsh" || tool.Name == "python" {
-			if !allowed[tool.Name] {
+		interpreter := tool.Name
+		switch tool.Name {
+		case "Bash", "exec_command", "write_stdin":
+			interpreter = "bash"
+		}
+		if interpreter == "bash" || interpreter == "pwsh" || interpreter == "python" {
+			if !allowed[interpreter] {
 				continue
 			}
 		}
 		filtered = append(filtered, tool)
 	}
 	return filtered
+}
+
+// slbhPrimaryTools is the slbh shape's own editing and shell tools, after the
+// read tools and in the order the provider prefix cache has always seen.
+func slbhPrimaryTools(stringArg func(string) map[string]any) []provider.Tool {
+	return []provider.Tool{
+		{Name: "edit_file", Description: "Replace an exact string in a file atomically.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "old": map[string]any{"type": "string"}, "new": map[string]any{"type": "string"}}, "required": []string{"path", "old", "new"}}},
+		{Name: "apply_patch", Description: "Apply a unified patch to the working tree.", Parameters: stringArg("patch")},
+		{Name: "write_file", Description: "Create a new file; refuse to overwrite an existing file.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []string{"path", "content"}}},
+		{Name: "bash", Description: commandDescription(job.BashDescription()), Parameters: commandParameters()},
+	}
 }
 
 func commandParameters() map[string]any {
@@ -80,7 +106,7 @@ func commandDescription(specific string) string {
 }
 
 func (r *Runtime) toolDefinitions(agentID string) []provider.Tool {
-	definitions := ToolDefinitions()
+	definitions := buildToolDefinitions(r.toolShape)
 	agent, ok := r.lookupAgent(agentID)
 	if !ok {
 		return definitions
@@ -119,6 +145,11 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 	base := r.workDir
 	if agent, ok := r.lookupAgent(agentID); ok && agent.WorkDir != "" {
 		base = agent.WorkDir
+	}
+	if shaped, foreign := r.shapedDispatch(name); foreign {
+		return "", fmt.Errorf("unknown tool %q: this runtime uses the %s tool shape", name, r.toolShape)
+	} else if shaped {
+		return r.executeShapedTool(agentID, base, name, a.Values)
 	}
 	switch name {
 	case "glob", "grep", "read_file", "read_bytes", "read_lines":

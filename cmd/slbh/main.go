@@ -34,6 +34,9 @@ Runtime flags:
       --workdir PATH       directory the agent works in (default: cwd)
       --model SLUG         model for the runtime Seat
       --effort LEVEL       reasoning effort for the runtime Seat
+      --tool-shape SHAPE   primary tools for native agents: slbh (default),
+                           anthropic or codex; overrides SLBH_TOOL_SHAPE and
+                           config.json's tool_shape
 
 Exit status: 0 clean shutdown, 1 runtime or protocol error, 2 usage.
 `
@@ -43,7 +46,7 @@ func main() {
 	fs.SetOutput(os.Stderr)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 
-	var prompt, promptShort, promptFile, workdir, model, effort string
+	var prompt, promptShort, promptFile, workdir, model, effort, toolShape string
 	var headlessMode, enableIntern bool
 	fs.StringVar(&prompt, "prompt", "", "prompt text")
 	fs.StringVar(&promptShort, "p", "", "prompt text (short)")
@@ -51,6 +54,7 @@ func main() {
 	fs.StringVar(&workdir, "workdir", "", "directory the agent works in")
 	fs.StringVar(&model, "model", "", "model for the runtime Seat")
 	fs.StringVar(&effort, "effort", "", "reasoning effort for the runtime Seat")
+	fs.StringVar(&toolShape, "tool-shape", "", "primary tool shape: slbh, anthropic or codex")
 	fs.BoolVar(&headlessMode, "headless", false, "run the persistent JSONL runtime protocol")
 	fs.BoolVar(&enableIntern, "intern", false, "run the read-only Intern watcher")
 
@@ -59,6 +63,17 @@ func main() {
 	}
 	if promptShort != "" {
 		prompt = promptShort
+	}
+	// The flag is the highest-precedence source and travels as the
+	// environment variable, so the TUI and headless read it the same way. The
+	// effective shape from any source is checked here, before a runtime
+	// exists: a mistyped shape must stop the program, not fall back.
+	if toolShape != "" {
+		os.Setenv("SLBH_TOOL_SHAPE", toolShape)
+	}
+	if _, err := config.NormalizeToolShape(config.Load().ToolShape); err != nil {
+		fmt.Fprintln(os.Stderr, "slbh:", err)
+		os.Exit(2)
 	}
 	// Whether a prompt flag was SUPPLIED, not whether it is non-empty: `slbh -p ""` is a
 	// caller who meant to run headless and got the prompt wrong, and silently opening the

@@ -71,6 +71,7 @@ type anthropicContent struct {
 	// tool_result
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Content   string `json:"content,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"`
 }
 
 type anthropicTool struct {
@@ -167,6 +168,7 @@ func anthropicMessages(messages []Message) []anthropicMessage {
 					Type:      "tool_result",
 					ToolUseID: message.ToolCallID,
 					Content:   message.Content,
+					IsError:   message.IsError,
 				}},
 			})
 		case "assistant":
@@ -250,7 +252,7 @@ func anthropicMessageToOpenAI(message anthropicMessage) []Message {
 	var results []Message
 	for _, block := range message.Content {
 		if block.Type == "tool_result" {
-			results = append(results, Message{Role: "tool", ToolCallID: block.ToolUseID, Content: block.Content})
+			results = append(results, Message{Role: "tool", ToolCallID: block.ToolUseID, Content: block.Content, IsError: block.IsError})
 		}
 	}
 	if len(results) > 0 {

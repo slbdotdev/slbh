@@ -1,0 +1,152 @@
+{
+ "harness": "codex-cli 0.155.1",
+ "captured": "2026-09-21",
+ "model": "gpt-5.5 (apply_patch is sent only to GPT-family models; an unknown model such as glm-5.3-flash receives exec_command and write_stdin alone)",
+ "tools": [
+  {
+   "type": "function",
+   "name": "exec_command",
+   "description": "Runs a command in a PTY, returning output or a session ID for ongoing interaction.",
+   "strict": false,
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "cmd": {
+      "type": "string",
+      "description": "Shell command to execute."
+     },
+     "justification": {
+      "type": "string",
+      "description": "User-facing approval question for `require_escalated`; omit otherwise."
+     },
+     "login": {
+      "type": "boolean",
+      "description": "True runs the shell with -l/-i semantics; false disables them. Defaults to true."
+     },
+     "max_output_tokens": {
+      "type": "number",
+      "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy."
+     },
+     "prefix_rule": {
+      "type": "array",
+      "description": "Reusable approval prefix for `cmd`, only with `sandbox_permissions: \"require_escalated\"`; for example [\"git\", \"pull\"].",
+      "items": {
+       "type": "string"
+      }
+     },
+     "sandbox_permissions": {
+      "type": "string",
+      "description": "Per-command sandbox override. Defaults to `use_default`; use `require_escalated` for unsandboxed execution.",
+      "enum": [
+       "use_default",
+       "require_escalated"
+      ]
+     },
+     "shell": {
+      "type": "string",
+      "description": "Shell binary to launch. Defaults to the user's default shell."
+     },
+     "tty": {
+      "type": "boolean",
+      "description": "True allocates a PTY for the command; false or omitted uses plain pipes."
+     },
+     "workdir": {
+      "type": "string",
+      "description": "Working directory for the command. Defaults to the turn cwd."
+     },
+     "yield_time_ms": {
+      "type": "number",
+      "description": "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms."
+     }
+    },
+    "required": [
+     "cmd"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "type": "function",
+   "name": "write_stdin",
+   "description": "Writes characters to an existing unified exec session and returns recent output.",
+   "strict": false,
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "chars": {
+      "type": "string",
+      "description": "Bytes to write to stdin. Defaults to empty, which polls without writing."
+     },
+     "max_output_tokens": {
+      "type": "number",
+      "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy."
+     },
+     "session_id": {
+      "type": "number",
+      "description": "Identifier of the running unified exec session."
+     },
+     "yield_time_ms": {
+      "type": "number",
+      "description": "Wait before yielding output. Non-empty writes default to 250 ms and cap at 30000 ms; empty polls wait 5000-300000 ms by default."
+     }
+    },
+    "required": [
+     "session_id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "type": "custom",
+   "name": "apply_patch",
+   "description": "The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.",
+   "format": {
+    "type": "grammar",
+    "syntax": "lark",
+    "definition": "start: begin_patch hunk+ end_patch\nbegin_patch: \"*** Begin Patch\" LF\nend_patch: \"*** End Patch\" LF?\n\nhunk: add_hunk | delete_hunk | update_hunk\nadd_hunk: \"*** Add File: \" filename LF add_line+\ndelete_hunk: \"*** Delete File: \" filename LF\nupdate_hunk: \"*** Update File: \" filename LF change_move? change?\n\nfilename: /(.+)/\nadd_line: \"+\" /(.*)/ LF -> line\n\nchange_move: \"*** Move to: \" filename LF\nchange: (change_context | change_line)+ eof_line?\nchange_context: (\"@@\" | \"@@ \" /(.+)/) LF\nchange_line: (\"+\" | \"-\" | \" \") /(.*)/ LF\neof_line: \"*** End of File\" LF\n\n%import common.LF\n"
+   }
+  }
+ ],
+ "calls": [
+  {
+   "name": "exec_command",
+   "input": "{\"cmd\": \"printf 'alpha\\\\nbeta\\\\n' > a.txt; echo hi; echo err >&2\"}",
+   "result": "Chunk ID: 477a37\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 2\nOutput:\nerr\nhi\n"
+  },
+  {
+   "name": "exec_command",
+   "input": "{\"cmd\": \"echo out; exit 3\"}",
+   "result": "Chunk ID: 5cc25b\nWall time: 0.0000 seconds\nProcess exited with code 3\nOriginal token count: 1\nOutput:\nout\n"
+  },
+  {
+   "name": "exec_command",
+   "input": "{\"cmd\": \"sleep 3; echo late\", \"yield_time_ms\": 500}",
+   "result": "Chunk ID: cce516\nWall time: 0.5018 seconds\nProcess running with session ID 36163\nOriginal token count: 0\nOutput:\n"
+  },
+  {
+   "name": "write_stdin",
+   "input": "{\"session_id\": 36163, \"chars\": \"\", \"yield_time_ms\": 5000}",
+   "result": "Chunk ID: e6dfd2\nWall time: 2.3284 seconds\nProcess exited with code 0\nOriginal token count: 2\nOutput:\nlate\n"
+  },
+  {
+   "name": "apply_patch",
+   "input": "*** Begin Patch\n*** Add File: b.txt\n+one\n+two\n*** End Patch\n",
+   "result": "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nA b.txt\n"
+  },
+  {
+   "name": "apply_patch",
+   "input": "*** Begin Patch\n*** Update File: a.txt\n@@\n alpha\n-beta\n+BETA\n*** End Patch\n",
+   "result": "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nM a.txt\n"
+  },
+  {
+   "name": "apply_patch",
+   "input": "*** Begin Patch\n*** Update File: a.txt\n@@\n-nothere\n+x\n*** End Patch\n",
+   "result": "apply_patch verification failed: Failed to find expected lines in /tmp/capture/cxw/a.txt:\nnothere"
+  },
+  {
+   "name": "exec_command",
+   "input": "{\"cmd\": \"seq 1 30000\"}",
+   "result": "Chunk ID: d5aadb\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 42224\nOutput:\nWarning: truncated output (original token count: 42224)\nTotal output lines: 30000\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n201\n202\n203\n204\n205\n206\n207\n208\n209\n210\n211\n212\n213\n214\n215\n216\n217\n218\n219\n220\n221\n222\n223\n224\n225\n226\n227\n228\n229\n230\n231\n232\n233\n234\n235\n236\n237\n238\n239\n240\n241\n242\n243\n244\n245\n246\n247\n248\n249\n250\n251\n252\n253\n254\n255\n256\n257\n258\n259\n260\n261\n262\n263\n264\n265\n266\n267\n268\n269\n270\n271\n272\n273\n274\n275\n276\n277\n278\n279\n280\n281\n282\n283\n284\n285\n286\n287\n288\n289\n290\n291\n292\n293\n294\n295\n296\n297\n298\n299\n300\n301\n302\n303\n304\n305\n306\n307\n308\n309\n310\n311\n312\n313\n314\n315\n316\n317\n318\n319\n320\n321\n322\n323\n324\n325\n326\n327\n328\n329\n330\n331\n332\n333\n334\n335\n336\n337\n338\n339\n340\n341\n342\n343\n344\n345\n346\n347\n348\n349\n350\n351\n352\n353\n354\n355[...]7\n29918\n29919\n29920\n29921\n29922\n29923\n29924\n29925\n29926\n29927\n29928\n29929\n29930\n29931\n29932\n29933\n29934\n29935\n29936\n29937\n29938\n29939\n29940\n29941\n29942\n29943\n29944\n29945\n29946\n29947\n29948\n29949\n29950\n29951\n29952\n29953\n29954\n29955\n29956\n29957\n29958\n29959\n29960\n29961\n29962\n29963\n29964\n29965\n29966\n29967\n29968\n29969\n29970\n29971\n29972\n29973\n29974\n29975\n29976\n29977\n29978\n29979\n29980\n29981\n29982\n29983\n29984\n29985\n29986\n29987\n29988\n29989\n29990\n29991\n29992\n29993\n29994\n29995\n29996\n29997\n29998\n29999\n30000\n"
+  }
+ ]
+}

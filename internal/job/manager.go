@@ -450,6 +450,24 @@ func (m *Manager) Wait(j *Job, d time.Duration) (Snapshot, string, string, bool)
 	return j.snapshotLocked(), j.stdout.String(), j.stderr.String(), false
 }
 
+// WaitOrKill is Wait with a hard deadline: a job still running when d expires
+// is killed rather than backgrounded. The job stays inline throughout, so its
+// result is returned here and is never delivered a second time. The final
+// value reports whether the deadline killed it.
+func (m *Manager) WaitOrKill(j *Job, d time.Duration) (Snapshot, string, string, bool) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-j.exited:
+	case <-timer.C:
+		_ = j.Kill()
+		<-j.exited
+	}
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.snapshotLocked(), j.stdout.String(), j.stderr.String(), j.status == Killed
+}
+
 func (m *Manager) List() []Snapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

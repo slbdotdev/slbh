@@ -1,0 +1,553 @@
+{
+ "harness": "claude-code 2.1.278",
+ "captured": "2026-09-21",
+ "note": "Primary tools as sent by the installed harness, and the results it returned for scripted calls. Glob and Grep are absent from this version: calling them returns the tool_use_error recorded below.",
+ "tools": [
+  {
+   "name": "Bash",
+   "description": "Executes a given bash command and returns its output.\n\nThe working directory persists between commands, but shell state does not. The shell environment is initialized from the user's profile (bash or zsh).\n\nIMPORTANT: Avoid using this tool to run `cat`, `head`, `tail`, `sed`, `awk`, or `echo` commands, unless explicitly instructed or after you have verified that a dedicated tool cannot accomplish your task. Instead, use the appropriate dedicated tool as this will provide a much better experience for the user:\n\n - Read files: Use Read (NOT cat/head/tail)\n - Edit files: Use Edit (NOT sed/awk)\n - Write files: Use Write (NOT echo >/cat <<EOF)\n - Communication: Output text directly (NOT echo/printf)\nWhile the Bash tool can do similar things, it’s better to use the built-in tools as they provide a better user experience and make it easier to review tool calls and give permission.\n\n# Instructions\n - If your command will create new directories or files, first use this tool to run `ls` to verify the parent directory exists and is the correct location.\n - Always quote file paths that contain spaces with double quotes in your command (e.g., cd \"path with spaces/file.txt\")\n - Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it. In particular, never prepend `cd <current-directory>` to a `git` command — `git` already operates on the current working tree, and the compound triggers a permission prompt.\n - You may specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). By default, your command will timeout after 120000ms (2 minutes).\n - You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. You do not need to use '&' at the end of the command when using this parameter.\n - For git commands:\n  - Prefer to create a new commit rather than amending an existing commit.\n  - Before running destructive operations (e.g., git reset --hard, git push --force, git checkout --), consider whether there is a safer alternative that achieves the same goal. Only use destructive operations when they are truly the best approach.\n  - Never skip hooks (--no-verify) or bypass signing (--no-gpg-sign, -c commit.gpgsign=false) unless the user has explicitly asked for it. If a hook fails, investigate and fix the underlying issue.\n - Avoid unnecessary `sleep` commands:\n  - Do not sleep between commands that can run immediately — just run them.\n  - If your command is long running and you would like to be notified when it finishes — use `run_in_background`. No sleep needed.\n  - Do not retry failing commands in a sleep loop — diagnose the root cause.\n  - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll.\n  - If you must poll an external process, use a check command (e.g. `gh run view`) rather than sleeping first.\n  - If you must sleep, keep the duration short to avoid blocking the user.\n - When running `find`, search from `.` (or a specific path), not `/` — scanning the full filesystem can exhaust system resources on large trees.\n - When using `find -regex` with alternation, put the longest alternative first. Example: use `'.*\\.\\(tsx\\|ts\\)'` not `'.*\\.\\(ts\\|tsx\\)'` — the second form silently skips `.tsx` files.\n\n\n# Committing changes with git\n\nOnly create commits when requested by the user. If unclear, ask first. When the user asks you to create a new git commit, follow these steps carefully:\n\nYou can call multiple tools in a single response. When multiple independent pieces of information are requested and all commands are likely to succeed, run multiple tool calls in parallel for optimal performance. The numbered steps below indicate which commands should be batched in parallel.\n\nGit Safety Protocol:\n- NEVER update the git config\n- NEVER run destructive git commands (push --force, reset --hard, checkout ., restore ., clean -f, branch -D) unless the user explicitly requests these actions. Taking unauthorized destructive actions is unhelpful and can result in lost work, so it's best to ONLY run these commands when given direct instructions \n- NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it\n- NEVER run force push to main/master, warn the user if they request it\n- CRITICAL: Always create NEW commits rather than amending, unless the user explicitly requests a git amend. When a pre-commit hook fails, the commit did NOT happen — so --amend would modify the PREVIOUS commit, which may result in destroying work or losing previous changes. Instead, after hook failure, fix the issue, re-stage, and create a NEW commit\n- When staging files, prefer adding specific files by name rather than using \"git add -A\" or \"git add .\", which can accidentally include sensitive files (.env, credentials) or large binaries\n- NEVER commit changes unless the user explicitly asks you to. It is VERY IMPORTANT to only commit when explicitly asked, otherwise the user will feel that you are being too proactive\n\n1. Run the following bash commands in parallel, each using the Bash tool:\n  - Run a git status command to see all untracked files. IMPORTANT: Never use the -uall flag as it can cause memory issues on large repos.\n  - Run a git diff command to see both staged and unstaged changes that will be committed.\n  - Run a git log command to see recent commit messages, so that you can follow this repository's commit message style.\n2. Analyze all staged changes (both previously staged and newly added) and draft a commit message:\n  - Summarize the nature of the changes (eg. new feature, enhancement to an existing feature, bug fix, refactoring, test, docs, etc.). Ensure the message accurately reflects the changes and their purpose (i.e. \"add\" means a wholly new feature, \"update\" means an enhancement to an existing feature, \"fix\" means a bug fix, etc.).\n  - Do not commit files that likely contain secrets (.env, credentials.json, etc). Warn the user if they specifically request to commit those files\n  - Draft a concise (1-2 sentences) commit message that focuses on the \"why\" rather than the \"what\"\n  - Ensure it accurately reflects the changes and their purpose\n3. Run the following commands in parallel:\n   - Add relevant untracked files to the staging area.\n   - Create the commit with a message, ending with the attribution lines given in the conversation's system-reminder, when one is present.\n   - Run git status after the commit completes to verify success.\n   Note: git status depends on the commit completing, so run it sequentially after the commit.\n4. If the commit fails due to pre-commit hook: fix the issue and create a NEW commit\n\nImportant notes:\n- NEVER run additional commands to read or explore code, besides git bash commands\n- NEVER use the TaskCreate or Agent tools\n- DO NOT push to the remote repository unless the user explicitly asks you to do so\n- IMPORTANT: Never use git commands with the -i flag (like git rebase -i or git add -i) since they require interactive input which is not supported.\n- IMPORTANT: Do not use --no-edit with git rebase commands, as the --no-edit flag is not a valid option for git rebase.\n- If there are no changes to commit (i.e., no untracked files and no modifications), do not create an empty commit\n- In order to ensure good formatting, ALWAYS pass the commit message via a HEREDOC, a la this example:\n<example>\ngit commit -m \"$(cat <<'EOF'\n   Commit message here.\n   EOF\n   )\"\n</example>\n\n# Creating pull requests\nUse the gh command via the Bash tool for ALL GitHub-related tasks including working with issues, pull requests, checks, and releases. If given a Github URL use the gh command to get the information needed.\n\nIMPORTANT: When the user asks you to create a pull request, follow these steps carefully:\n\n1. Run the following bash commands in parallel using the Bash tool, in order to understand the current state of the branch since it diverged from the main branch:\n   - Run a git status command to see all untracked files (never use -uall flag)\n   - Run a git diff command to see both staged and unstaged changes that will be committed\n   - Check if the current branch tracks a remote branch and is up to date with the remote, so you know if you need to push to the remote\n   - Run a git log command and `git diff [base-branch]...HEAD` to understand the full commit history for the current branch (from the time it diverged from the base branch)\n2. Analyze all changes that will be included in the pull request, making sure to look at all relevant commits (NOT just the latest commit, but ALL commits that will be included in the pull request!!!), and draft a pull request title and summary:\n   - Keep the PR title short (under 70 characters)\n   - Use the description/body for details, not the title\n3. Run the following commands in parallel:\n   - Create new branch if needed\n   - Push to remote with -u flag if needed\n   - Create PR using gh pr create with the format below. Use a HEREDOC to pass the body to ensure correct formatting. End the body with the attribution lines given in the conversation's system-reminder, when one is present.\n<example>\ngh pr create --title \"the pr title\" --body \"$(cat <<'EOF'\n## Summary\n<1-3 bullet points>\n\n## Test plan\n[Bulleted markdown checklist of TODOs for testing the pull request...]\nEOF\n)\"\n</example>\n\nImportant:\n- DO NOT use the TaskCreate or Agent tools\n- Return the PR URL when you're done, so the user can see it\n\n# Other common operations\n- View comments on a Github PR: gh api repos/foo/bar/pulls/123/comments",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "command": {
+      "description": "The command to execute",
+      "type": "string"
+     },
+     "timeout": {
+      "description": "Optional timeout in milliseconds (max 600000)",
+      "type": "number"
+     },
+     "description": {
+      "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.\n\nSay what the command does in plain words: do not echo the command's text, its flags, or file paths - the user reads this description, often without seeing the command.\n\nFor simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):\n- ls → \"List files in current directory\"\n- git status → \"Show working tree status\"\n- npm install → \"Install package dependencies\"\n\nFor commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:\n- find . -name \"*.tmp\" -exec rm {} \\; → \"Find and delete all .tmp files recursively\"\n- git reset --hard origin/main → \"Discard all local changes and match remote main\"\n- curl -s url | jq '.data[]' → \"Fetch JSON from URL and extract data array elements\"",
+      "type": "string"
+     },
+     "run_in_background": {
+      "description": "Set to true to run this command in the background.",
+      "type": "boolean"
+     },
+     "dangerouslyDisableSandbox": {
+      "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing.",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "command"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "Edit",
+   "description": "Performs exact string replacements in files.\n\nUsage:\n- You must use your `Read` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.\n- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + tab. Everything after that is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.\n- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n- The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.\n- Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "file_path": {
+      "description": "The absolute path to the file to modify",
+      "type": "string"
+     },
+     "old_string": {
+      "description": "The text to replace",
+      "type": "string"
+     },
+     "new_string": {
+      "description": "The text to replace it with (must be different from old_string)",
+      "type": "string"
+     },
+     "replace_all": {
+      "description": "Replace all occurrences of old_string (default false)",
+      "default": false,
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file_path",
+     "old_string",
+     "new_string"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "Read",
+   "description": "Reads a file from the local filesystem. You can access any file directly by using this tool.\nAssume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned.\n\nUsage:\n- The file_path parameter must be an absolute path, not a relative path\n- By default, it reads up to 2000 lines starting from the beginning of the file\n- When you already know which part of the file you need, only read that part. This can be important for larger files.\n- Results are returned using cat -n format, with line numbers starting at 1\n- This tool allows Claude Code to read images (eg PNG, JPG, etc). When reading an image file the contents are presented visually as Claude Code is a multimodal LLM.\n- This tool can read PDF files (.pdf). For large PDFs (more than 10 pages), you MUST provide the pages parameter to read specific page ranges (e.g., pages: \"1-5\"). Reading a large PDF without the pages parameter will fail. Maximum 20 pages per request.\n- This tool can read Jupyter notebooks (.ipynb files) and returns all cells with their outputs, combining code, text, and visualizations.\n- This tool can only read files, not directories. To list files in a directory, use the registered shell tool.\n- You will regularly be asked to read screenshots. If the user provides a path to a screenshot, ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths.\n- If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.\n- Do NOT re-read a file you just edited to verify — Edit/Write would have errored if the change failed, and the harness tracks file state for you.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "file_path": {
+      "description": "The absolute path to the file to read",
+      "type": "string"
+     },
+     "offset": {
+      "description": "The line number to start reading from. Only provide if the file is too large to read at once",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+     },
+     "limit": {
+      "description": "The number of lines to read. Only provide if the file is too large to read at once.",
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+     },
+     "pages": {
+      "description": "Page range for PDF files (e.g., \"1-5\", \"3\", \"10-20\"). Only applicable to PDF files. Maximum 20 pages per request.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "Write",
+   "description": "Writes a file to the local filesystem.\n\nUsage:\n- This tool will overwrite the existing file if there is one at the provided path.\n- If this is an existing file, you MUST use the Read tool first to read the file's contents. This tool will fail if you did not read the file first.\n- Prefer the Edit tool for modifying existing files — it only sends the diff. Only use this tool to create new files or for complete rewrites.\n- NEVER create documentation files (*.md) or README files unless explicitly requested by the User.\n- Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.",
+   "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+     "file_path": {
+      "description": "The absolute path to the file to write (must be absolute, not relative)",
+      "type": "string"
+     },
+     "content": {
+      "description": "The content to write to the file",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path",
+     "content"
+    ],
+    "additionalProperties": false
+   }
+  }
+ ],
+ "calls": [
+  {
+   "name": "Bash",
+   "input": {
+    "command": "printf 'alpha\\nbeta\\ngamma beta\\n' > a.txt; printf 'x\\n' > c.txt; mkdir -p sub; printf 'beta in sub\\n' > sub/d.txt; echo hi; echo err >&2",
+    "description": "setup"
+   },
+   "result": "hi\nerr",
+   "is_error": false
+  },
+  {
+   "name": "Read",
+   "input": {
+    "file_path": "/tmp/capture/cw/a.txt"
+   },
+   "result": "1\talpha\n2\tbeta\n3\tgamma beta\n4\t",
+   "is_error": false
+  },
+  {
+   "name": "Read",
+   "input": {
+    "file_path": "/tmp/capture/cw/a.txt",
+    "offset": 2,
+    "limit": 1
+   },
+   "result": "2\tbeta",
+   "is_error": false
+  },
+  {
+   "name": "Glob",
+   "input": {
+    "pattern": "**/*.txt"
+   },
+   "result": "<tool_use_error>Error: No such tool available: Glob. Glob is not available in this session — find files with `find` via the Bash tool instead.</tool_use_error>",
+   "is_error": true
+  },
+  {
+   "name": "Grep",
+   "input": {
+    "pattern": "beta"
+   },
+   "result": "<tool_use_error>Error: No such tool available: Grep. Grep is not available in this session — search file contents with `grep` via the Bash tool instead.</tool_use_error>",
+   "is_error": true
+  },
+  {
+   "name": "Grep",
+   "input": {
+    "pattern": "beta",
+    "output_mode": "content",
+    "-n": true
+   },
+   "result": "<tool_use_error>Error: No such tool available: Grep. Grep is not available in this session — search file contents with `grep` via the Bash tool instead.</tool_use_error>",
+   "is_error": true
+  },
+  {
+   "name": "Grep",
+   "input": {
+    "pattern": "beta",
+    "output_mode": "count"
+   },
+   "result": "<tool_use_error>Error: No such tool available: Grep. Grep is not available in this session — search file contents with `grep` via the Bash tool instead.</tool_use_error>",
+   "is_error": true
+  },
+  {
+   "name": "Grep",
+   "input": {
+    "pattern": "zzz"
+   },
+   "result": "<tool_use_error>Error: No such tool available: Grep. Grep is not available in this session — search file contents with `grep` via the Bash tool instead.</tool_use_error>",
+   "is_error": true
+  },
+  {
+   "name": "Bash",
+   "input": {
+    "command": "echo out; exit 3",
+    "description": "fail"
+   },
+   "result": "Exit code 3\nout",
+   "is_error": true
+  },
+  {
+   "name": "Edit",
+   "input": {
+    "replace_all": false,
+    "file_path": "/tmp/capture/cw/a.txt",
+    "old_string": "alpha",
+    "new_string": "ALPHA"
+   },
+   "result": "The file /tmp/capture/cw/a.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+   "is_error": false
+  },
+  {
+   "name": "Edit",
+   "input": {
+    "replace_all": false,
+    "file_path": "/tmp/capture/cw/a.txt",
+    "old_string": "beta",
+    "new_string": "B"
+   },
+   "result": "<tool_use_error>Found 2 matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: beta</tool_use_error>",
+   "is_error": true
+  },
+  {
+   "name": "Edit",
+   "input": {
+    "replace_all": false,
+    "file_path": "/tmp/capture/cw/a.txt",
+    "old_string": "nothere",
+    "new_string": "B"
+   },
+   "result": "<tool_use_error>String to replace not found in file.\nString: nothere</tool_use_error>",
+   "is_error": true
+  },
+  {
+   "name": "Edit",
+   "input": {
+    "replace_all": true,
+    "file_path": "/tmp/capture/cw/a.txt",
+    "old_string": "beta",
+    "new_string": "B"
+   },
+   "result": "The file /tmp/capture/cw/a.txt has been updated. All occurrences were successfully replaced. (file state is current in your context — no need to Read it back)",
+   "is_error": false
+  },
+  {
+   "name": "Edit",
+   "input": {
+    "replace_all": false,
+    "file_path": "/tmp/capture/cw/c.txt",
+    "old_string": "x",
+    "new_string": "y"
+   },
+   "result": "The file /tmp/capture/cw/c.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+   "is_error": false
+  },
+  {
+   "name": "Write",
+   "input": {
+    "file_path": "/tmp/capture/cw/new.txt",
+    "content": "fresh\n"
+   },
+   "result": "File created successfully at: /tmp/capture/cw/new.txt (file state is current in your context — no need to Read it back)",
+   "is_error": false
+  },
+  {
+   "name": "Write",
+   "input": {
+    "file_path": "/tmp/capture/cw/c.txt",
+    "content": "over\n"
+   },
+   "result": "The file /tmp/capture/cw/c.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+   "is_error": false
+  },
+  {
+   "name": "Read",
+   "input": {
+    "file_path": "/tmp/capture/cw/missing.txt"
+   },
+   "result": "File does not exist. Note: your current working directory is /tmp/capture/cw.",
+   "is_error": true
+  },
+  {
+   "name": "Bash",
+   "input": {
+    "command": "sleep 1; echo bg",
+    "description": "bg",
+    "run_in_background": true
+   },
+   "result": "Command running in background with ID: bjo0t4vc5. Output is being written to: /tmp/claude-1000/-tmp-capture-cw/8885af48-717f-4882-911a-eebfc75ff4b1/tasks/bjo0t4vc5.output. You will be notified when it completes. To check interim output, use Read on that file path.",
+   "is_error": false
+  },
+  {
+   "name": "Bash",
+   "input": {
+    "command": "seq 1 30000",
+    "description": "long"
+   },
+   "result": "<persisted-output>\nOutput too large (164.9KB). Full output saved to: /tmp/capture/clhome/projects/-tmp-capture-cw/8885af48-717f-4882-911a-eebfc75ff4b1/tool-results/bo4h0zims.txt\n\nPreview (first 2KB):\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n201\n202\n203\n204\n205\n206\n207\n208\n209\n210\n211\n212\n213\n214\n215\n216\n217\n218\n219\n220\n221\n222\n223\n224\n225\n226\n227\n228\n229\n230\n231\n232\n233\n234\n235\n236\n237\n238\n239\n240\n241\n242\n243\n244\n245\n246\n247\n248\n249\n250\n251\n252\n253\n254\n255\n256\n257\n258\n259\n260\n261\n262\n263\n264\n265\n266\n267\n268\n269\n270\n271\n272\n273\n274\n275\n276\n277\n278\n279\n280\n281\n282\n283\n284\n285\n286\n287\n288\n289\n290\n291\n292\n293\n294\n295\n296\n297\n298\n299\n300\n301\n302\n303\n304\n305\n306\n307\n308\n309\n310\n311\n312\n313\n314\n315\n316\n317\n318\n319\n320\n321\n322\n323\n324\n325\n326\n327\n328\n329\n330\n331\n332\n333\n334\n335\n336\n337\n338\n339\n340\n341\n342\n343\n344\n345\n346\n347\n348\n349\n350\n351\n352\n353\n354\n355\n356\n357\n358\n359\n360\n361\n362\n363\n364\n365\n366\n367\n368\n369\n370\n371\n372\n373\n374\n375\n376\n377\n378\n379\n380\n381\n382\n383\n384\n385\n386\n387\n388\n389\n390\n391\n392\n393\n394\n395\n396\n397\n398\n399\n400\n401\n402\n403\n404\n405\n406\n407\n408\n409\n410\n411\n412\n413\n414\n415\n416\n417\n418\n419\n420\n421\n422\n423\n424\n425\n426\n427\n428\n429\n430\n431\n432\n433\n434\n435\n436\n437\n438\n439\n440\n441\n442\n443\n444\n445\n446\n447\n448\n449\n450\n451\n452\n453\n454\n455\n456\n457\n458\n459\n460\n461\n462\n463\n464\n465\n466\n467\n468\n469\n470\n471\n472\n473\n474\n475\n476\n477\n478\n479\n480\n481\n482\n483\n484\n485\n486\n487\n488\n489\n490\n491\n492\n493\n494\n495\n496\n497\n498\n499\n500\n501\n502\n503\n504\n505\n506\n507\n508\n509\n510\n511\n512\n513\n514\n515\n516\n517\n518\n519\n520\n521\n522\n523\n524\n525\n526\n527\n...\n</persisted-output>",
+   "is_error": false
+  },
+  {
+   "name": "Bash",
+   "input": {
+    "command": "sleep 5",
+    "description": "timeout",
+    "timeout": 1000
+   },
+   "result": "Exit code 143\nCommand timed out after 1s",
+   "is_error": true
+  },
+  {
+   "name": "Edit",
+   "input": {
+    "replace_all": false,
+    "file_path": "/tmp/capture/cw2/pre.txt",
+    "old_string": "old",
+    "new_string": "new"
+   },
+   "result": "The file /tmp/capture/cw2/pre.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+   "is_error": false
+  },
+  {
+   "name": "Write",
+   "input": {
+    "file_path": "/tmp/capture/cw2/pre2.txt",
+    "content": "over\n"
+   },
+   "result": "The file /tmp/capture/cw2/pre2.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+   "is_error": false
+  },
+  {
+   "name": "Read",
+   "input": {
+    "file_path": "/tmp/capture/cw2/r.txt"
+   },
+   "result": "1\tr\n2\t",
+   "is_error": false
+  },
+  {
+   "name": "Bash",
+   "input": {
+    "command": "sleep 1; echo changed >> r.txt",
+    "description": "x"
+   },
+   "result": "(Bash completed with no output)",
+   "is_error": false
+  },
+  {
+   "name": "Edit",
+   "input": {
+    "replace_all": false,
+    "file_path": "/tmp/capture/cw2/r.txt",
+    "old_string": "r",
+    "new_string": "R"
+   },
+   "result": "The file /tmp/capture/cw2/r.txt has been updated successfully. (note: the file had been modified on disk since you last read it — the edit applied cleanly, but the file contains other changes not in your context. Read it before edits that depend on surrounding content.)",
+   "is_error": false
+  },
+  {
+   "name": "Read",
+   "input": {
+    "file_path": "/tmp/capture/cw2"
+   },
+   "result": "EISDIR: illegal operation on a directory, read '/tmp/capture/cw2'",
+   "is_error": true
+  },
+  {
+   "name": "Bash",
+   "input": {
+    "command": "cd sub_missing",
+    "description": "x"
+   },
+   "result": "Exit code 1\n/bin/bash: line 1: cd: sub_missing: No such file or directory",
+   "is_error": true
+  },
+  {
+   "name": "Read",
+   "input": {
+    "file_path": "s.txt"
+   },
+   "result": "1\tshort\n2\t",
+   "is_error": false
+  },
+  {
+   "name": "Read",
+   "input": {
+    "file_path": "/tmp/capture/cw3/empty.txt"
+   },
+   "result": "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>",
+   "is_error": false
+  },
+  {
+   "name": "Read",
+   "input": {
+    "file_path": "/tmp/capture/cw3/long.txt"
+   },
+   "result": "1\txxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n2\t",
+   "is_error": false
+  },
+  {
+   "name": "Read",
+   "input": {
+    "file_path": "/tmp/capture/cw3/many.txt"
+   },
+   "result": "1\t1\n2\t2\n3\t3\n4\t4\n5\t5\n6\t6\n7\t7\n8\t8\n9\t9\n10\t10\n11\t11\n12\t12\n13\t13\n14\t14\n15\t15\n16\t16\n17\t17\n18\t18\n19\t19\n20\t20\n21\t21\n22\t22\n23\t23\n24\t24\n25\t25\n26\t26\n27\t27\n28\t28\n29\t29\n30\t30\n31\t31\n32\t32\n33\t33\n34\t34\n35\t35\n36\t36\n37\t37\n38\t38\n39\t39\n40\t40\n41\t41\n42\t42\n43\t43\n44\t44\n45\t45\n46\t46\n47\t47\n48\t48\n49\t49\n50\t50\n51\t51\n52\t52\n53\t53\n54\t54\n55\t55\n56\t56\n57\t57\n58\t58\n59\t59\n60\t60\n61\t61\n62\t62\n63\t63\n64\t64\n65\t65\n66\t66\n67\t67\n68\t68\n69\t69\n70\t70\n71\t71\n72\t72\n73\t73\n74\t74\n75\t75\n76\t76\n77\t77\n78\t78\n79\t79\n80\t80\n81\t81\n82\t82\n83\t83\n84\t84\n85\t85\n86\t86\n87\t87\n88\t88\n89\t89\n90\t90\n91\t91\n92\t92\n93\t93\n94\t94\n95\t95\n96\t96\n97\t97\n98\t98\n99\t99\n100\t100\n101\t101\n102\t102\n103\t103\n104\t104\n105\t105\n106\t106\n107\t107\n108\t108\n109\t109\n110\t110\n111\t111\n112\t112\n113\t113\n114\t114\n115\t115\n116\t116\n117\t117\n118\t118\n119\t119\n120\t120\n121\t121\n122\t122\n123\t123\n124\t124\n125\t125\n126\t126\n127\t127\n128\t128\n129\t129\n130\t130\n131\t131\n132\t132\n133\t133\n134\t134\n135\t135\n136\t136\n137\t137\n138\t138\n139\t139\n140\t140\n141\t141\n142\t142\n143\t143\n144\t144\n145\t145\n146\t146\n147\t147\n148\t148\n149\t149\n150\t150\n151\t151\n152\t152\n153\t153\n154\t154\n155\t155\n156\t156\n157\t157\n158\t158\n159\t159\n160\t160\n161\t161\n162\t162\n163\t163\n164\t164\n165\t165\n166\t166\n167\t167\n168\t168\n169\t169\n170\t170\n171\t171\n172\t172\n173\t173\n174\t174\n175\t175\n176\t176\n177\t177\n178\t178\n179\t179\n180\t180\n181\t181\n182\t182\n183\t183\n184\t184\n185\t185\n186\t186\n187\t187\n188\t188\n189\t189\n190\t190\n191\t191\n192\t192\n193\t193\n194\t194\n195\t195\n196\t196\n197\t197\n198\t198\n199\t199\n200\t200\n201\t201\n202\t202\n203\t203\n204\t204\n205\t205\n206\t206\n207\t207\n208\t208\n209\t209\n210\t210\n211\t211\n212\t212\n213\t213\n214\t214\n215\t[...]2451\n2452\t2452\n2453\t2453\n2454\t2454\n2455\t2455\n2456\t2456\n2457\t2457\n2458\t2458\n2459\t2459\n2460\t2460\n2461\t2461\n2462\t2462\n2463\t2463\n2464\t2464\n2465\t2465\n2466\t2466\n2467\t2467\n2468\t2468\n2469\t2469\n2470\t2470\n2471\t2471\n2472\t2472\n2473\t2473\n2474\t2474\n2475\t2475\n2476\t2476\n2477\t2477\n2478\t2478\n2479\t2479\n2480\t2480\n2481\t2481\n2482\t2482\n2483\t2483\n2484\t2484\n2485\t2485\n2486\t2486\n2487\t2487\n2488\t2488\n2489\t2489\n2490\t2490\n2491\t2491\n2492\t2492\n2493\t2493\n2494\t2494\n2495\t2495\n2496\t2496\n2497\t2497\n2498\t2498\n2499\t2499\n2500\t2500\n2501\t",
+   "is_error": false
+  },
+  {
+   "name": "Read",
+   "input": {
+    "file_path": "/tmp/capture/cw3/s.txt",
+    "offset": 50
+   },
+   "result": "<system-reminder>Warning: the file exists but is shorter than the provided offset (50). The file has 2 lines.</system-reminder>",
+   "is_error": false
+  },
+  {
+   "name": "Edit",
+   "input": {
+    "replace_all": false,
+    "file_path": "/tmp/capture/cw3/nofile.txt",
+    "old_string": "a",
+    "new_string": "b"
+   },
+   "result": "<tool_use_error>File does not exist. Note: your current working directory is /tmp/capture/cw3.</tool_use_error>",
+   "is_error": true
+  },
+  {
+   "name": "Edit",
+   "input": {
+    "replace_all": false,
+    "file_path": "/tmp/capture/cw3/s.txt",
+    "old_string": "short",
+    "new_string": "short"
+   },
+   "result": "<tool_use_error>No changes to make: old_string and new_string are exactly the same.</tool_use_error>",
+   "is_error": true
+  },
+  {
+   "name": "Edit",
+   "input": {
+    "replace_all": false,
+    "file_path": "/tmp/capture/cw3/newbyedit.txt",
+    "old_string": "",
+    "new_string": "made\n"
+   },
+   "result": "The file /tmp/capture/cw3/newbyedit.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+   "is_error": false
+  },
+  {
+   "name": "Write",
+   "input": {
+    "file_path": "rel.txt",
+    "content": "r\n"
+   },
+   "result": "File created successfully at: rel.txt (file state is current in your context — no need to Read it back)",
+   "is_error": false
+  },
+  {
+   "name": "Edit",
+   "input": {
+    "replace_all": false,
+    "file_path": "s.txt",
+    "old_string": "short",
+    "new_string": "long"
+   },
+   "result": "The file s.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+   "is_error": false
+  },
+  {
+   "name": "Bash",
+   "input": {
+    "command": "cd /tmp && pwd",
+    "description": "x"
+   },
+   "result": "/tmp\nShell cwd was reset to /tmp/capture/cw3",
+   "is_error": false
+  },
+  {
+   "name": "Bash",
+   "input": {
+    "command": "pwd; seq 1 9000",
+    "description": "x"
+   },
+   "result": "<persisted-output>\nOutput too large (42.9KB). Full output saved to: /tmp/capture/clhome/projects/-tmp-capture-cw3/40e4c606-ec4b-4dfe-9feb-67ab57c80b5f/tool-results/b3kv07hnh.txt\n\nPreview (first 2KB):\n/tmp/capture/cw3\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n201\n202\n203\n204\n205\n206\n207\n208\n209\n210\n211\n212\n213\n214\n215\n216\n217\n218\n219\n220\n221\n222\n223\n224\n225\n226\n227\n228\n229\n230\n231\n232\n233\n234\n235\n236\n237\n238\n239\n240\n241\n242\n243\n244\n245\n246\n247\n248\n249\n250\n251\n252\n253\n254\n255\n256\n257\n258\n259\n260\n261\n262\n263\n264\n265\n266\n267\n268\n269\n270\n271\n272\n273\n274\n275\n276\n277\n278\n279\n280\n281\n282\n283\n284\n285\n286\n287\n288\n289\n290\n291\n292\n293\n294\n295\n296\n297\n298\n299\n300\n301\n302\n303\n304\n305\n306\n307\n308\n309\n310\n311\n312\n313\n314\n315\n316\n317\n318\n319\n320\n321\n322\n323\n324\n325\n326\n327\n328\n329\n330\n331\n332\n333\n334\n335\n336\n337\n338\n339\n340\n341\n342\n343\n344\n345\n346\n347\n348\n349\n350\n351\n352\n353\n354\n355\n356\n357\n358\n359\n360\n361\n362\n363\n364\n365\n366\n367\n368\n369\n370\n371\n372\n373\n374\n375\n376\n377\n378\n379\n380\n381\n382\n383\n384\n385\n386\n387\n388\n389\n390\n391\n392\n393\n394\n395\n396\n397\n398\n399\n400\n401\n402\n403\n404\n405\n406\n407\n408\n409\n410\n411\n412\n413\n414\n415\n416\n417\n418\n419\n420\n421\n422\n423\n424\n425\n426\n427\n428\n429\n430\n431\n432\n433\n434\n435\n436\n437\n438\n439\n440\n441\n442\n443\n444\n445\n446\n447\n448\n449\n450\n451\n452\n453\n454\n455\n456\n457\n458\n459\n460\n461\n462\n463\n464\n465\n466\n467\n468\n469\n470\n471\n472\n473\n474\n475\n476\n477\n478\n479\n480\n481\n482\n483\n484\n485\n486\n487\n488\n489\n490\n491\n492\n493\n494\n495\n496\n497\n498\n499\n500\n501\n502\n503\n504\n505\n506\n507\n508\n509\n510\n511\n512\n513\n514\n515\n516\n517\n518\n519\n520\n521\n522\n...\n</persisted-output>",
+   "is_error": false
+  },
+  {
+   "name": "Bash",
+   "input": {
+    "command": "echo only-err >&2; exit 2",
+    "description": "x"
+   },
+   "result": "Exit code 2\nonly-err",
+   "is_error": true
+  },
+  {
+   "name": "Read",
+   "input": {
+    "file_path": "/tmp/capture/cw4/big.txt"
+   },
+   "result": "1\t1\n2\t2\n3\t3\n4\t4\n5\t5\n6\t6\n7\t7\n8\t8\n9\t9\n10\t10\n11\t11\n12\t12\n13\t13\n14\t14\n15\t15\n16\t16\n17\t17\n18\t18\n19\t19\n20\t20\n21\t21\n22\t22\n23\t23\n24\t24\n25\t25\n26\t26\n27\t27\n28\t28\n29\t29\n30\t30\n31\t31\n32\t32\n33\t33\n34\t34\n35\t35\n36\t36\n37\t37\n38\t38\n39\t39\n40\t40\n41\t41\n42\t42\n43\t43\n44\t44\n45\t45\n46\t46\n47\t47\n48\t48\n49\t49\n50\t50\n51\t51\n52\t52\n53\t53\n54\t54\n55\t55\n56\t56\n57\t57\n58\t58\n59\t59\n60\t60\n61\t61\n62\t62\n63\t63\n64\t64\n65\t65\n66\t66\n67\t67\n68\t68\n69\t69\n70\t70\n71\t71\n72\t72\n73\t73\n74\t74\n75\t75\n76\t76\n77\t77\n78\t78\n79\t79\n80\t80\n81\t81\n82\t82\n83\t83\n84\t84\n85\t85\n86\t86\n87\t87\n88\t88\n89\t89\n90\t90\n91\t91\n92\t92\n93\t93\n94\t94\n95\t95\n96\t96\n97\t97\n98\t98\n99\t99\n100\t100\n101\t101\n102\t102\n103\t103\n104\t104\n105\t105\n106\t106\n107\t107\n108\t108\n109\t109\n110\t110\n111\t111\n112\t112\n113\t113\n114\t114\n115\t115\n116\t116\n117\t117\n118\t118\n119\t119\n120\t120\n121\t121\n122\t122\n123\t123\n124\t124\n125\t125\n126\t126\n127\t127\n128\t128\n129\t129\n130\t130\n131\t131\n132\t132\n133\t133\n134\t134\n135\t135\n136\t136\n137\t137\n138\t138\n139\t139\n140\t140\n141\t141\n142\t142\n143\t143\n144\t144\n145\t145\n146\t146\n147\t147\n148\t148\n149\t149\n150\t150\n151\t151\n152\t152\n153\t153\n154\t154\n155\t155\n156\t156\n157\t157\n158\t158\n159\t159\n160\t160\n161\t161\n162\t162\n163\t163\n164\t164\n165\t165\n166\t166\n167\t167\n168\t168\n169\t169\n170\t170\n171\t171\n172\t172\n173\t173\n174\t174\n175\t175\n176\t176\n177\t177\n178\t178\n179\t179\n180\t180\n181\t181\n182\t182\n183\t183\n184\t184\n185\t185\n186\t186\n187\t187\n188\t188\n189\t189\n190\t190\n191\t191\n192\t192\n193\t193\n194\t194\n195\t195\n196\t196\n197\t197\n198\t198\n199\t199\n200\t200\n201\t201\n202\t202\n203\t203\n204\t204\n205\t205\n206\t206\n207\t207\n208\t208\n209\t209\n210\t210\n211\t211\n212\t212\n213\t213\n214\t214\n215\t[...]9\n39960\t39960\n39961\t39961\n39962\t39962\n39963\t39963\n39964\t39964\n39965\t39965\n39966\t39966\n39967\t39967\n39968\t39968\n39969\t39969\n39970\t39970\n39971\t39971\n39972\t39972\n39973\t39973\n39974\t39974\n39975\t39975\n39976\t39976\n39977\t39977\n39978\t39978\n39979\t39979\n39980\t39980\n39981\t39981\n39982\t39982\n39983\t39983\n39984\t39984\n39985\t39985\n39986\t39986\n39987\t39987\n39988\t39988\n39989\t39989\n39990\t39990\n39991\t39991\n39992\t39992\n39993\t39993\n39994\t39994\n39995\t39995\n39996\t39996\n39997\t39997\n39998\t39998\n39999\t39999\n40000\t40000\n40001\t",
+   "is_error": false
+  },
+  {
+   "name": "Bash",
+   "input": {
+    "command": "cd sub",
+    "description": "x"
+   },
+   "result": "(Bash completed with no output)",
+   "is_error": false
+  },
+  {
+   "name": "Bash",
+   "input": {
+    "command": "pwd",
+    "description": "x"
+   },
+   "result": "/tmp/capture/cw4/sub",
+   "is_error": false
+  },
+  {
+   "name": "Bash",
+   "input": {
+    "command": "true",
+    "description": "x"
+   },
+   "result": "(Bash completed with no output)",
+   "is_error": false
+  },
+  {
+   "name": "Read",
+   "input": {
+    "file_path": "/tmp/capture/cw4/big.txt",
+    "offset": 0,
+    "limit": 2
+   },
+   "result": "0\t1\n1\t2",
+   "is_error": false
+  }
+ ]
+}

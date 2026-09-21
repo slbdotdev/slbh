@@ -59,7 +59,14 @@ type Config struct {
 	SubagentModel  string
 	LeafModel      string
 	SubagentEffort string
-	Endpoint       string
+	// ToolShape selects the native agents' primary tool set: ToolShapeSlbh,
+	// ToolShapeAnthropic or ToolShapeCodex. Empty means slbh. SLBH_TOOL_SHAPE
+	// overrides the file; ValidateToolShape refuses anything else.
+	ToolShape string
+	// toolShapeFile is the persisted value, kept apart so that Save never
+	// writes an environment or flag override back into config.json.
+	toolShapeFile string
+	Endpoint      string
 	// EndpointExplicit records that Endpoint came from SLBH_ENDPOINT rather
 	// than from the default. Routing needs the provenance, not just the value:
 	// an endpoint the operator set deliberately overrides a native route,
@@ -135,6 +142,8 @@ func Load() Config {
 	}
 	cfg.EndpointExplicit = strings.TrimSpace(os.Getenv("SLBH_ENDPOINT")) != ""
 	if persisted, ok := loadFile(home); ok {
+		cfg.toolShapeFile = persisted.ToolShape
+		cfg.ToolShape = persisted.ToolShape
 		if os.Getenv("SLBH_MODEL") == "" {
 			seatModel := persisted.SeatModel
 			if seatModel == "" {
@@ -176,6 +185,9 @@ func Load() Config {
 			cfg.ApprovedModels = nil
 		}
 		cfg.LocalPolicy = persisted.LocalPolicy
+	}
+	if shape := strings.TrimSpace(os.Getenv("SLBH_TOOL_SHAPE")); shape != "" {
+		cfg.ToolShape = shape
 	}
 	if cfg.LeafModel == "" {
 		cfg.LeafModel = cfg.SubagentModel
@@ -261,6 +273,7 @@ type fileConfig struct {
 	LeafModel      string   `json:"leaf_model,omitempty"`
 	SubagentEffort string   `json:"subagent_effort,omitempty"`
 	ApprovedModels []string `json:"approved_models"`
+	ToolShape      string   `json:"tool_shape,omitempty"`
 	// LocalPolicy is the app-owned half of the split. slbh writes it here and
 	// never into the managed policy.json, which it only ever reads.
 	LocalPolicy *provider.Policy `json:"local_policy,omitempty"`
@@ -282,6 +295,7 @@ func (c Config) Save() error {
 		InternEffort:  c.InternEffort,
 		SubagentModel: c.SubagentModel, LeafModel: c.LeafModel, SubagentEffort: c.SubagentEffort,
 		ApprovedModels: unique(c.ApprovedModels),
+		ToolShape:      c.toolShapeFile,
 		LocalPolicy:    c.LocalPolicy,
 	}, "", "  ")
 	if err != nil {
@@ -350,4 +364,32 @@ func getenv(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// Tool shapes. slbh is the harness's own set and the default; anthropic and
+// codex reproduce the primary tools of Claude Code and the Codex CLI.
+const (
+	ToolShapeSlbh      = "slbh"
+	ToolShapeAnthropic = "anthropic"
+	ToolShapeCodex     = "codex"
+)
+
+// ToolShapes lists the accepted tool_shape values in documentation order.
+var ToolShapes = []string{ToolShapeSlbh, ToolShapeAnthropic, ToolShapeCodex}
+
+// NormalizeToolShape maps empty to slbh and refuses an unknown value. There is
+// no fallback: a run on the wrong tool set looks exactly like a run on the
+// right one, so a typo has to stop the program rather than quietly select the
+// default.
+func NormalizeToolShape(shape string) (string, error) {
+	shape = strings.TrimSpace(shape)
+	if shape == "" {
+		return ToolShapeSlbh, nil
+	}
+	for _, known := range ToolShapes {
+		if shape == known {
+			return shape, nil
+		}
+	}
+	return "", fmt.Errorf("unknown tool shape %q; expected one of %s", shape, strings.Join(ToolShapes, ", "))
 }

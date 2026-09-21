@@ -29,6 +29,10 @@ type Message struct {
 	Name             string     `json:"name,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	// IsError marks a tool result as a failure. Only the Anthropic wire
+	// carries it (tool_result is_error); it never reaches the OpenAI-shaped
+	// JSON, which has no such field.
+	IsError bool `json:"-"`
 }
 
 type ToolCall struct {
