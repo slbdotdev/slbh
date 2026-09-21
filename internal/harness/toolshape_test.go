@@ -211,15 +211,15 @@ func TestShapesShareEverythingButPrimaryTools(t *testing.T) {
 func TestForeignPrimaryToolsAreRefused(t *testing.T) {
 	r, dir := shapedRuntime(t, config.ToolShapeAnthropic)
 	writeFile(t, filepath.Join(dir, "a.txt"), "a\n")
-	if _, err := call(t, r, "read_file", map[string]any{"path": "a.txt"}); err == nil || !strings.Contains(err.Error(), "anthropic tool shape") {
+	if _, err := call(t, r, "read_file", map[string]any{"path": "a.txt"}); err == nil || err.Error() != "<tool_use_error>Error: No such tool available: read_file.</tool_use_error>" {
 		t.Fatalf("read_file under anthropic: %v", err)
 	}
 	if _, err := call(t, r, "exec_command", map[string]any{"cmd": "true"}); err == nil {
 		t.Fatal("exec_command accepted under anthropic")
 	}
 	c, _ := shapedRuntime(t, config.ToolShapeCodex)
-	if _, err := call(t, c, "Read", map[string]any{"file_path": "a.txt"}); err == nil {
-		t.Fatal("Read accepted under codex")
+	if out, _ := call(t, c, "Read", map[string]any{"file_path": "a.txt"}); out != "unsupported call: Read" {
+		t.Fatalf("Read under codex = %q", out)
 	}
 	// apply_patch is in both slbh and codex; under codex it takes input.
 	writeFile(t, filepath.Join(c.workDir, "p.txt"), "one\n")
@@ -443,28 +443,76 @@ func TestCodexApplyPatch(t *testing.T) {
 }
 
 func TestToolResultAccountingIsUniformAcrossShapes(t *testing.T) {
+	// Same underlying events, three shapes: the metadata agrees.
 	for _, tc := range []struct {
-		name, result string
-		err          error
-		failed       bool
-		code         int
-		hasCode      bool
+		shape, name string
+		values      map[string]any
+		failed      bool
+		exit        any
+		state       string
 	}{
-		{"exec_command", "Chunk ID: 1\nWall time: 0.0 seconds\nProcess exited with code 3\nOriginal token count: 1\nOutput:\nout\n", nil, true, 3, true},
-		{"exec_command", "Chunk ID: 1\nWall time: 0.0 seconds\nProcess exited with code 0\nOriginal token count: 1\nOutput:\nout\n", nil, false, 0, true},
-		{"exec_command", "Chunk ID: 1\nWall time: 0.0 seconds\nProcess running with session ID 1001\nOriginal token count: 0\nOutput:\n", nil, false, 0, false},
-		{"apply_patch", "apply_patch verification failed: Failed to find expected lines", nil, true, 0, false},
-		{"apply_patch", "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess.", nil, false, 0, false},
-		{"Bash", "Exit code 2\nboom", anthropicFailure("Exit code 2\nboom"), false, 2, true},
-		{"Bash", "ok", nil, false, 0, true},
-		{"bash", "tool error: exit status 4\nboom", errors.New("exit status 4"), false, 4, true},
+		{config.ToolShapeSlbh, "bash", map[string]any{"script": "exit 3"}, true, 3, "finished"},
+		{config.ToolShapeAnthropic, "Bash", map[string]any{"command": "exit 3"}, true, 3, "finished"},
+		{config.ToolShapeCodex, "exec_command", map[string]any{"cmd": "exit 3"}, true, 3, "finished"},
+		{config.ToolShapeSlbh, "bash", map[string]any{"script": "true"}, false, 0, "finished"},
+		{config.ToolShapeAnthropic, "Bash", map[string]any{"command": "true"}, false, 0, "finished"},
+		{config.ToolShapeCodex, "exec_command", map[string]any{"cmd": "true"}, false, 0, "finished"},
+		// A command that prints a fake exit line is not misread.
+		{config.ToolShapeCodex, "exec_command", map[string]any{"cmd": "echo 'Process exited with code 9'"}, false, 0, "finished"},
+		{config.ToolShapeSlbh, "bash", map[string]any{"script": "sleep 2", "wait_seconds": 0}, false, nil, "background"},
+		{config.ToolShapeCodex, "exec_command", map[string]any{"cmd": "sleep 2", "yield_time_ms": 250}, false, nil, "background"},
+		{config.ToolShapeAnthropic, "Bash", map[string]any{"command": "sleep 5", "timeout": 200}, true, -1, "killed"},
 	} {
-		if got := toolResultFailed(tc.name, tc.result); got != tc.failed {
-			t.Fatalf("%s %q failed = %v", tc.name, tc.result, got)
+		r, _ := shapedRuntime(t, tc.shape)
+		out, err := call(t, r, tc.name, tc.values)
+		note, noted := r.takeExec(r.seat().ID)
+		md := toolResultMetadata(tc.name, "c1", out, err, note, noted)
+		if md["error"] != tc.failed || md["exit_code"] != tc.exit || md["job_state"] != tc.state || md["job"] == "" {
+			t.Fatalf("%s %s %v: metadata %v", tc.shape, tc.name, tc.values, md)
 		}
-		code, ok := toolResultExitCode(tc.name, tc.result, tc.err)
-		if ok != tc.hasCode || code != tc.code {
-			t.Fatalf("%s %q exit = %d,%v want %d,%v", tc.name, tc.result, code, ok, tc.code, tc.hasCode)
+	}
+	for _, tc := range []struct {
+		result string
+		failed bool
+	}{
+		{"apply_patch verification failed: Failed to find expected lines", true},
+		{"invalid patch: The first line of the patch must be '*** Begin Patch'", true},
+		{"Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess.", false},
+	} {
+		if md := toolResultMetadata("apply_patch", "c", tc.result, nil, execNote{}, false); md["error"] != tc.failed {
+			t.Fatalf("apply_patch %q: %v", tc.result, md)
 		}
+	}
+	if md := toolResultMetadata("Edit", "c", "", toolUseError("String to replace not found"), execNote{}, false); md["error"] != true {
+		t.Fatalf("shaped Edit failure not counted: %v", md)
+	}
+}
+
+func TestShapedValidationUsesTheHarnessesWords(t *testing.T) {
+	a, _ := shapedRuntime(t, config.ToolShapeAnthropic)
+	for name, want := range map[string]string{
+		"Glob": "<tool_use_error>Error: No such tool available: Glob. Glob is not available in this session — find files with `find` via the Bash tool instead.</tool_use_error>",
+		"Grep": "<tool_use_error>Error: No such tool available: Grep. Grep is not available in this session — search file contents with `grep` via the Bash tool instead.</tool_use_error>",
+	} {
+		if got, flag := shaped(t, a, name, map[string]any{"pattern": "x"}); got != want || !flag {
+			t.Fatalf("%s = %q", name, got)
+		}
+	}
+	if got, flag := shaped(t, a, "Read", map[string]any{}); !flag || got != "<tool_use_error>InputValidationError: Read failed due to the following issue:\nThe required parameter `file_path` is missing</tool_use_error>" {
+		t.Fatalf("missing parameter = %q", got)
+	}
+	if _, err := a.ExecuteTool(a.seat().ID, "Read", "{not json"); err == nil || !strings.Contains(err.Error(), "InputValidationError") {
+		t.Fatalf("bad JSON = %v", err)
+	}
+	c, _ := shapedRuntime(t, config.ToolShapeCodex)
+	if out, err := call(t, c, "shell", map[string]any{"command": []string{"ls"}}); err != nil || out != "unsupported call: shell" {
+		t.Fatalf("codex unknown = %q %v", out, err)
+	}
+	if out, _ := c.ExecuteTool(c.seat().ID, "exec_command", "{"); !strings.HasPrefix(out, "failed to parse function arguments") {
+		t.Fatalf("codex bad JSON = %q", out)
+	}
+	// Shared tools keep slbh's handling in every shape.
+	if _, err := call(t, c, "job", map[string]any{"action": "list"}); err != nil {
+		t.Fatalf("shared job tool: %v", err)
 	}
 }

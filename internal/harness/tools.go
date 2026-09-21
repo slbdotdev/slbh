@@ -138,6 +138,9 @@ func parseArgs(raw string) (args, error) {
 }
 
 func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
+	if out, err, handled := r.shapedValidation(name, raw); handled {
+		return out, err
+	}
 	a, err := parseArgs(raw)
 	if err != nil {
 		return "", err
@@ -589,6 +592,7 @@ func (r *Runtime) executeCommandTool(agentID, base, name string, values map[stri
 		return "", err
 	}
 	snap, stdout, stderr, background := r.jobs.Wait(j, time.Duration(wait)*time.Second)
+	r.noteExec(agentID, noteFromSnapshot(snap, background))
 	if background {
 		return backgroundOutput(snap, stdout, stderr, time.Duration(wait)*time.Second), nil
 	}

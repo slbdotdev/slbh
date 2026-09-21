@@ -353,7 +353,8 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 		var answer strings.Builder
 		var reasoning strings.Builder
 		calls := make(map[int]*provider.ToolCall)
-		err = provider.Retry(turnCtx, 3, func() error {
+		attempt := 0
+		err = provider.Retry(turnCtx, 3, func() (streamErr error) {
 			// A failed API attempt is also a call boundary. Retain partial prose
 			// and accept new input before retrying; incomplete tool fragments stay
 			// in the transcript and cannot be executed as successful calls.
@@ -372,7 +373,16 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			req := provider.Request{Model: model, Effort: effort, System: system, Messages: history, Tools: tools, CacheKey: provider.StablePrefixKey(provider.Request{Model: model, System: system, Tools: tools})}
 			a.recordRequestContext(req, contextWindow)
 			a.runtime.recordInferenceRequest(a, round, req, p)
-			return p.Stream(turnCtx, req, func(event provider.Event) error {
+			attempt++
+			defer func() {
+				// Every failed attempt is its own event, so a recovered 5xx or a
+				// dropped stream is visible in the transcript rather than
+				// inferred from a retried request.
+				if streamErr != nil && turnCtx.Err() == nil {
+					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "request_error", Text: streamErr.Error(), Metadata: map[string]any{"round": round, "attempt": attempt}})
+				}
+			}()
+			streamErr = p.Stream(turnCtx, req, func(event provider.Event) error {
 				if turnCtx.Err() != nil {
 					return turnCtx.Err()
 				}
@@ -398,7 +408,9 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 					call.Function.Arguments += event.Input
 					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool", Text: event.Input, Metadata: map[string]any{"name": event.ToolName, "call_id": event.ToolCallID, "index": event.ToolIndex}})
 				case provider.EventUsage:
-					a.recordUsage(event.Usage)
+					if incomplete, _ := event.Usage["incomplete"].(bool); !incomplete {
+						a.recordUsage(event.Usage)
+					}
 					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "usage", Metadata: event.Usage})
 					if provider.IsOutputLimitStop(event.StopReason) {
 						// A generation cut off by its output bound otherwise looks
@@ -413,6 +425,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 				}
 				return nil
 			})
+			return streamErr
 		})
 		if turnCtx.Err() != nil {
 			return
@@ -486,7 +499,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			}
 			history = append(history, message)
 			result, toolErr := a.runtime.ExecuteTool(a.ID, call.Function.Name, call.Function.Arguments)
-			failed, flagged := toolErr != nil, false
+			flagged := false
 			var shaped *shapedToolError
 			if errors.As(toolErr, &shaped) {
 				// A shaped tool's failure is already in its harness's own words.
@@ -494,10 +507,8 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			} else if toolErr != nil {
 				result = toolFailure(toolErr, result)
 			}
-			resultMetadata := map[string]any{"name": call.Function.Name, "call_id": call.ID, "error": failed || toolResultFailed(call.Function.Name, result)}
-			if code, ok := toolResultExitCode(call.Function.Name, result, toolErr); ok {
-				resultMetadata["exit_code"] = code
-			}
+			note, noted := a.runtime.takeExec(a.ID)
+			resultMetadata := toolResultMetadata(call.Function.Name, call.ID, result, toolErr, note, noted)
 			// Before it is emitted and before it enters history. A tool runs
 			// with the parent environment by design, so `env` — or any script
 			// with `set -x` — puts a provider key on stdout; from history it

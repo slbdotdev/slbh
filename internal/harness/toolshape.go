@@ -1,12 +1,11 @@
 package harness
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +48,7 @@ type shapeState struct {
 	reads       map[string]map[string]time.Time
 	sessions    map[int]*codexSession
 	nextSession int
+	notes       map[string]execNote
 }
 
 type codexSession struct {
@@ -242,6 +242,59 @@ func (r *Runtime) shapedDispatch(name string) (shaped, foreign bool) {
 		}
 	}
 	return false, false
+}
+
+var sharedToolNames = map[string]bool{"python": true, "pwsh": true, "job": true, "list_subagents": true, "launch_subagent": true, "msg_subagent": true, "end_subagent": true}
+
+// shapedValidation renders, in the shape's own words, a call its harness
+// would reject before running anything: a tool the shape does not offer,
+// arguments that are not JSON, or a missing required parameter. Shared tools
+// and the slbh shape keep slbh's handling.
+func (r *Runtime) shapedValidation(name, raw string) (string, error, bool) {
+	if r.toolShape == config.ToolShapeSlbh || sharedToolNames[name] {
+		return "", nil, false
+	}
+	var definition *provider.Tool
+	for _, tool := range buildToolDefinitions(r.toolShape) {
+		if tool.Name == name {
+			tool := tool
+			definition = &tool
+			break
+		}
+	}
+	anthropic := r.toolShape == config.ToolShapeAnthropic
+	if definition == nil {
+		if anthropic {
+			hint := ""
+			switch name {
+			case "Glob":
+				hint = " Glob is not available in this session — find files with `find` via the Bash tool instead."
+			case "Grep":
+				hint = " Grep is not available in this session — search file contents with `grep` via the Bash tool instead."
+			}
+			return "", toolUseError("Error: No such tool available: " + name + "." + hint), true
+		}
+		return "unsupported call: " + name, nil, true
+	}
+	values := map[string]any{}
+	if strings.TrimSpace(raw) != "" {
+		if err := json.Unmarshal([]byte(raw), &values); err != nil {
+			if anthropic {
+				return "", toolUseError(fmt.Sprintf("InputValidationError: %s failed due to the following issue:\nThe tool input is not valid JSON: %v", name, err)), true
+			}
+			return fmt.Sprintf("failed to parse function arguments: %v", err), nil, true
+		}
+	}
+	required, _ := definition.Parameters["required"].([]string)
+	for _, key := range required {
+		if _, ok := values[key]; !ok {
+			if anthropic {
+				return "", toolUseError(fmt.Sprintf("InputValidationError: %s failed due to the following issue:\nThe required parameter `%s` is missing", name, key)), true
+			}
+			return fmt.Sprintf("failed to parse function arguments: missing field `%s`", key), nil, true
+		}
+	}
+	return "", nil, false
 }
 
 // executeShapedTool runs a primary tool of the anthropic or codex shape.
@@ -471,10 +524,12 @@ func (r *Runtime) anthropicBash(agentID, base string, values map[string]any) (st
 		return "", anthropicFailure(err.Error())
 	}
 	if background {
-		r.jobs.Wait(j, 0)
+		snap, _, _, _ := r.jobs.Wait(j, 0)
+		r.noteExec(agentID, noteFromSnapshot(snap, true))
 		return fmt.Sprintf("Command running in background with ID: %s. You will be notified when it completes. To check interim output, use the job tool with action read.", j.Snapshot().ID), nil
 	}
 	snap, stdout, stderr, timedOut := r.jobs.WaitOrKill(j, timeout)
+	r.noteExec(agentID, noteFromSnapshot(snap, false))
 	output := joinOutput(stdout, stderr)
 	output = r.persistLargeOutput(agentID, snap.ID, output)
 	note := r.updateShellCwd(agentID, base, cwdFile)
@@ -597,6 +652,7 @@ func (r *Runtime) codexExec(agentID, base string, values map[string]any) (string
 		return "exec_command failed: " + err.Error(), nil
 	}
 	snap, stdout, _, running := r.jobs.Wait(j, yield)
+	r.noteExec(agentID, noteFromSnapshot(snap, running))
 	session := 0
 	if running {
 		r.shape.mu.Lock()
@@ -630,6 +686,7 @@ func (r *Runtime) codexWriteStdin(agentID string, values map[string]any) (string
 	snap := session.job.Snapshot()
 	stdout, _ := session.job.Output()
 	running := snap.Status == job.Running
+	r.noteExec(agentID, noteFromSnapshot(snap, running))
 	r.shape.mu.Lock()
 	fresh := stdout
 	if session.offset <= len(stdout) {
@@ -947,57 +1004,82 @@ func (r *Runtime) scratchEnvironment(agentID string) []string {
 //
 // Each shape reports failure differently: slbh and Anthropic return an error
 // for a non-zero exit, while Codex returns the exit code in ordinary output
-// and its patch failures as plain text. The transcript's tool_result
-// metadata applies one definition to all three so that error counts compare
-// across shapes: a call failed if the tool errored, a command exited non-zero,
-// or a patch or session call did not succeed.
+// and its patch failures as plain text. So that counts compare across shapes,
+// the command handlers record what actually happened to the process as
+// structured metadata, and the transcript's tool_result carries it. Nothing is
+// parsed back out of rendered text, which a command's own output could fake.
 
-var codexExitPattern = regexp.MustCompile(`(?m)^Process exited with code (-?\d+)$`)
-var anthropicExitPattern = regexp.MustCompile(`^Exit code (-?\d+)`)
-var slbhExitPattern = regexp.MustCompile(`^tool error: exit status (-?\d+)`)
-
-func toolResultFailed(name, result string) bool {
-	switch name {
-	case "exec_command", "write_stdin":
-		if code, ok := toolResultExitCode(name, result, nil); ok {
-			return code != 0
-		}
-		return strings.HasPrefix(result, "exec_command failed") || strings.HasPrefix(result, "write_stdin failed") || strings.HasPrefix(result, "failed to parse")
-	case "apply_patch":
-		return strings.HasPrefix(result, "apply_patch verification failed") || strings.HasPrefix(result, "invalid patch") || strings.HasPrefix(result, "apply_patch failed")
-	}
-	return false
+// execNote is one command call's execution outcome.
+type execNote struct {
+	job      string
+	state    string // "finished", "background" or "killed"
+	exitCode int
 }
 
-// toolResultExitCode reports a finished command's exit code where the result
-// carries one. A command still running in the background has none.
-func toolResultExitCode(name, result string, toolErr error) (int, bool) {
-	var match []string
+func (r *Runtime) noteExec(agentID string, note execNote) {
+	r.shape.mu.Lock()
+	defer r.shape.mu.Unlock()
+	if r.shape.notes == nil {
+		r.shape.notes = map[string]execNote{}
+	}
+	r.shape.notes[agentID] = note
+}
+
+// takeExec returns and clears the note left by the agent's last tool call.
+// An agent runs its tool calls one at a time, so the note is that call's.
+func (r *Runtime) takeExec(agentID string) (execNote, bool) {
+	r.shape.mu.Lock()
+	defer r.shape.mu.Unlock()
+	note, ok := r.shape.notes[agentID]
+	delete(r.shape.notes, agentID)
+	return note, ok
+}
+
+func noteFromSnapshot(snap job.Snapshot, running bool) execNote {
+	switch {
+	case running:
+		return execNote{job: snap.ID, state: "background"}
+	case snap.Status == job.Killed:
+		return execNote{job: snap.ID, state: "killed", exitCode: -1}
+	}
+	return execNote{job: snap.ID, state: "finished", exitCode: snap.ExitCode}
+}
+
+// toolResultMetadata is the uniform record of one tool call. error means the
+// call failed: the tool errored, a command it ran finished non-zero or was
+// killed, or a Codex patch or session call did not succeed. A command that is
+// still running is not yet a failure; its outcome arrives later as a
+// job_result event, or through a write_stdin poll, carrying the same job id.
+func toolResultMetadata(name, callID, result string, toolErr error, note execNote, noted bool) map[string]any {
+	metadata := map[string]any{"name": name, "call_id": callID}
+	failed := false
+	if noted {
+		metadata["job"] = note.job
+		metadata["job_state"] = note.state
+		if note.state != "background" {
+			metadata["exit_code"] = note.exitCode
+			failed = note.exitCode != 0
+		}
+		if name == "write_stdin" {
+			// A poll's own success is separate from its command's outcome,
+			// which is counted once per job.
+			failed = false
+		}
+	} else {
+		failed = toolErr != nil || codexCallFailed(name, result)
+	}
+	metadata["error"] = failed
+	return metadata
+}
+
+// codexCallFailed reads the Codex shape's own non-command results, whose text
+// is produced entirely by this file.
+func codexCallFailed(name, result string) bool {
 	switch name {
+	case "apply_patch":
+		return strings.HasPrefix(result, "apply_patch verification failed") || strings.HasPrefix(result, "invalid patch") || strings.HasPrefix(result, "apply_patch failed")
 	case "exec_command", "write_stdin":
-		match = codexExitPattern.FindStringSubmatch(result)
-	case "Bash":
-		if toolErr == nil {
-			if strings.HasPrefix(result, "Command running in background") {
-				return 0, false
-			}
-			return 0, true
-		}
-		match = anthropicExitPattern.FindStringSubmatch(result)
-	case "bash", "python", "pwsh":
-		if toolErr == nil {
-			if strings.Contains(result, "is still running after") {
-				return 0, false
-			}
-			return 0, true
-		}
-		match = slbhExitPattern.FindStringSubmatch(result)
-	default:
-		return 0, false
+		return strings.HasPrefix(result, "exec_command failed") || strings.HasPrefix(result, "write_stdin failed") || strings.HasPrefix(result, "failed to parse")
 	}
-	if match == nil {
-		return 0, false
-	}
-	code, err := strconv.Atoi(match[1])
-	return code, err == nil
+	return false
 }

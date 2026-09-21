@@ -447,11 +447,18 @@ instructions. Where each shape departs from its harness:
   patch grammar in its description, where Codex uses a freeform grammar tool.
   A patch is verified whole before any file is written.
 
-Every `tool_result` event records the tool `name`, an `error` flag and, for
-finished commands, an `exit_code`. `error` uses one definition in every
-shape: the tool failed, a command exited non-zero, or a patch or session call
-did not succeed. Codex itself reports a non-zero exit as ordinary output, so
-without the shared definition, error counts would not compare across shapes.
+Every `tool_result` event records the tool `name` and an `error` flag. A
+command tool also records its `job`, a `job_state` (`finished`, `background`
+or `killed`) and, once the command ends, its `exit_code`. The handlers record
+these from the process, not from rendered text. `error` uses one definition
+in every shape: the tool failed, a command it ran finished non-zero or was
+killed, or a patch or session call did not succeed. Codex itself reports a
+non-zero exit as ordinary output, so without the shared definition, error
+counts would not compare across shapes. A backgrounded command's outcome
+arrives later as a `job_result` event with the same `job` id, so an analysis
+counts each command's outcome once per job. A failed request attempt emits
+`request_error`, and a stream that breaks after reporting usage still emits
+that usage, marked `incomplete`.
 
 `launch_subagent` accepts `harness: "codex"` for a Codex leaf launched by a
 native parent (at either supported child depth). The leaf runs a persistent

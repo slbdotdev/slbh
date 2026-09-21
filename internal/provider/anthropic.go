@@ -431,14 +431,14 @@ func (anthropicMessagesWire) parseStream(body io.Reader, sink StreamSink) error 
 			continue
 		}
 		if err := state.consume([]byte(data), sink); err != nil {
-			return err
+			return state.flushIncomplete(sink, err)
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return err
+		return state.flushIncomplete(sink, err)
 	}
 	if !state.sawStop && state.stopReason == "" {
-		return errTruncatedStream
+		return state.flushIncomplete(sink, errTruncatedStream)
 	}
 	return state.flush(sink)
 }
@@ -610,6 +610,23 @@ func (s *anthropicStream) flush(sink StreamSink) error {
 		return nil
 	}
 	return sink(Event{Kind: EventUsage, Usage: s.normalizedUsage(), StopReason: mapAnthropicStopReason(s.stopReason)})
+}
+
+// flushIncomplete reports the usage a failed stream had already received,
+// marked incomplete, before returning err. A request that billed input and
+// produced output before disconnecting still consumed those tokens; dropping
+// its usage would make a retried request look cheaper than it was. The harness
+// records an incomplete usage in the transcript but does not anchor context
+// on it.
+func (s *anthropicStream) flushIncomplete(sink StreamSink, err error) error {
+	if s.sawUsage {
+		usage := s.normalizedUsage()
+		usage["incomplete"] = true
+		if sinkErr := sink(Event{Kind: EventUsage, Usage: usage}); sinkErr != nil {
+			return sinkErr
+		}
+	}
+	return err
 }
 
 type anthropicUsage struct {
