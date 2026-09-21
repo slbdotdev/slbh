@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -47,6 +48,34 @@ func TestOutputVariantsCutOverLimitOutput(t *testing.T) {
 	}
 	if boundedOutput(short) != short {
 		t.Fatal("short changed output under the limit")
+	}
+}
+
+func TestLinesVariantKeepsTenLinesEachSide(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= 4000; i++ {
+		fmt.Fprintf(&b, "line %04d of output that is long enough\n", i)
+	}
+	withOutputVariant(t, config.OutputVariantLines)
+	got := boundedOutput(b.String())
+	parts := strings.Split(got, "\n")
+	if !strings.HasPrefix(parts[0], "output cut: ") || !strings.Contains(parts[0], ", 4000 lines, over the 20000-token limit; the first and last 10 lines are shown; read a range instead") {
+		t.Fatalf("notice: %q", parts[0])
+	}
+	if len(parts) != 1+10+1+10 || parts[1] != "line 0001 of output that is long enough" || parts[10] != "line 0010 of output that is long enough" ||
+		parts[11] != "…" || parts[12] != "line 3991 of output that is long enough" || parts[21] != "line 4000 of output that is long enough" {
+		t.Fatalf("kept lines: %q", parts)
+	}
+	if boundedOutput("fits\n") != "fits\n" {
+		t.Fatal("lines changed output under the limit")
+	}
+}
+
+func TestLinesVariantCapsLongLines(t *testing.T) {
+	withOutputVariant(t, config.OutputVariantLines)
+	got := boundedOutput("start" + strings.Repeat("x", 200000) + "end\n")
+	if len(got) > 2400 || !strings.Contains(got, "\nstart") || !strings.HasSuffix(got, "xend") {
+		t.Fatalf("one long line was not capped at each end: %d bytes, %q … %q", len(got), got[:160], got[len(got)-20:])
 	}
 }
 

@@ -447,15 +447,18 @@ func NormalizePromptVariant(variant string) (string, error) {
 // org/tool-large-t7-plan-2026-09-21.md). Headtail, the default, keeps the
 // first and last part of an over-limit output; hint adds "read a range
 // instead" to that notice; short shows none of the output, only its size and
-// the same hint, as read_file's refusal of a large file does.
+// the same hint, as read_file's refusal of a large file does; lines shows the
+// first and last ten lines, each side capped, with the same notice (the
+// output-limit test, org/tool-output-plan-2026-09-21.md).
 const (
 	OutputVariantHeadTail = "headtail"
 	OutputVariantHint     = "hint"
 	OutputVariantShort    = "short"
+	OutputVariantLines    = "lines"
 )
 
 // OutputVariants lists the accepted SLBH_OUTPUT_VARIANT values.
-var OutputVariants = []string{OutputVariantHeadTail, OutputVariantHint, OutputVariantShort}
+var OutputVariants = []string{OutputVariantHeadTail, OutputVariantHint, OutputVariantShort, OutputVariantLines}
 
 // NormalizeOutputVariant maps empty to headtail and refuses an unknown value.
 func NormalizeOutputVariant(variant string) (string, error) {

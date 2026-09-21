@@ -543,12 +543,40 @@ var outputVariant atomic.Value
 func boundedOutput(output string) string {
 	variant, _ := outputVariant.Load().(string)
 	tokens := approxTokens(output)
+	lines := strings.Count(strings.TrimSuffix(output, "\n"), "\n") + 1
 	if variant == config.OutputVariantShort && tokens > commandOutputTokens {
-		return fmt.Sprintf("output not shown: %d tokens, %d lines, over the %d-token limit; read a range instead", tokens, strings.Count(strings.TrimSuffix(output, "\n"), "\n")+1, commandOutputTokens)
+		return fmt.Sprintf("output not shown: %d tokens, %d lines, over the %d-token limit; read a range instead", tokens, lines, commandOutputTokens)
+	}
+	if variant == config.OutputVariantLines && tokens > commandOutputTokens {
+		head, tail := edgeLines(output)
+		return fmt.Sprintf("output cut: %d tokens, %d lines, over the %d-token limit; the first and last %d lines are shown; read a range instead\n%s\n…\n%s", tokens, lines, commandOutputTokens, edgeLineCount, head, tail)
 	}
 	cut := truncateMiddle(output, commandOutputTokens, commandOutputTokens*2-128)
 	if variant == config.OutputVariantHint && tokens > commandOutputTokens {
 		cut = strings.Replace(cut, ")\nTotal output lines:", "); read a range instead\nTotal output lines:", 1)
 	}
 	return cut
+}
+
+// edgeLineCount and edgeChars bound what the lines variant keeps of an
+// over-limit output: that many lines from each end, and no more than that
+// many characters from each end, since one line can be very long.
+const (
+	edgeLineCount = 10
+	edgeChars     = 1000
+)
+
+// edgeLines returns the first and last edgeLineCount lines of output, each
+// side cut to edgeChars at the far edge from the middle.
+func edgeLines(output string) (string, string) {
+	all := strings.Split(strings.TrimSuffix(output, "\n"), "\n")
+	head := strings.Join(all[:min(edgeLineCount, len(all))], "\n")
+	tail := strings.Join(all[max(0, len(all)-edgeLineCount):], "\n")
+	if len(head) > edgeChars {
+		head = head[:edgeChars] + "…"
+	}
+	if len(tail) > edgeChars {
+		tail = "…" + tail[len(tail)-edgeChars:]
+	}
+	return head, tail
 }
