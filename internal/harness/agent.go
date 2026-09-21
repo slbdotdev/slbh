@@ -525,7 +525,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 				// A shaped tool's failure is already in its harness's own words.
 				result, flagged = shaped.text, shaped.flag
 			} else if toolErr != nil {
-				result = toolFailure(toolErr, result)
+				result, flagged = toolFailure(toolErr, result), true
 			}
 			note, noted := a.runtime.takeExec(a.ID)
 			resultMetadata := toolResultMetadata(call.Function.Name, call.ID, result, toolErr, note, noted)
@@ -664,7 +664,7 @@ func (a *Agent) receiveJobResult(snapshot job.Snapshot, stdout, stderr string) e
 		prompt:   fmt.Sprintf("[result from %s %s]\n%s", toolName, snapshot.ID, text),
 		kind:     "job_result",
 		text:     text,
-		metadata: map[string]any{"job": snapshot.ID, "tool": toolName, "status": string(snapshot.Status), "exit_code": snapshot.ExitCode},
+		metadata: jobResultMetadata(snapshot, toolName),
 	})
 }
 
@@ -712,8 +712,16 @@ func formatJobWarning(snapshot job.Snapshot, toolName string) string {
 		toolName, snapshot.ID, snapshot.WarnAfter, script)
 }
 
+// jobResultMetadata carries a finished job's outcome, with the same error
+// definition as a tool_result: it failed, exited non-zero, or was killed.
+func jobResultMetadata(snapshot job.Snapshot, toolName string) map[string]any {
+	return map[string]any{"job": snapshot.ID, "tool": toolName, "status": string(snapshot.Status), "exit_code": snapshot.ExitCode, "error": snapshot.Status != job.Complete || snapshot.ExitCode != 0}
+}
+
+// formatJobResult is a finished job's delivered result, its streams bounded
+// as a command tool's inline output is.
 func formatJobResult(snapshot job.Snapshot, stdout, stderr string) string {
-	return fmt.Sprintf("status: %s\nexit_code: %d\nstdout:\n%s\nstderr:\n%s", snapshot.Status, snapshot.ExitCode, stdout, stderr)
+	return fmt.Sprintf("status: %s\nexit_code: %d\nstdout:\n%s\nstderr:\n%s", snapshot.Status, snapshot.ExitCode, boundedOutput(stdout), boundedOutput(stderr))
 }
 
 // Compact keeps the most recent work and leaves a durable marker in the

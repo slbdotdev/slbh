@@ -403,7 +403,10 @@ Available tools, in the default `lean` shape, are:
   either a unified diff, applied with `git apply --recount` so hunk line
   counts need not be exact, or Codex's `*** Begin Patch` format, whose hunks
   are found by their context lines. A patch applies only if every hunk
-  matches.
+  matches, and its operations apply in order, so two Updates of one file both
+  land. Unlike Codex, an Add onto an existing file is refused, a pure insertion
+  goes directly after its `@@` line, and a hunk's first line may be the `@@`
+  line itself.
 - Jobs: `python` uses the managed scientific environment. `job` lists, reads,
   or kills jobs with its `action` field.
 - Agents: `list_subagents`, `launch_subagent`, `msg_subagent`, and
@@ -456,7 +459,9 @@ instructions. Where each shape departs from its harness:
   cannot write input, because slbh jobs have no stdin. GLM speaks JSON
   functions, so `apply_patch` is a one-string function carrying Codex's
   patch grammar in its description, where Codex uses a freeform grammar tool.
-  A patch is verified whole before any file is written.
+  A patch is verified whole before any file is written; its operations apply
+  in order, so a second Update of a file sees the first's result, and a Move
+  onto the file's own path is an Update rather than a removal.
 
 Every `tool_result` event records the tool `name` and an `error` flag. A
 command tool also records its `job`, a `job_state` (`finished`, `background`
@@ -466,8 +471,10 @@ in every shape: the tool failed, a command it ran finished non-zero or was
 killed, or a patch or session call did not succeed. Codex itself reports a
 non-zero exit as ordinary output, so without the shared definition, error
 counts would not compare across shapes. A backgrounded command's outcome
-arrives later as a `job_result` event with the same `job` id, so an analysis
-counts each command's outcome once per job. Every execution is preceded by a
+arrives later as a `job_result` event with the same `job` id and its own
+`error` flag, so an analysis counts each command's outcome once per job. A
+Codex session's command ends on the `write_stdin` poll that sees it exit, and
+that poll carries the command's `error`. Every execution is preceded by a
 `tool_start` event, so a call killed before it returns is still on record. A
 completed request emits `request_done` and a failed attempt emits
 `request_error`. A stream that breaks after reporting usage still emits that
@@ -517,8 +524,8 @@ boundary, so the operating system determines whether a requested path or
 working directory is usable. Reads and job output are bounded. `bash`, `pwsh`,
 and `python` start a job, wait up to `wait_seconds` (default ten seconds, as
 Codex), and background it if it is still running; `wait_seconds: 0`
-backgrounds immediately. Their output, and the output carried with a failed
-call, is cut the way Codex cuts it — head and tail kept, with a notice of what
+backgrounds immediately. Their output, the output carried with a failed call,
+and a background job's delivered result are cut the way Codex cuts it — head and tail kept, with a notice of what
 was dropped — at 20,000 tokens, twice Codex's default.
 Jobs and agent activity are recorded in the
 active session transcript.

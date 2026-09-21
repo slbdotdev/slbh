@@ -350,6 +350,7 @@ func TestPinnedContextWindowComesFromPolicy(t *testing.T) {
 	// rather than through a lookup by model name.
 	t.Setenv("ZAI_API_KEY", "test-key-not-a-credential")
 	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
+	t.Setenv("DEEPSEEK_API_KEY", "test-key-not-a-credential")
 
 	// Both spellings that address the plan route resolve to one key and so to
 	// one pin: that is what deriving the key in one place buys.

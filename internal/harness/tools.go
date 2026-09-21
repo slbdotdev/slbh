@@ -121,7 +121,7 @@ func commandParameters() map[string]any {
 }
 
 func commandDescription(specific string) string {
-	return specific + " The script is written to a file and run; the call waits up to wait_seconds (default 10, maximum 30) and returns its output if it finishes. Otherwise it keeps running as a background job, the call returns its job id and output so far, and the full result is delivered automatically when it finishes."
+	return specific + " The script is written to a file and run; the call waits up to wait_seconds (default 10, maximum 30) and returns its output if it finishes. Otherwise it keeps running as a background job, the call returns its job id and output so far, and its result is delivered automatically when it finishes."
 }
 
 func (r *Runtime) toolDefinitions(agentID string) []provider.Tool {
@@ -419,7 +419,7 @@ func (r *Runtime) applyPatch(base, patch string) (string, error) {
 		return "", fmt.Errorf("patch is empty")
 	}
 	if strings.HasPrefix(strings.TrimSpace(patch), "*** Begin Patch") {
-		summary, err := r.applyCodexPatch(base, patch)
+		summary, err := r.applyCodexPatch(base, patch, true)
 		if err != nil {
 			return "", err
 		}

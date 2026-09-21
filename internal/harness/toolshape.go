@@ -871,7 +871,12 @@ func seekLines(haystack, needle []string, start int, eof bool) int {
 	return -1
 }
 
-func applyCodexHunks(file string, original string, hunks []codexHunk) (string, error) {
+// applyCodexHunks applies an Update's hunks as Codex does: each hunk's @@
+// line is found first, and its old lines after it; a hunk with no old lines
+// is appended at the end of the file. native changes two things: a pure
+// insertion goes directly after its @@ line, and old lines may start at the
+// @@ line itself, since models routinely repeat it as the first context line.
+func applyCodexHunks(file string, original string, hunks []codexHunk, native bool) (string, error) {
 	lines := strings.Split(original, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
@@ -883,25 +888,37 @@ func applyCodexHunks(file string, original string, hunks []codexHunk) (string, e
 	var replacements []replacement
 	cursor := 0
 	for _, hunk := range hunks {
+		anchor := -1
 		if hunk.context != "" {
-			at := seekLines(lines, []string{hunk.context}, cursor, false)
-			if at < 0 {
+			anchor = seekLines(lines, []string{hunk.context}, cursor, false)
+			if anchor < 0 {
 				return "", fmt.Errorf("Failed to find context '%s' in %s", hunk.context, file)
 			}
-			cursor = at + 1
+			cursor = anchor + 1
 		}
 		if len(hunk.old) == 0 {
-			replacements = append(replacements, replacement{at: len(lines), insert: hunk.new})
+			at := len(lines)
+			if native && anchor >= 0 {
+				at = anchor + 1
+			}
+			replacements = append(replacements, replacement{at: at, insert: hunk.new})
 			continue
 		}
 		old, replaced := hunk.old, hunk.new
-		at := seekLines(lines, old, cursor, hunk.eof)
+		seek := func() int {
+			at := seekLines(lines, old, cursor, hunk.eof)
+			if at < 0 && native && anchor >= 0 {
+				at = seekLines(lines, old, anchor, hunk.eof)
+			}
+			return at
+		}
+		at := seek()
 		if at < 0 && len(old) > 0 && old[len(old)-1] == "" {
 			old = old[:len(old)-1]
 			if len(replaced) > 0 && replaced[len(replaced)-1] == "" {
 				replaced = replaced[:len(replaced)-1]
 			}
-			at = seekLines(lines, old, cursor, hunk.eof)
+			at = seek()
 		}
 		if at < 0 {
 			return "", fmt.Errorf("Failed to find expected lines in %s:\n%s", file, strings.Join(hunk.old, "\n"))
@@ -920,7 +937,7 @@ func applyCodexHunks(file string, original string, hunks []codexHunk) (string, e
 
 // codexApplyPatch applies a patch in Codex's format and reports as Codex does.
 func (r *Runtime) codexApplyPatch(base, patch string) string {
-	summary, err := r.applyCodexPatch(base, patch)
+	summary, err := r.applyCodexPatch(base, patch, false)
 	if err != nil {
 		return err.Error()
 	}
@@ -929,19 +946,42 @@ func (r *Runtime) codexApplyPatch(base, patch string) string {
 
 // applyCodexPatch applies a patch in Codex's format, verifying every file
 // operation before writing any of them so a failed hunk leaves the tree
-// untouched. It returns one "A path", "D path" or "M path" line per file, and
-// errors carry Codex's own text.
-func (r *Runtime) applyCodexPatch(base, patch string) ([]string, error) {
+// untouched. Operations apply in order to a staged view of the tree, as Codex
+// applies them to the disk one after another, so a second Update of one file
+// sees the first's result and a Move onto its own path is an Update. It
+// returns one "A path", "D path" or "M path" line per operation, and errors
+// carry Codex's own text.
+//
+// native selects slbh's own semantics where Codex's lose work: an Add onto an
+// existing file is refused rather than overwriting it, and a hunk's @@ line
+// places a pure insertion after it and may itself be the hunk's first line
+// (applyCodexHunks). The codex shape passes false and keeps Codex's behaviour.
+func (r *Runtime) applyCodexPatch(base, patch string, native bool) ([]string, error) {
 	ops, err := parseCodexPatch(patch)
 	if err != nil {
 		return nil, err
 	}
-	type write struct {
-		path    string
-		content []byte
-		remove  string
+	// staged maps a path to its content after the operations so far; a nil
+	// entry is a path the patch deletes.
+	staged := map[string][]byte{}
+	var order []string
+	stage := func(path string, content []byte) {
+		if _, seen := staged[path]; !seen {
+			order = append(order, path)
+		}
+		staged[path] = content
 	}
-	var writes []write
+	read := func(path string) ([]byte, bool) {
+		if content, ok := staged[path]; ok {
+			return content, content != nil
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			return nil, false
+		}
+		data, err := os.ReadFile(path)
+		return data, err == nil
+	}
 	var summary []string
 	for _, op := range ops {
 		file, err := r.resolvePath(base, op.path)
@@ -950,21 +990,23 @@ func (r *Runtime) applyCodexPatch(base, patch string) ([]string, error) {
 		}
 		switch op.kind {
 		case "A":
-			content := strings.Join(op.lines, "\n") + "\n"
-			writes = append(writes, write{path: file, content: []byte(content)})
+			if _, exists := read(file); exists && native {
+				return nil, fmt.Errorf("apply_patch verification failed: Add File %s: the file already exists; use Update File to change it", op.path)
+			}
+			stage(file, []byte(strings.Join(op.lines, "\n")+"\n"))
 			summary = append(summary, "A "+op.path)
 		case "D":
-			if info, err := os.Stat(file); err != nil || info.IsDir() {
+			if _, exists := read(file); !exists {
 				return nil, fmt.Errorf("apply_patch verification failed: Failed to read %s: No such file or directory (os error 2)", file)
 			}
-			writes = append(writes, write{remove: file})
+			stage(file, nil)
 			summary = append(summary, "D "+op.path)
 		case "M":
-			data, err := os.ReadFile(file)
-			if err != nil {
+			data, exists := read(file)
+			if !exists {
 				return nil, fmt.Errorf("apply_patch verification failed: Failed to read file to update %s: No such file or directory (os error 2)", file)
 			}
-			content, err := applyCodexHunks(file, string(data), op.hunks)
+			content, err := applyCodexHunks(file, string(data), op.hunks, native)
 			if err != nil {
 				return nil, errors.New("apply_patch verification failed: " + err.Error())
 			}
@@ -974,28 +1016,30 @@ func (r *Runtime) applyCodexPatch(base, patch string) ([]string, error) {
 					return nil, errors.New("apply_patch verification failed: " + err.Error())
 				}
 				shown = op.moveTo
-				writes = append(writes, write{path: target, content: []byte(content)}, write{remove: file})
-			} else {
-				writes = append(writes, write{path: target, content: []byte(content)})
 			}
+			if target != file {
+				stage(file, nil)
+			}
+			stage(target, []byte(content))
 			summary = append(summary, "M "+shown)
 		}
 	}
-	for _, w := range writes {
-		if w.remove != "" {
-			if err := os.Remove(w.remove); err != nil {
+	for _, path := range order {
+		content := staged[path]
+		if content == nil {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				return nil, errors.New("apply_patch failed: " + err.Error())
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(w.path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return nil, errors.New("apply_patch failed: " + err.Error())
 		}
 		mode := os.FileMode(0o644)
-		if info, err := os.Stat(w.path); err == nil {
+		if info, err := os.Stat(path); err == nil {
 			mode = info.Mode().Perm()
 		}
-		if err := atomicReplace(w.path, w.content, mode); err != nil {
+		if err := atomicReplace(path, content, mode); err != nil {
 			return nil, errors.New("apply_patch failed: " + err.Error())
 		}
 	}
@@ -1071,9 +1115,9 @@ func toolResultMetadata(name, callID, result string, toolErr error, note execNot
 			metadata["exit_code"] = note.exitCode
 			failed = note.exitCode != 0
 		}
-		if name == "write_stdin" {
-			// A poll's own success is separate from its command's outcome,
-			// which is counted once per job.
+		if name == "write_stdin" && note.state == "background" {
+			// A poll of a command still running has not failed. The poll that
+			// sees it end carries its outcome, once for the job.
 			failed = false
 		}
 	} else {

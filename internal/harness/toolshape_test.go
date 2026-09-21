@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/slbdotdev/slbh/internal/config"
+	"github.com/slbdotdev/slbh/internal/job"
 	"github.com/slbdotdev/slbh/internal/provider"
 )
 
@@ -674,5 +675,120 @@ func TestQuiescentSeesRunningJobsAndPendingInboxes(t *testing.T) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("the runtime never became quiescent after the job and the message were delivered")
+}
+
+// Regressions from the 2026-09-21 GLM review of the tool-shape change. Each
+// scenario is the reviewer's own reproduction.
+func TestPatchSemanticsFromReview(t *testing.T) {
+	native := func(t *testing.T, r *Runtime, body string) (string, error) {
+		return call(t, r, "apply_patch", map[string]any{"patch": "*** Begin Patch\n" + body + "*** End Patch"})
+	}
+	codex := func(t *testing.T, r *Runtime, body string) string {
+		out, err := call(t, r, "apply_patch", map[string]any{"input": "*** Begin Patch\n" + body + "*** End Patch\n"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	t.Run("add onto an existing file", func(t *testing.T) {
+		r, dir := shapedRuntime(t, config.ToolShapeLean)
+		writeFile(t, filepath.Join(dir, "exists.txt"), "precious original\n")
+		if _, err := native(t, r, "*** Add File: exists.txt\n+clobbered\n"); err == nil || !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("native add over a file: %v", err)
+		}
+		if got := readFile(t, filepath.Join(dir, "exists.txt")); got != "precious original\n" {
+			t.Fatalf("file = %q", got)
+		}
+		c, cdir := shapedRuntime(t, config.ToolShapeCodex)
+		writeFile(t, filepath.Join(cdir, "exists.txt"), "original\n")
+		codex(t, c, "*** Add File: exists.txt\n+replaced\n")
+		if got := readFile(t, filepath.Join(cdir, "exists.txt")); got != "replaced\n" {
+			t.Fatalf("codex shape keeps Codex's overwrite: %q", got)
+		}
+	})
+	t.Run("anchored pure insertion", func(t *testing.T) {
+		r, dir := shapedRuntime(t, config.ToolShapeLean)
+		writeFile(t, filepath.Join(dir, "f.txt"), "top\nanchor\nbottom\n")
+		if _, err := native(t, r, "*** Update File: f.txt\n@@ anchor\n+inserted\n"); err != nil {
+			t.Fatal(err)
+		}
+		if got := readFile(t, filepath.Join(dir, "f.txt")); got != "top\nanchor\ninserted\nbottom\n" {
+			t.Fatalf("native insertion = %q", got)
+		}
+		c, cdir := shapedRuntime(t, config.ToolShapeCodex)
+		writeFile(t, filepath.Join(cdir, "f.txt"), "top\nanchor\nbottom\n")
+		codex(t, c, "*** Update File: f.txt\n@@ anchor\n+inserted\n")
+		if got := readFile(t, filepath.Join(cdir, "f.txt")); got != "top\nanchor\nbottom\ninserted\n" {
+			t.Fatalf("codex shape keeps Codex's append: %q", got)
+		}
+	})
+	t.Run("anchor repeated as the first old line", func(t *testing.T) {
+		r, dir := shapedRuntime(t, config.ToolShapeLean)
+		writeFile(t, filepath.Join(dir, "g.txt"), "a\nkeep\nb\n")
+		if _, err := native(t, r, "*** Update File: g.txt\n@@ keep\n keep\n+after-keep\n"); err != nil {
+			t.Fatal(err)
+		}
+		if got := readFile(t, filepath.Join(dir, "g.txt")); got != "a\nkeep\nafter-keep\nb\n" {
+			t.Fatalf("g.txt = %q", got)
+		}
+	})
+	for _, shape := range []string{config.ToolShapeLean, config.ToolShapeCodex} {
+		t.Run(shape+": two updates of one file", func(t *testing.T) {
+			r, dir := shapedRuntime(t, shape)
+			writeFile(t, filepath.Join(dir, "a.txt"), "one\ntwo\nthree\n")
+			body := "*** Update File: a.txt\n@@\n-one\n+ONE\n*** Update File: a.txt\n@@\n-two\n+TWO\n"
+			if shape == config.ToolShapeCodex {
+				codex(t, r, body)
+			} else if _, err := native(t, r, body); err != nil {
+				t.Fatal(err)
+			}
+			if got := readFile(t, filepath.Join(dir, "a.txt")); got != "ONE\nTWO\nthree\n" {
+				t.Fatalf("a.txt = %q", got)
+			}
+		})
+		t.Run(shape+": move onto its own path", func(t *testing.T) {
+			r, dir := shapedRuntime(t, shape)
+			writeFile(t, filepath.Join(dir, "a.txt"), "one\ntwo\n")
+			body := "*** Update File: a.txt\n*** Move to: a.txt\n@@\n-one\n+ONE\n"
+			if shape == config.ToolShapeCodex {
+				codex(t, r, body)
+			} else if _, err := native(t, r, body); err != nil {
+				t.Fatal(err)
+			}
+			if got := readFile(t, filepath.Join(dir, "a.txt")); got != "ONE\ntwo\n" {
+				t.Fatalf("a.txt = %q", got)
+			}
+		})
+	}
+}
+
+func TestCommandOutcomesAreFlaggedWhereverTheyEnd(t *testing.T) {
+	c, _ := shapedRuntime(t, config.ToolShapeCodex)
+	out, _ := call(t, c, "exec_command", map[string]any{"cmd": "sleep 1; exit 3", "yield_time_ms": 250})
+	c.takeExec(c.seat().ID)
+	match := regexp.MustCompile(`session ID (\d+)`).FindStringSubmatch(out)
+	if match == nil {
+		t.Fatalf("no session: %q", out)
+	}
+	out, err := call(t, c, "write_stdin", map[string]any{"session_id": json.Number(match[1]), "chars": "", "yield_time_ms": 5000})
+	note, noted := c.takeExec(c.seat().ID)
+	if md := toolResultMetadata("write_stdin", "c", out, err, note, noted); md["error"] != true || md["exit_code"] != 3 {
+		t.Fatalf("the poll that sees exit 3: %v", md)
+	}
+
+	for _, tc := range []struct {
+		status job.Status
+		exit   int
+		failed bool
+	}{{job.Complete, 0, false}, {job.Complete, 4, true}, {job.Failed, 1, true}, {job.Killed, 0, true}} {
+		if md := jobResultMetadata(job.Snapshot{ID: "j", Status: tc.status, ExitCode: tc.exit}, "bash"); md["error"] != tc.failed {
+			t.Fatalf("%s exit %d: %v", tc.status, tc.exit, md)
+		}
+	}
+	text := formatJobResult(job.Snapshot{ID: "j", Status: job.Complete}, "first"+strings.Repeat("x", 400000)+"last", "")
+	if len(text) > commandOutputTokens*4+200 || !strings.Contains(text, "Warning: truncated output") || !strings.Contains(text, "first") || !strings.Contains(text, "last") {
+		t.Fatalf("delivered result is %d bytes, not bounded head and tail", len(text))
 	}
 }
