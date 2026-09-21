@@ -458,7 +458,12 @@ type anthropicStream struct {
 	outputTokens    int
 	cacheReadTokens int
 	sawUsage        bool
-	stopReason      string
+	// sawInput and sawOutput record each half of the usage separately: a
+	// stream that ends without its output count reports input alone, and
+	// that total is a lower bound, not a measurement.
+	sawInput   bool
+	sawOutput  bool
+	stopReason string
 	// sawStop records this wire's terminal marker, `message_stop`. It was
 	// parsed into the default arm and discarded before 2026-09-14, which left a
 	// truncated stream looking exactly like a complete one.
@@ -609,7 +614,11 @@ func (s *anthropicStream) flush(sink StreamSink) error {
 	if !s.sawUsage {
 		return nil
 	}
-	return sink(Event{Kind: EventUsage, Usage: s.normalizedUsage(), StopReason: mapAnthropicStopReason(s.stopReason)})
+	usage := s.normalizedUsage()
+	if !s.sawInput || !s.sawOutput {
+		usage["incomplete"] = true
+	}
+	return sink(Event{Kind: EventUsage, Usage: usage, StopReason: mapAnthropicStopReason(s.stopReason)})
 }
 
 // flushIncomplete reports the usage a failed stream had already received,
@@ -642,10 +651,12 @@ func (s *anthropicStream) mergeUsage(usage anthropicUsage) {
 	if usage.InputTokens != nil {
 		s.inputTokens = *usage.InputTokens
 		s.sawUsage = true
+		s.sawInput = true
 	}
 	if usage.OutputTokens != nil {
 		s.outputTokens = *usage.OutputTokens
 		s.sawUsage = true
+		s.sawOutput = true
 	}
 	if usage.CacheReadInputTokens != nil {
 		s.cacheReadTokens = *usage.CacheReadInputTokens

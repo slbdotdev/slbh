@@ -458,8 +458,10 @@ counts would not compare across shapes. A backgrounded command's outcome
 arrives later as a `job_result` event with the same `job` id, so an analysis
 counts each command's outcome once per job. Every execution is preceded by a
 `tool_start` event, so a call killed before it returns is still on record. A
-failed request attempt emits `request_error`, and a stream that breaks after
-reporting usage still emits that usage, marked `incomplete`.
+completed request emits `request_done` and a failed attempt emits
+`request_error`. A stream that breaks after reporting usage still emits that
+usage, and any usage lacking its input or output count is marked
+`incomplete`.
 
 Headless also answers `quiescent`: `true` when every job has finished and been
 delivered and no agent has a turn running, an undelivered message, or a

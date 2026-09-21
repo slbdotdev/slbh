@@ -393,6 +393,11 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 				if streamErr != nil && turnCtx.Err() == nil {
 					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "request_error", Text: streamErr.Error(), Metadata: map[string]any{"round": round, "attempt": attempt}})
 				}
+				if streamErr == nil {
+					// Completion is its own record: a response without usage
+					// still completed, and usage completeness is judged apart.
+					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "request_done", Metadata: map[string]any{"round": round, "attempt": attempt}})
+				}
 			}()
 			streamErr = p.Stream(turnCtx, req, func(event provider.Event) error {
 				if turnCtx.Err() != nil {

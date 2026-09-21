@@ -49,3 +49,23 @@ func TestTruncatedStreamStillReportsItsUsage(t *testing.T) {
 		t.Fatalf("usage = %v", usages)
 	}
 }
+
+func TestUsageMissingOutputIsIncomplete(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":50}}}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}`,
+		`data: {"type":"message_stop"}`,
+	}, "\n") + "\n"
+	var usages []map[string]any
+	if err := (anthropicMessagesWire{}).parseStream(strings.NewReader(stream), func(event Event) error {
+		if event.Kind == EventUsage {
+			usages = append(usages, event.Usage)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(usages) != 1 || usages[0]["incomplete"] != true {
+		t.Fatalf("usage without its output count must be marked incomplete: %v", usages)
+	}
+}
