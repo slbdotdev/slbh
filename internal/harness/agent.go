@@ -48,6 +48,7 @@ type Agent struct {
 	status        string
 	history       []provider.Message
 	inbox         []agentMessage
+	busy          bool
 	wake          chan struct{}
 	stopped       bool
 	cancel        context.CancelFunc
@@ -289,8 +290,19 @@ func (a *Agent) loop(ctx context.Context) {
 			a.setStatus("stopped")
 			return
 		case <-a.wake:
-			if messages := a.takeMessages(); len(messages) > 0 {
+			// busy is set under the same lock that empties the inbox, so there
+			// is no instant at which a taken message is in neither the inbox
+			// nor a turn: Quiescent relies on that.
+			a.mu.Lock()
+			messages := a.inbox
+			a.inbox = nil
+			a.busy = len(messages) > 0
+			a.mu.Unlock()
+			if len(messages) > 0 {
 				a.handle(ctx, messages)
+				a.mu.Lock()
+				a.busy = false
+				a.mu.Unlock()
 			}
 		}
 	}
@@ -498,6 +510,9 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 				message.ReasoningContent = responseReasoning
 			}
 			history = append(history, message)
+			// Every execution is on record before it runs, so a call killed
+			// before it returns is still a call.
+			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool_start", Metadata: map[string]any{"name": call.Function.Name, "call_id": call.ID}})
 			result, toolErr := a.runtime.ExecuteTool(a.ID, call.Function.Name, call.Function.Arguments)
 			flagged := false
 			var shaped *shapedToolError

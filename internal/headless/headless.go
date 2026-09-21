@@ -221,6 +221,16 @@ func dispatch(rt seam.Runtime, method string, params json.RawMessage) (result an
 		return rt.Agents(), false, nil
 	case "jobs":
 		return rt.JobSnapshots(), false, nil
+	case "quiescent":
+		// Optional: a runtime that cannot answer says so rather than guessing.
+		if q, ok := rt.(interface {
+			Quiescent() bool
+			LastEventCursor() seam.EventCursor
+		}); ok {
+			cursor := q.LastEventCursor()
+			return map[string]any{"quiescent": q.Quiescent(), "cursor": cursor}, false, nil
+		}
+		return nil, false, errors.New("headless: runtime does not report quiescence")
 	case "config":
 		return rt.Config(), false, nil
 	case "runtime":

@@ -145,6 +145,48 @@ func (r *Runtime) ID() string   { return r.id }
 func (r *Runtime) Dir() string  { return r.runtimeDir }
 func (r *Runtime) Home() string { return r.config.Home }
 
+// Quiescent reports whether nothing in the runtime is running or pending:
+// every job has finished and been delivered, and no agent has a turn in
+// progress, an undelivered message, or a non-idle status. Jobs are checked
+// before agents, so a job that finished before the check has already put its
+// result in an inbox the agent check will see. Agents are checked one at a
+// time, so a caller that must be certain asks twice, apart, and requires both
+// answers true with no event between them.
+func (r *Runtime) Quiescent() bool {
+	for _, snapshot := range r.jobs.List() {
+		j, ok := r.jobs.Get(snapshot.ID)
+		if !ok {
+			continue
+		}
+		select {
+		case <-j.Done():
+		default:
+			return false
+		}
+	}
+	for _, agent := range r.Agents() {
+		a, ok := r.lookupAgent(agent.ID)
+		if !ok {
+			continue
+		}
+		a.mu.RLock()
+		busy := a.busy || len(a.inbox) > 0 || a.turnCancel != nil
+		status := a.status
+		a.mu.RUnlock()
+		if busy || (status != "idle" && status != "stopped" && status != "error") {
+			return false
+		}
+	}
+	return true
+}
+
+// LastEventCursor is the cursor of the most recent event emitted.
+func (r *Runtime) LastEventCursor() seam.EventCursor {
+	r.eventMu.Lock()
+	defer r.eventMu.Unlock()
+	return r.eventSequence
+}
+
 // ToolShape is the runtime's primary tool shape.
 func (r *Runtime) ToolShape() string { return r.toolShape }
 

@@ -1075,6 +1075,10 @@ func toolResultMetadata(name, callID, result string, toolErr error, note execNot
 // codexCallFailed reads the Codex shape's own non-command results, whose text
 // is produced entirely by this file.
 func codexCallFailed(name, result string) bool {
+	// Validation failures, whatever the tool: shapedValidation's own text.
+	if strings.HasPrefix(result, "unsupported call: ") || strings.HasPrefix(result, "failed to parse function arguments") {
+		return true
+	}
 	switch name {
 	case "apply_patch":
 		return strings.HasPrefix(result, "apply_patch verification failed") || strings.HasPrefix(result, "invalid patch") || strings.HasPrefix(result, "apply_patch failed")

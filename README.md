@@ -456,9 +456,16 @@ killed, or a patch or session call did not succeed. Codex itself reports a
 non-zero exit as ordinary output, so without the shared definition, error
 counts would not compare across shapes. A backgrounded command's outcome
 arrives later as a `job_result` event with the same `job` id, so an analysis
-counts each command's outcome once per job. A failed request attempt emits
-`request_error`, and a stream that breaks after reporting usage still emits
-that usage, marked `incomplete`.
+counts each command's outcome once per job. Every execution is preceded by a
+`tool_start` event, so a call killed before it returns is still on record. A
+failed request attempt emits `request_error`, and a stream that breaks after
+reporting usage still emits that usage, marked `incomplete`.
+
+Headless also answers `quiescent`: `true` when every job has finished and been
+delivered and no agent has a turn running, an undelivered message, or a
+non-idle status. It also returns the last event cursor. A caller that must be
+sure the runtime is done asks twice, apart, and requires both answers true
+with the same cursor.
 
 `launch_subagent` accepts `harness: "codex"` for a Codex leaf launched by a
 native parent (at either supported child depth). The leaf runs a persistent

@@ -483,6 +483,11 @@ func TestToolResultAccountingIsUniformAcrossShapes(t *testing.T) {
 			t.Fatalf("apply_patch %q: %v", tc.result, md)
 		}
 	}
+	for _, tc := range []struct{ name, result string }{{"shell", "unsupported call: shell"}, {"apply_patch", "failed to parse function arguments: missing field `input`"}, {"exec_command", "failed to parse function arguments: EOF"}} {
+		if md := toolResultMetadata(tc.name, "c", tc.result, nil, execNote{}, false); md["error"] != true {
+			t.Fatalf("codex validation failure %q not counted: %v", tc.result, md)
+		}
+	}
 	if md := toolResultMetadata("Edit", "c", "", toolUseError("String to replace not found"), execNote{}, false); md["error"] != true {
 		t.Fatalf("shaped Edit failure not counted: %v", md)
 	}
@@ -514,5 +519,35 @@ func TestShapedValidationUsesTheHarnessesWords(t *testing.T) {
 	// Shared tools keep slbh's handling in every shape.
 	if _, err := call(t, c, "job", map[string]any{"action": "list"}); err != nil {
 		t.Fatalf("shared job tool: %v", err)
+	}
+}
+
+func TestQuiescentSeesRunningJobsAndPendingInboxes(t *testing.T) {
+	r, _ := shapedRuntime(t, config.ToolShapeSlbh)
+	if !r.Quiescent() {
+		t.Fatal("a fresh runtime is not quiescent")
+	}
+	if _, err := call(t, r, "bash", map[string]any{"script": "sleep 1", "wait_seconds": 0}); err != nil {
+		t.Fatal(err)
+	}
+	if r.Quiescent() {
+		t.Fatal("quiescent with a job running")
+	}
+	seat := r.seat()
+	seat.mu.Lock()
+	seat.inbox = append(seat.inbox, agentMessage{prompt: "x", kind: "steer"})
+	seat.mu.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		seat.mu.RLock()
+		pending := len(seat.inbox) > 0 || seat.busy || seat.turnCancel != nil
+		seat.mu.RUnlock()
+		if pending && r.Quiescent() {
+			t.Fatal("quiescent with a message pending or a turn running")
+		}
+		if !pending && r.Quiescent() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
