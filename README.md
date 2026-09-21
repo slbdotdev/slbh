@@ -405,6 +405,54 @@ Available tools are:
 - Agents: `list_subagents`, `launch_subagent`, `msg_subagent`, and
   `end_subagent`.
 
+### Tool shapes
+
+The files and shell tools above are the default `slbh` **tool shape**. Two
+other shapes replace just that primary set with the tools another harness
+gives its model, and leave everything else unchanged: `python`, `pwsh`, `job`,
+the agent tools and the prompt, apart from the sentence naming the command
+tools.
+
+| shape | primary tools | reproduces |
+| --- | --- | --- |
+| `slbh` (default) | `glob`, `grep`, `read_file`, `read_bytes`, `read_lines`, `edit_file`, `apply_patch`, `write_file`, `bash` | this harness |
+| `anthropic` | `Bash`, `Read`, `Edit`, `Write` | Claude Code 2.1.278 |
+| `codex` | `exec_command`, `write_stdin`, `apply_patch` | Codex CLI 0.155.1 |
+
+Select a shape with `tool_shape` in `config.json`, the `SLBH_TOOL_SHAPE`
+environment variable, or `--tool-shape`. Each one overrides the one before
+it, and `Save` never writes an override back. An unknown value stops slbh at
+startup with exit status 2; there is no fallback. The shape is fixed for the
+runtime's life and applies to the Seat and every native child. Codex and
+Claude Code leaves bring their own tools, and the Intern keeps its read tools.
+
+A shape reproduces its harness's names, parameter schemas and result text, as
+captured from the installed builds in `internal/harness/testdata/toolshape/`
+and pinned by tests. Descriptions are condensed where the original carries
+protocol that means nothing here, such as Claude Code's git and PR
+instructions. Where each shape departs from its harness:
+
+- `anthropic`: `Read` applies the 2000-line default its description states,
+  and `offset: 0` numbers from 1. Read-before-edit is not enforced, as in
+  2.1.278. An edit to a file that changed since it was read notes that it
+  did. `Bash` keeps its working directory inside the agent's tree, and a
+  timeout kills the command with `Exit code 143`. Background commands are slbh
+  jobs: read them with `job` and receive their results automatically.
+  Failures carry `is_error` on the Anthropic wire.
+- `codex`: stderr is merged into stdout; output is truncated at
+  `max_output_tokens`, keeping head and tail. A command still running after
+  `yield_time_ms` returns a session id. `write_stdin` polls that session and
+  cannot write input, because slbh jobs have no stdin. GLM speaks JSON
+  functions, so `apply_patch` is a one-string function carrying Codex's
+  patch grammar in its description, where Codex uses a freeform grammar tool.
+  A patch is verified whole before any file is written.
+
+Every `tool_result` event records the tool `name`, an `error` flag and, for
+finished commands, an `exit_code`. `error` uses one definition in every
+shape: the tool failed, a command exited non-zero, or a patch or session call
+did not succeed. Codex itself reports a non-zero exit as ordinary output, so
+without the shared definition, error counts would not compare across shapes.
+
 `launch_subagent` accepts `harness: "codex"` for a Codex leaf launched by a
 native parent (at either supported child depth). The leaf runs a persistent
 `codex app-server --stdio` session in the requested working directory. Parent
