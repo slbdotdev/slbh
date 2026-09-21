@@ -25,15 +25,15 @@ const scientificPythonPackageNames = "numpy, scipy, pandas, matplotlib, sympy, r
 // provider request. Keep ordering stable: provider prefix caching keys
 // include this schema.
 func ToolDefinitions() []provider.Tool {
-	return buildToolDefinitions(config.ToolShapeLean)
+	return buildToolDefinitions(config.ToolShapeLean, config.PromptVariantInfo)
 }
 
 // ShapeToolDefinitions is ToolDefinitions for a named tool shape.
 func ShapeToolDefinitions(shape string) []provider.Tool {
-	return buildToolDefinitions(shape)
+	return buildToolDefinitions(shape, config.PromptVariantInfo)
 }
 
-func buildToolDefinitions(shape string) []provider.Tool {
+func buildToolDefinitions(shape, variant string) []provider.Tool {
 	stringArg := func(name string) map[string]any {
 		return map[string]any{"type": "object", "properties": map[string]any{name: map[string]any{"type": "string"}}, "required": []string{name}}
 	}
@@ -44,7 +44,7 @@ func buildToolDefinitions(shape string) []provider.Tool {
 	case config.ToolShapeCodex:
 		all = codexPrimaryTools()
 	default:
-		all = append(readtools.Definitions(), slbhPrimaryTools(stringArg)...)
+		all = append(readtools.Definitions(), slbhPrimaryTools(stringArg, variant)...)
 		if names, ok := primaryToolNames[shape]; ok && shape != config.ToolShapeFull {
 			keep := map[string]bool{}
 			for _, name := range names {
@@ -60,8 +60,8 @@ func buildToolDefinitions(shape string) []provider.Tool {
 		}
 	}
 	all = append(all, []provider.Tool{
-		{Name: "pwsh", Description: commandDescription("Run a PowerShell 7 (pwsh) script on Windows. exit code is the script's exit value, or the last native command's; 1 after a terminating error."), Parameters: commandParameters()},
-		{Name: "python", Description: commandDescription(fmt.Sprintf("Run a script with the managed scientific Python environment (%s).", scientificPythonPackageNames)), Parameters: commandParameters()},
+		{Name: "pwsh", Description: commandDescriptionFor(variant, "Run a PowerShell 7 (pwsh) script on Windows. exit code is the script's exit value, or the last native command's; 1 after a terminating error."), Parameters: commandParameters()},
+		{Name: "python", Description: commandDescriptionFor(variant, fmt.Sprintf("Run a script with the managed scientific Python environment (%s).", scientificPythonPackageNames)), Parameters: commandParameters()},
 		{Name: "job", Description: "Manage jobs with action list, read, or kill. job_id is required for read and kill.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"action": map[string]any{"type": "string", "enum": []string{"list", "read", "kill"}}, "job_id": map[string]any{"type": "string"}}, "required": []string{"action"}}},
 		{Name: "list_subagents", Description: "List this runtime's agent tree.", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}},
 		{Name: "launch_subagent", Description: "Launch one child and return immediately. Native agents may launch one child at each of the first two depths; a depth-2 child cannot launch anything. Choose a relevant title made of three words joined by hyphens (for example inspect-api-cache); this is guidance only and is not enforced. A depth-1 child may use the configured child model. A depth-2 child must receive a non-empty real model string or managed short name. The optional harness selects native, Codex, or Claude Code. Do not wait or poll: results arrive as mandatory mid-turn steers at the next API/tool call boundary, or wake an idle parent. In-flight work finishes and its output is retained.", Parameters: map[string]any{"type": "object", "properties": map[string]any{
@@ -99,18 +99,38 @@ func buildToolDefinitions(shape string) []provider.Tool {
 
 // slbhPrimaryTools is the slbh shape's own editing and shell tools, after the
 // read tools and in the order the provider prefix cache has always seen.
-func slbhPrimaryTools(stringArg func(string) map[string]any) []provider.Tool {
+func slbhPrimaryTools(stringArg func(string) map[string]any, variant string) []provider.Tool {
+	patch := applyPatchDescription
+	if variant == config.PromptVariantFacts {
+		patch += applyPatchFacts
+	}
 	return []provider.Tool{
 		{Name: "edit_file", Description: "Replace an exact string in a file atomically.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "old": map[string]any{"type": "string"}, "new": map[string]any{"type": "string"}}, "required": []string{"path", "old", "new"}}},
-		{Name: "apply_patch", Description: applyPatchDescription, Parameters: stringArg("patch")},
+		{Name: "apply_patch", Description: patch, Parameters: stringArg("patch")},
 		{Name: "write_file", Description: "Create a new file; refuse to overwrite an existing file.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []string{"path", "content"}}},
-		{Name: "bash", Description: commandDescription(job.BashDescription()), Parameters: commandParameters()},
+		{Name: "bash", Description: commandDescriptionFor(variant, job.BashDescription()), Parameters: commandParameters()},
 	}
 }
 
 const applyPatchDescription = "Edit, add, delete or move files with one patch, applied only if every hunk matches. Either a unified diff (git apply; hunk line counts need not be exact) or:\n" +
 	"*** Begin Patch\n*** Update File: path\n@@ optional nearby line\n context\n-old\n+new\n*** Add File: path\n+line\n*** Delete File: path\n*** End Patch\n" +
 	"An Update File may be followed by *** Move to: newpath. In this format hunks are found by their context lines, not line numbers; a unified diff also uses its line numbers."
+
+// applyPatchFacts and commandOutputFacts are the facts variant's additions:
+// how a hunk is placed and what happens to long output, stated as behaviour
+// and not as advice (seekLines, applyPatch and boundedOutput).
+const applyPatchFacts = " A unified diff is applied with git apply, which places each hunk where its context lines match nearest its stated line. In the other format, each @@ line and hunk matches the first occurrence after the previous hunk in that file, comparing lines exactly, then ignoring trailing whitespace, then ignoring whitespace at both ends."
+
+const commandOutputFacts = " Output over 20,000 tokens (about 80,000 characters) keeps its first and last 40,000 characters and states how many tokens were dropped between them, whether the run finished, failed or is still in the background."
+
+// commandDescriptionFor is commandDescription with the facts variant's
+// output note.
+func commandDescriptionFor(variant, specific string) string {
+	if variant == config.PromptVariantFacts {
+		return commandDescription(specific) + commandOutputFacts
+	}
+	return commandDescription(specific)
+}
 
 func commandParameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
@@ -125,7 +145,7 @@ func commandDescription(specific string) string {
 }
 
 func (r *Runtime) toolDefinitions(agentID string) []provider.Tool {
-	definitions := buildToolDefinitions(r.toolShape)
+	definitions := buildToolDefinitions(r.toolShape, r.promptVariant)
 	agent, ok := r.lookupAgent(agentID)
 	if !ok {
 		return definitions

@@ -251,7 +251,7 @@ func (r *Runtime) shapedValidation(name, raw string) (string, error, bool) {
 		return "", nil, false
 	}
 	var definition *provider.Tool
-	for _, tool := range buildToolDefinitions(r.toolShape) {
+	for _, tool := range buildToolDefinitions(r.toolShape, r.promptVariant) {
 		if tool.Name == name {
 			tool := tool
 			definition = &tool

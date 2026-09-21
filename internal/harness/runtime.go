@@ -68,7 +68,9 @@ type Runtime struct {
 	// toolShape is fixed for the runtime's life: changing the primary tools
 	// mid-run would strand every call already in history.
 	toolShape string
-	shape     *shapeState
+	// promptVariant is fixed for the same reason.
+	promptVariant string
+	shape         *shapeState
 }
 
 type Options struct {
@@ -88,6 +90,10 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	promptVariant, err := config.NormalizePromptVariant(cfg.PromptVariant)
+	if err != nil {
+		return nil, err
+	}
 	runtimeID := id.NewShort("run")
 	dir := filepath.Join(cfg.Home, "runtimes", runtimeID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -95,7 +101,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	workDir, _ := os.Getwd()
-	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), eventNotify: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand, subagentWarnings: make(map[string]*time.Timer), toolShape: toolShape, shape: newShapeState()}
+	r := &Runtime{id: runtimeID, runtimeDir: dir, workDir: workDir, config: cfg, ctx: ctx, cancel: cancel, agents: make(map[string]*Agent), current: make(map[string]*agentSession), pending: make(map[string]*agentSession), redactor: newSecretRedactor(os.Environ()), eventNotify: make(chan struct{}), provider: options.Provider, codexCommand: options.CodexCommand, claudeCommand: options.ClaudeCommand, subagentWarnings: make(map[string]*time.Timer), toolShape: toolShape, promptVariant: promptVariant, shape: newShapeState()}
 	if r.provider == nil {
 		// The current config is read per call rather than captured, so a policy
 		// authored from /models on an unmanaged host takes effect on the next
@@ -137,7 +143,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	r.seatID = seat.ID
 	r.mu.Unlock()
 	seat.start()
-	r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "runtime", Text: "runtime started", Metadata: map[string]any{"tool_shape": r.toolShape}})
+	r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "runtime", Text: "runtime started", Metadata: map[string]any{"tool_shape": r.toolShape, "prompt_variant": r.promptVariant}})
 	return r, nil
 }
 

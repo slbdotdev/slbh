@@ -63,6 +63,10 @@ type Config struct {
 	// ToolShapes. Empty means lean. SLBH_TOOL_SHAPE
 	// overrides the file; ValidateToolShape refuses anything else.
 	ToolShape string
+	// PromptVariant selects an experimental prompt and tool-description text,
+	// one of PromptVariants; empty is the branch default. It is read from
+	// SLBH_PROMPT_VARIANT only and is never persisted.
+	PromptVariant string
 	// toolShapeFile is the persisted value, kept apart so that Save never
 	// writes an environment or flag override back into config.json.
 	toolShapeFile string
@@ -189,6 +193,7 @@ func Load() Config {
 	if shape := strings.TrimSpace(os.Getenv("SLBH_TOOL_SHAPE")); shape != "" {
 		cfg.ToolShape = shape
 	}
+	cfg.PromptVariant = strings.TrimSpace(os.Getenv("SLBH_PROMPT_VARIANT"))
 	if cfg.LeafModel == "" {
 		cfg.LeafModel = cfg.SubagentModel
 	}
@@ -403,4 +408,32 @@ func NormalizeToolShape(shape string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("unknown tool shape %q; expected one of %s", shape, strings.Join(ToolShapes, ", "))
+}
+
+// Prompt variants for the large-input tool test (slb-org
+// org/tool-large-plan-2026-09-21.md). Info, the default, is the
+// informational shared prompt; main is the prompt as it stood on main at
+// 08b2a56; facts adds fact-only command and apply_patch descriptions to info.
+const (
+	PromptVariantInfo  = "info"
+	PromptVariantMain  = "main"
+	PromptVariantFacts = "facts"
+)
+
+// PromptVariants lists the accepted SLBH_PROMPT_VARIANT values.
+var PromptVariants = []string{PromptVariantInfo, PromptVariantMain, PromptVariantFacts}
+
+// NormalizePromptVariant maps empty to info and refuses an unknown value, for
+// the same reason NormalizeToolShape does.
+func NormalizePromptVariant(variant string) (string, error) {
+	variant = strings.TrimSpace(variant)
+	if variant == "" {
+		return PromptVariantInfo, nil
+	}
+	for _, known := range PromptVariants {
+		if variant == known {
+			return variant, nil
+		}
+	}
+	return "", fmt.Errorf("unknown prompt variant %q; expected one of %s", variant, strings.Join(PromptVariants, ", "))
 }

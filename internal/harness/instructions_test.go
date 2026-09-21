@@ -127,7 +127,7 @@ func TestSystemPromptDeliversOnlyThisAgentsLayer(t *testing.T) {
 }
 
 // The managed document is appended to the mechanics, never substituted for
-// them. A leaf that received only org policy would lose the thinking and
+// them. A leaf that received only org policy would lose the host and
 // message-handling guidance every native agent shares.
 func TestSystemPromptKeepsBakedMechanicsAlongsideTheLayerDocument(t *testing.T) {
 	r := runtimeWithInstructions(t, allThreeDocs())
@@ -135,9 +135,8 @@ func TestSystemPromptKeepsBakedMechanicsAlongsideTheLayerDocument(t *testing.T) 
 		agent := agentAtDepth(t, r, depth)
 		prompt := systemPrompt(agent)
 		for _, mechanic := range []string{
-			"Keep your thinking brief and focused",
 			"next tool or API call boundary",
-			"never defer one to the end",
+			"is sent once and never repeated",
 		} {
 			if !strings.Contains(prompt, mechanic) {
 				t.Fatalf("depth %d prompt lost baked mechanic %q", depth, mechanic)

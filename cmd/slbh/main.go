@@ -71,7 +71,12 @@ func main() {
 	if toolShape != "" {
 		os.Setenv("SLBH_TOOL_SHAPE", toolShape)
 	}
-	if _, err := config.NormalizeToolShape(config.Load().ToolShape); err != nil {
+	loaded := config.Load()
+	if _, err := config.NormalizeToolShape(loaded.ToolShape); err != nil {
+		fmt.Fprintln(os.Stderr, "slbh:", err)
+		os.Exit(2)
+	}
+	if _, err := config.NormalizePromptVariant(loaded.PromptVariant); err != nil {
 		fmt.Fprintln(os.Stderr, "slbh:", err)
 		os.Exit(2)
 	}
