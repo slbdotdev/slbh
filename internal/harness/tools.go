@@ -110,7 +110,7 @@ func slbhPrimaryTools(stringArg func(string) map[string]any) []provider.Tool {
 
 const applyPatchDescription = "Edit, add, delete or move files with one patch, applied only if every hunk matches. Either a unified diff (git apply; hunk line counts need not be exact) or:\n" +
 	"*** Begin Patch\n*** Update File: path\n@@ optional nearby line\n context\n-old\n+new\n*** Add File: path\n+line\n*** Delete File: path\n*** End Patch\n" +
-	"An Update File may be followed by *** Move to: newpath. Hunks are found by their context lines, not line numbers."
+	"An Update File may be followed by *** Move to: newpath. In this format hunks are found by their context lines, not line numbers; a unified diff also uses its line numbers."
 
 func commandParameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
