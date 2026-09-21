@@ -34,15 +34,19 @@ func TestToolFailureWithNoOutputIsJustTheError(t *testing.T) {
 }
 
 func TestToolFailureTruncatesRunawayOutput(t *testing.T) {
-	got := toolFailure(errAsError("exit status 2"), strings.Repeat("x", maxToolErrorOutput*2))
-	if len(got) > maxToolErrorOutput+200 {
-		t.Fatalf("result is %d bytes, want it bounded near %d", len(got), maxToolErrorOutput)
+	limit := commandOutputTokens * 4
+	got := toolFailure(errAsError("exit status 2"), "start"+strings.Repeat("x", limit*2)+"end")
+	if len(got) > limit {
+		t.Fatalf("result is %d bytes, want at most %d", len(got), limit)
 	}
-	if !strings.Contains(got, "[output truncated]") {
+	if !strings.Contains(got, "Warning: truncated output") || !strings.Contains(got, "tokens truncated") {
 		t.Fatal("truncation must be visible to the model, not silent")
 	}
-	if !strings.HasPrefix(got, "tool error: exit status 2") {
-		t.Fatalf("the error must survive truncation: %q", got[:60])
+	if !strings.HasPrefix(got, "tool error: exit status 2\nWarning") || !strings.Contains(got, "start") || !strings.HasSuffix(got, "end") {
+		t.Fatalf("the error, the head and the tail must survive truncation: %q", got[:60])
+	}
+	if again := boundedOutput(strings.TrimPrefix(got, "tool error: exit status 2\n")); again != strings.TrimPrefix(got, "tool error: exit status 2\n") {
+		t.Fatal("cutting an already cut result must not cut it again")
 	}
 }
 

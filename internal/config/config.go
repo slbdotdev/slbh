@@ -366,16 +366,25 @@ func getenv(name, fallback string) string {
 	return fallback
 }
 
-// Tool shapes. slbh is the harness's own set and the default; anthropic and
-// codex reproduce the primary tools of Claude Code and the Codex CLI.
+// Tool shapes. slbh is the harness's own set and the default; mid and lean
+// are subsets of it with the same tools and texts; anthropic and codex
+// reproduce the primary tools of Claude Code and the Codex CLI.
 const (
 	ToolShapeSlbh      = "slbh"
+	ToolShapeMid       = "mid"
+	ToolShapeLean      = "lean"
 	ToolShapeAnthropic = "anthropic"
 	ToolShapeCodex     = "codex"
 )
 
 // ToolShapes lists the accepted tool_shape values in documentation order.
-var ToolShapes = []string{ToolShapeSlbh, ToolShapeAnthropic, ToolShapeCodex}
+var ToolShapes = []string{ToolShapeSlbh, ToolShapeMid, ToolShapeLean, ToolShapeAnthropic, ToolShapeCodex}
+
+// NativeToolShape reports whether shape is slbh's own tool set or a subset of
+// it, executed by slbh's own handlers.
+func NativeToolShape(shape string) bool {
+	return shape == ToolShapeSlbh || shape == ToolShapeMid || shape == ToolShapeLean
+}
 
 // NormalizeToolShape maps empty to slbh and refuses an unknown value. There is
 // no fallback: a run on the wrong tool set looks exactly like a run on the

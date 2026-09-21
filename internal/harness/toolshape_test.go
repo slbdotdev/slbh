@@ -72,21 +72,142 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-func TestSlbhShapeIsByteIdenticalToMain(t *testing.T) {
-	golden, err := os.ReadFile("testdata/toolshape/slbh-main-d5c712c.json")
+// The slbh shape's definitions are main's at d5c712c except for the patch
+// tool's description and the command tools' wait default; those keep their
+// names and parameters.
+func TestSlbhShapeMatchesMainButForItsDeliberateChanges(t *testing.T) {
+	data, err := os.ReadFile("testdata/toolshape/slbh-main-d5c712c.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	current, err := json.MarshalIndent(ToolDefinitions(), "", " ")
-	if err != nil {
+	var golden []provider.Tool
+	if err := json.Unmarshal(data, &golden); err != nil {
 		t.Fatal(err)
 	}
-	if string(current) != string(golden) {
-		t.Fatal("the slbh shape's tool definitions differ from main's; the default must not drift")
+	current := ToolDefinitions()
+	if len(current) != len(golden) {
+		t.Fatalf("%d tools, main has %d", len(current), len(golden))
+	}
+	changed := map[string]bool{"apply_patch": true, "bash": true, "pwsh": true, "python": true}
+	for i, tool := range current {
+		want, got := golden[i], tool
+		if want.Name != got.Name {
+			t.Fatalf("tool %d is %s, main has %s", i, got.Name, want.Name)
+		}
+		if changed[got.Name] {
+			want.Description, got.Description = "", ""
+			if got.Name != "apply_patch" {
+				want.Parameters, got.Parameters = stripWaitDescription(want.Parameters), stripWaitDescription(got.Parameters)
+			}
+		}
+		a, _ := json.Marshal(want)
+		b, _ := json.Marshal(got)
+		if string(a) != string(b) {
+			t.Fatalf("%s differs from main:\n%s\n%s", tool.Name, a, b)
+		}
 	}
 	r, _ := shapedRuntime(t, "")
 	if r.ToolShape() != config.ToolShapeSlbh {
 		t.Fatalf("empty shape = %q, want slbh", r.ToolShape())
+	}
+}
+
+func stripWaitDescription(parameters map[string]any) map[string]any {
+	data, _ := json.Marshal(parameters)
+	var copied map[string]any
+	_ = json.Unmarshal(data, &copied)
+	delete(copied["properties"].(map[string]any)["wait_seconds"].(map[string]any), "description")
+	return copied
+}
+
+func TestSubsetShapesAreSlbhsOwnTools(t *testing.T) {
+	full := map[string]string{}
+	for _, tool := range ToolDefinitions() {
+		b, _ := json.Marshal(tool)
+		full[tool.Name] = string(b)
+	}
+	for shape, want := range map[string]string{config.ToolShapeMid: "read_file apply_patch bash", config.ToolShapeLean: "apply_patch bash"} {
+		var primary []string
+		for _, tool := range ShapeToolDefinitions(shape) {
+			b, _ := json.Marshal(tool)
+			if full[tool.Name] != string(b) {
+				t.Fatalf("%s: %s is not slbh's definition", shape, tool.Name)
+			}
+			if !sharedToolNames[tool.Name] {
+				primary = append(primary, tool.Name)
+			}
+		}
+		if got := strings.Join(primary, " "); got != want {
+			t.Fatalf("%s primary tools = %q, want %q", shape, got, want)
+		}
+	}
+	r, dir := shapedRuntime(t, config.ToolShapeLean)
+	writeFile(t, filepath.Join(dir, "a.txt"), "one\n")
+	for _, name := range []string{"read_file", "edit_file", "glob", "write_file", "exec_command", "Read"} {
+		if _, err := call(t, r, name, map[string]any{"path": "a.txt"}); err == nil {
+			t.Fatalf("%s accepted under lean", name)
+		}
+	}
+	if out, err := call(t, r, "bash", map[string]any{"script": "cat a.txt"}); err != nil || out != "one\n" {
+		t.Fatalf("bash under lean: %q %v", out, err)
+	}
+	m, dir := shapedRuntime(t, config.ToolShapeMid)
+	writeFile(t, filepath.Join(dir, "a.txt"), "one\n")
+	if out, err := call(t, m, "read_file", map[string]any{"path": "a.txt"}); err != nil || !strings.Contains(out, "one") {
+		t.Fatalf("read_file under mid: %q %v", out, err)
+	}
+	writeFile(t, filepath.Join(dir, "big.txt"), strings.Repeat("x\n", 60000))
+	if _, err := call(t, m, "read_file", map[string]any{"path": "big.txt"}); err == nil || strings.Contains(err.Error(), "read_lines") || !strings.Contains(err.Error(), "bash") {
+		t.Fatalf("mid's oversize hint: %v", err)
+	}
+	if _, err := call(t, m, "read_lines", map[string]any{"path": "a.txt", "start": 1, "end": 1}); err == nil {
+		t.Fatal("read_lines accepted under mid")
+	}
+}
+
+func TestSlbhApplyPatchTakesBothFormats(t *testing.T) {
+	r, dir := shapedRuntime(t, config.ToolShapeLean)
+	writeFile(t, filepath.Join(dir, "a.py"), "def f():\n    return 1\n\n\ndef g():\n    return 2\n")
+	// A unified diff whose hunk header miscounts its lines still applies.
+	diff := "--- a/a.py\n+++ b/a.py\n@@ -5,9 +5,9 @@\n def g():\n-    return 2\n+    return 3\n"
+	if out, err := call(t, r, "apply_patch", map[string]any{"patch": diff}); err != nil || out != "applied" {
+		t.Fatalf("miscounted unified diff: %q %v", out, err)
+	}
+	patch := "*** Begin Patch\n*** Update File: a.py\n*** Move to: b.py\n@@ def f():\n-    return 1\n+    return 10\n*** Add File: c.py\n+x = 1\n*** End Patch"
+	out, err := call(t, r, "apply_patch", map[string]any{"patch": patch})
+	if err != nil || out != "applied\nM b.py\nA c.py" {
+		t.Fatalf("begin patch: %q %v", out, err)
+	}
+	if got := readFile(t, filepath.Join(dir, "b.py")); got != "def f():\n    return 10\n\n\ndef g():\n    return 3\n" {
+		t.Fatalf("b.py = %q", got)
+	}
+	if got := readFile(t, filepath.Join(dir, "c.py")); got != "x = 1\n" {
+		t.Fatalf("c.py = %q", got)
+	}
+	// A hunk that does not match leaves every file untouched.
+	bad := "*** Begin Patch\n*** Add File: d.py\n+y = 1\n*** Update File: b.py\n@@\n-nothing here\n+x\n*** End Patch"
+	if _, err := call(t, r, "apply_patch", map[string]any{"patch": bad}); err == nil || !strings.Contains(err.Error(), "verification failed") {
+		t.Fatalf("bad hunk: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "d.py")); err == nil {
+		t.Fatal("a failed patch wrote d.py")
+	}
+}
+
+func TestCommandToolsWaitTenSecondsAndBoundTheirOutput(t *testing.T) {
+	for _, tool := range ToolDefinitions() {
+		if tool.Name == "bash" && !strings.Contains(tool.Description, "default 10,") {
+			t.Fatalf("bash description: %s", tool.Description)
+		}
+	}
+	r, _ := shapedRuntime(t, config.ToolShapeLean)
+	out, err := call(t, r, "bash", map[string]any{"script": "sleep 6; echo done"})
+	if err != nil || out != "done\n" {
+		t.Fatalf("a 6-second command should finish inline: %q %v", out, err)
+	}
+	out, err = call(t, r, "bash", map[string]any{"script": "echo first; head -c 200000 /dev/zero | tr '\\0' x; echo; echo last"})
+	if err != nil || len(out) > commandOutputTokens*4 || !strings.HasPrefix(out, "Warning: truncated output") || !strings.Contains(out, "first") || !strings.HasSuffix(out, "last\n") {
+		t.Fatalf("large output: %d bytes, %v", len(out), err)
 	}
 }
 
@@ -201,7 +322,7 @@ func TestShapesShareEverythingButPrimaryTools(t *testing.T) {
 		return names
 	}
 	base := strings.Join(shared(config.ToolShapeSlbh), "\n")
-	for _, shape := range []string{config.ToolShapeAnthropic, config.ToolShapeCodex} {
+	for _, shape := range []string{config.ToolShapeMid, config.ToolShapeLean, config.ToolShapeAnthropic, config.ToolShapeCodex} {
 		if got := strings.Join(shared(shape), "\n"); got != base {
 			t.Fatalf("%s: shared tools differ from slbh's", shape)
 		}
@@ -230,7 +351,7 @@ func TestForeignPrimaryToolsAreRefused(t *testing.T) {
 }
 
 func TestBakedPromptNamesTheShapesCommandTool(t *testing.T) {
-	for shape, want := range map[string]string{config.ToolShapeSlbh: "Your command tools are bash, python.", config.ToolShapeAnthropic: "Your command tools are Bash, python.", config.ToolShapeCodex: "Your command tools are exec_command, python."} {
+	for shape, want := range map[string]string{config.ToolShapeSlbh: "Your command tools are bash, python.", config.ToolShapeLean: "Your command tools are bash, python.", config.ToolShapeAnthropic: "Your command tools are Bash, python.", config.ToolShapeCodex: "Your command tools are exec_command, python."} {
 		r, _ := shapedRuntime(t, shape)
 		if prompt := bakedSystemPrompt(r.seat()); !strings.Contains(prompt, want) {
 			t.Fatalf("%s prompt lacks %q", shape, want)

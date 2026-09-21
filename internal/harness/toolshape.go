@@ -2,6 +2,7 @@ package harness
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -63,6 +64,8 @@ func newShapeState() *shapeState {
 
 var primaryToolNames = map[string][]string{
 	config.ToolShapeSlbh:      {"glob", "grep", "read_file", "read_bytes", "read_lines", "edit_file", "apply_patch", "write_file", "bash"},
+	config.ToolShapeMid:       {"read_file", "apply_patch", "bash"},
+	config.ToolShapeLean:      {"apply_patch", "bash"},
 	config.ToolShapeAnthropic: {"Bash", "Read", "Edit", "Write"},
 	config.ToolShapeCodex:     {"exec_command", "write_stdin", "apply_patch"},
 }
@@ -219,16 +222,9 @@ func codexPrimaryTools() []provider.Tool {
 // shape that executeShapedTool runs, and whether it is another shape's
 // primary tool, which this runtime does not offer and refuses.
 func (r *Runtime) shapedDispatch(name string) (shaped, foreign bool) {
-	if r.toolShape == config.ToolShapeSlbh {
-		for _, known := range primaryToolNames[config.ToolShapeSlbh] {
-			if known == name {
-				return false, false
-			}
-		}
-	}
 	for _, known := range primaryToolNames[r.toolShape] {
 		if known == name {
-			return r.toolShape != config.ToolShapeSlbh, false
+			return !config.NativeToolShape(r.toolShape), false
 		}
 	}
 	for shape, names := range primaryToolNames {
@@ -251,7 +247,7 @@ var sharedToolNames = map[string]bool{"python": true, "pwsh": true, "job": true,
 // arguments that are not JSON, or a missing required parameter. Shared tools
 // and the slbh shape keep slbh's handling.
 func (r *Runtime) shapedValidation(name, raw string) (string, error, bool) {
-	if r.toolShape == config.ToolShapeSlbh || sharedToolNames[name] {
+	if config.NativeToolShape(r.toolShape) || sharedToolNames[name] {
 		return "", nil, false
 	}
 	var definition *provider.Tool
@@ -716,16 +712,20 @@ func codexChunk(wall time.Duration, snap job.Snapshot, running bool, session int
 		}
 		fmt.Fprintf(&b, "Process exited with code %d\n", code)
 	}
-	tokens := approxTokens(output)
-	fmt.Fprintf(&b, "Original token count: %d\nOutput:\n", tokens)
-	if tokens <= budget {
-		b.WriteString(output)
-		return b.String()
-	}
-	keep := budget * 4 / 2
-	head, tail := output[:keep], output[len(output)-keep:]
-	fmt.Fprintf(&b, "Warning: truncated output (original token count: %d)\nTotal output lines: %d\n\n%s…%d tokens truncated…%s", tokens, strings.Count(strings.TrimSuffix(output, "\n"), "\n")+1, head, tokens-budget, tail)
+	fmt.Fprintf(&b, "Original token count: %d\nOutput:\n", approxTokens(output))
+	b.WriteString(truncateMiddle(output, budget, budget*4/2))
 	return b.String()
+}
+
+// truncateMiddle is Codex's head-and-tail truncation: output over budget
+// tokens keeps its first and last keep bytes and says what it dropped.
+func truncateMiddle(output string, budget, keep int) string {
+	tokens := approxTokens(output)
+	if tokens <= budget {
+		return output
+	}
+	head, tail := output[:keep], output[len(output)-keep:]
+	return fmt.Sprintf("Warning: truncated output (original token count: %d)\nTotal output lines: %d\n\n%s…%d tokens truncated…%s", tokens, strings.Count(strings.TrimSuffix(output, "\n"), "\n")+1, head, tokens-budget, tail)
 }
 
 type codexHunk struct {
@@ -918,12 +918,23 @@ func applyCodexHunks(file string, original string, hunks []codexHunk) (string, e
 	return strings.Join(lines, "\n") + "\n", nil
 }
 
-// codexApplyPatch verifies every file operation before writing any of them,
-// so a failed hunk leaves the tree untouched, and reports as Codex does.
+// codexApplyPatch applies a patch in Codex's format and reports as Codex does.
 func (r *Runtime) codexApplyPatch(base, patch string) string {
-	ops, err := parseCodexPatch(patch)
+	summary, err := r.applyCodexPatch(base, patch)
 	if err != nil {
 		return err.Error()
+	}
+	return "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\n" + strings.Join(summary, "\n") + "\n"
+}
+
+// applyCodexPatch applies a patch in Codex's format, verifying every file
+// operation before writing any of them so a failed hunk leaves the tree
+// untouched. It returns one "A path", "D path" or "M path" line per file, and
+// errors carry Codex's own text.
+func (r *Runtime) applyCodexPatch(base, patch string) ([]string, error) {
+	ops, err := parseCodexPatch(patch)
+	if err != nil {
+		return nil, err
 	}
 	type write struct {
 		path    string
@@ -935,7 +946,7 @@ func (r *Runtime) codexApplyPatch(base, patch string) string {
 	for _, op := range ops {
 		file, err := r.resolvePath(base, op.path)
 		if err != nil {
-			return "apply_patch verification failed: " + err.Error()
+			return nil, errors.New("apply_patch verification failed: " + err.Error())
 		}
 		switch op.kind {
 		case "A":
@@ -944,23 +955,23 @@ func (r *Runtime) codexApplyPatch(base, patch string) string {
 			summary = append(summary, "A "+op.path)
 		case "D":
 			if info, err := os.Stat(file); err != nil || info.IsDir() {
-				return fmt.Sprintf("apply_patch verification failed: Failed to read %s: No such file or directory (os error 2)", file)
+				return nil, fmt.Errorf("apply_patch verification failed: Failed to read %s: No such file or directory (os error 2)", file)
 			}
 			writes = append(writes, write{remove: file})
 			summary = append(summary, "D "+op.path)
 		case "M":
 			data, err := os.ReadFile(file)
 			if err != nil {
-				return fmt.Sprintf("apply_patch verification failed: Failed to read file to update %s: No such file or directory (os error 2)", file)
+				return nil, fmt.Errorf("apply_patch verification failed: Failed to read file to update %s: No such file or directory (os error 2)", file)
 			}
 			content, err := applyCodexHunks(file, string(data), op.hunks)
 			if err != nil {
-				return "apply_patch verification failed: " + err.Error()
+				return nil, errors.New("apply_patch verification failed: " + err.Error())
 			}
 			target, shown := file, op.path
 			if op.moveTo != "" {
 				if target, err = r.resolvePath(base, op.moveTo); err != nil {
-					return "apply_patch verification failed: " + err.Error()
+					return nil, errors.New("apply_patch verification failed: " + err.Error())
 				}
 				shown = op.moveTo
 				writes = append(writes, write{path: target, content: []byte(content)}, write{remove: file})
@@ -973,22 +984,22 @@ func (r *Runtime) codexApplyPatch(base, patch string) string {
 	for _, w := range writes {
 		if w.remove != "" {
 			if err := os.Remove(w.remove); err != nil {
-				return "apply_patch failed: " + err.Error()
+				return nil, errors.New("apply_patch failed: " + err.Error())
 			}
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(w.path), 0o755); err != nil {
-			return "apply_patch failed: " + err.Error()
+			return nil, errors.New("apply_patch failed: " + err.Error())
 		}
 		mode := os.FileMode(0o644)
 		if info, err := os.Stat(w.path); err == nil {
 			mode = info.Mode().Perm()
 		}
 		if err := atomicReplace(w.path, w.content, mode); err != nil {
-			return "apply_patch failed: " + err.Error()
+			return nil, errors.New("apply_patch failed: " + err.Error())
 		}
 	}
-	return "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\n" + strings.Join(summary, "\n") + "\n"
+	return summary, nil
 }
 
 func (r *Runtime) agentScratch(agentID string) string {

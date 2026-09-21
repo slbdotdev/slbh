@@ -937,11 +937,6 @@ func bakedSystemPrompt(a *Agent) string {
 	return prompt
 }
 
-// maxToolErrorOutput bounds the output carried back with a failing tool call. A five-second
-// command can emit a great deal, and this fleet's local models run in 48k-96k windows, so an
-// unbounded dump could cost more context than the diagnostic is worth.
-const maxToolErrorOutput = 8000
-
 // toolFailure renders a failed tool call for the model.
 //
 // It exists because the obvious version -- replacing the result with the error -- discards
@@ -960,8 +955,5 @@ func toolFailure(err error, output string) string {
 	if strings.TrimSpace(output) == "" {
 		return head
 	}
-	if len(output) > maxToolErrorOutput {
-		output = output[:maxToolErrorOutput] + "\n[output truncated]"
-	}
-	return head + "\n" + output
+	return head + "\n" + boundedOutput(output)
 }

@@ -3,6 +3,7 @@ package harness
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -43,6 +44,19 @@ func buildToolDefinitions(shape string) []provider.Tool {
 		all = codexPrimaryTools()
 	default:
 		all = append(readtools.Definitions(), slbhPrimaryTools(stringArg)...)
+		if names, ok := primaryToolNames[shape]; ok && shape != config.ToolShapeSlbh {
+			keep := map[string]bool{}
+			for _, name := range names {
+				keep[name] = true
+			}
+			subset := []provider.Tool{}
+			for _, tool := range all {
+				if keep[tool.Name] {
+					subset = append(subset, tool)
+				}
+			}
+			all = subset
+		}
 	}
 	all = append(all, []provider.Tool{
 		{Name: "pwsh", Description: commandDescription("Run a PowerShell 7 (pwsh) script on Windows. exit code is the script's exit value, or the last native command's; 1 after a terminating error."), Parameters: commandParameters()},
@@ -87,22 +101,26 @@ func buildToolDefinitions(shape string) []provider.Tool {
 func slbhPrimaryTools(stringArg func(string) map[string]any) []provider.Tool {
 	return []provider.Tool{
 		{Name: "edit_file", Description: "Replace an exact string in a file atomically.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "old": map[string]any{"type": "string"}, "new": map[string]any{"type": "string"}}, "required": []string{"path", "old", "new"}}},
-		{Name: "apply_patch", Description: "Apply a unified patch to the working tree.", Parameters: stringArg("patch")},
+		{Name: "apply_patch", Description: applyPatchDescription, Parameters: stringArg("patch")},
 		{Name: "write_file", Description: "Create a new file; refuse to overwrite an existing file.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "required": []string{"path", "content"}}},
 		{Name: "bash", Description: commandDescription(job.BashDescription()), Parameters: commandParameters()},
 	}
 }
 
+const applyPatchDescription = "Edit, add, delete or move files with one patch, applied only if every hunk matches. Either a unified diff (git apply; hunk line counts need not be exact) or:\n" +
+	"*** Begin Patch\n*** Update File: path\n@@ optional nearby line\n context\n-old\n+new\n*** Add File: path\n+line\n*** Delete File: path\n*** End Patch\n" +
+	"An Update File may be followed by *** Move to: newpath. Hunks are found by their context lines, not line numbers."
+
 func commandParameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"script": map[string]any{"type": "string"}, "cwd": map[string]any{"type": "string"},
-		"wait_seconds":       map[string]any{"type": "integer", "description": "Seconds to wait inline, clamped to 0..30; 0 backgrounds immediately. Defaults to 5."},
+		"wait_seconds":       map[string]any{"type": "integer", "description": "Seconds to wait inline, clamped to 0..30; 0 backgrounds immediately. Defaults to 10."},
 		"warn_after_seconds": map[string]any{"type": "integer", "description": "Seconds before one warning to the agent that started the job; defaults to 60. Disabled when not greater than wait_seconds."},
 	}, "required": []string{"script"}}
 }
 
 func commandDescription(specific string) string {
-	return specific + " The script is written to a file and run; the call waits up to wait_seconds (default 5, maximum 30) and returns its output if it finishes. Otherwise it keeps running as a background job, the call returns its job id and output so far, and the full result is delivered automatically when it finishes."
+	return specific + " The script is written to a file and run; the call waits up to wait_seconds (default 10, maximum 30) and returns its output if it finishes. Otherwise it keeps running as a background job, the call returns its job id and output so far, and the full result is delivered automatically when it finishes."
 }
 
 func (r *Runtime) toolDefinitions(agentID string) []provider.Tool {
@@ -156,7 +174,12 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 	}
 	switch name {
 	case "glob", "grep", "read_file", "read_bytes", "read_lines":
-		return readtools.Execute(base, name, raw)
+		out, err := readtools.Execute(base, name, raw)
+		if err != nil && r.toolShape != config.ToolShapeSlbh {
+			// The subset shapes have no range readers to point at.
+			err = errors.New(strings.Replace(err.Error(), "use read_lines or read_bytes instead", "read a range with bash instead", 1))
+		}
+		return out, err
 	case "edit_file":
 		return r.editFile(base, value(a.Values, "path"), value(a.Values, "old"), value(a.Values, "new"))
 	case "apply_patch":
@@ -395,12 +418,13 @@ func (r *Runtime) applyPatch(base, patch string) (string, error) {
 		return "", fmt.Errorf("patch is empty")
 	}
 	if strings.HasPrefix(strings.TrimSpace(patch), "*** Begin Patch") {
-		if err := r.applyAnthropicPatch(base, patch); err != nil {
+		summary, err := r.applyCodexPatch(base, patch)
+		if err != nil {
 			return "", err
 		}
-		return "applied", nil
+		return "applied\n" + strings.Join(summary, "\n"), nil
 	}
-	cmd := exec.Command("git", "apply", "--unsafe-paths", "--whitespace=nowarn", "-")
+	cmd := exec.Command("git", "apply", "--unsafe-paths", "--whitespace=nowarn", "--recount", "-")
 	cmd.Dir = base
 	cmd.Stdin = strings.NewReader(patch)
 	var stderr bytes.Buffer
@@ -409,145 +433,6 @@ func (r *Runtime) applyPatch(base, patch string) (string, error) {
 		return "", fmt.Errorf("git apply: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return "applied", nil
-}
-
-func (r *Runtime) applyAnthropicPatch(base, patch string) error {
-	lines := strings.Split(strings.ReplaceAll(patch, "\r\n", "\n"), "\n")
-	if len(lines) < 2 || strings.TrimSpace(lines[0]) != "*** Begin Patch" {
-		return fmt.Errorf("patch must start with *** Begin Patch")
-	}
-	for i := 1; i < len(lines); {
-		if lines[i] == "" || lines[i] == "*** End Patch" {
-			i++
-			continue
-		}
-		header := lines[i]
-		if strings.HasPrefix(header, "*** Add File: ") {
-			path := strings.TrimSpace(strings.TrimPrefix(header, "*** Add File: "))
-			i++
-			var content []string
-			for i < len(lines) && !strings.HasPrefix(lines[i], "*** ") {
-				if !strings.HasPrefix(lines[i], "+") {
-					return fmt.Errorf("add file %q contains a non-add line", path)
-				}
-				content = append(content, strings.TrimPrefix(lines[i], "+"))
-				i++
-			}
-			file, err := r.resolvePath(base, path)
-			if err != nil {
-				return err
-			}
-			if _, err := os.Stat(file); err == nil {
-				return fmt.Errorf("add file %q already exists", path)
-			}
-			if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-				return err
-			}
-			if err := os.WriteFile(file, []byte(strings.Join(content, "\n")), 0o600); err != nil {
-				return err
-			}
-			continue
-		}
-		if strings.HasPrefix(header, "*** Delete File: ") {
-			path := strings.TrimSpace(strings.TrimPrefix(header, "*** Delete File: "))
-			file, err := r.resolvePath(base, path)
-			if err != nil {
-				return err
-			}
-			if err := os.Remove(file); err != nil {
-				return fmt.Errorf("delete file %q: %w", path, err)
-			}
-			i++
-			continue
-		}
-		if strings.HasPrefix(header, "*** Update File: ") {
-			path := strings.TrimSpace(strings.TrimPrefix(header, "*** Update File: "))
-			file, err := r.resolvePath(base, path)
-			if err != nil {
-				return err
-			}
-			original, err := os.ReadFile(file)
-			if err != nil {
-				return err
-			}
-			hadNewline := strings.HasSuffix(string(original), "\n")
-			fileLines := strings.Split(strings.TrimSuffix(string(original), "\n"), "\n")
-			if len(fileLines) == 1 && fileLines[0] == "" && !hadNewline {
-				fileLines = nil
-			}
-			i++
-			for i < len(lines) && !strings.HasPrefix(lines[i], "*** ") {
-				if !strings.HasPrefix(lines[i], "@@") {
-					i++
-					continue
-				}
-				i++
-				var oldLines, newLines []string
-				for i < len(lines) && !strings.HasPrefix(lines[i], "@@") && !strings.HasPrefix(lines[i], "*** ") {
-					line := lines[i]
-					if line == "" {
-						oldLines = append(oldLines, "")
-						newLines = append(newLines, "")
-						i++
-						continue
-					}
-					switch line[0] {
-					case ' ':
-						oldLines = append(oldLines, line[1:])
-						newLines = append(newLines, line[1:])
-					case '-':
-						oldLines = append(oldLines, line[1:])
-					case '+':
-						newLines = append(newLines, line[1:])
-					default:
-						return fmt.Errorf("invalid update line %q", line)
-					}
-					i++
-				}
-				at := findLines(fileLines, oldLines)
-				if at < 0 {
-					return fmt.Errorf("hunk for %q did not match", path)
-				}
-				replaced := append([]string{}, fileLines[:at]...)
-				replaced = append(replaced, newLines...)
-				replaced = append(replaced, fileLines[at+len(oldLines):]...)
-				fileLines = replaced
-			}
-			content := strings.Join(fileLines, "\n")
-			if hadNewline {
-				content += "\n"
-			}
-			if err := atomicReplace(file, []byte(content), infoMode(file)); err != nil {
-				return err
-			}
-			continue
-		}
-		return fmt.Errorf("unknown patch header %q", header)
-	}
-	return nil
-}
-
-func findLines(haystack, needle []string) int {
-	if len(needle) == 0 {
-		return len(haystack)
-	}
-	found := -1
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		match := true
-		for j := range needle {
-			if haystack[i+j] != needle[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			if found >= 0 {
-				return -2
-			}
-			found = i
-		}
-	}
-	return found
 }
 
 func (r *Runtime) executeCommandTool(agentID, base, name string, values map[string]any) (string, error) {
@@ -565,7 +450,7 @@ func (r *Runtime) executeCommandTool(agentID, base, name string, values map[stri
 	}
 	wait := intValue(values, "wait_seconds")
 	if _, ok := values["wait_seconds"]; !ok {
-		wait = 5
+		wait = 10
 	}
 	if wait < 0 {
 		wait = 0
@@ -600,6 +485,7 @@ func (r *Runtime) executeCommandTool(agentID, base, name string, values map[stri
 	if stderr != "" {
 		output += "\nstderr:\n" + stderr
 	}
+	output = boundedOutput(output)
 	if snap.Status == job.Killed {
 		if output == "" {
 			return fmt.Sprintf("job %s killed", snap.ID), nil
@@ -613,11 +499,15 @@ func (r *Runtime) executeCommandTool(agentID, base, name string, values map[stri
 }
 
 func backgroundOutput(s job.Snapshot, stdout, stderr string, waited time.Duration) string {
-	return fmt.Sprintf("job %s is still running after %s; its result will be delivered automatically when it finishes\nstdout:\n%s\nstderr:\n%s", s.ID, waited, tailOutput(stdout), tailOutput(stderr))
+	return fmt.Sprintf("job %s is still running after %s; its result will be delivered automatically when it finishes\nstdout:\n%s\nstderr:\n%s", s.ID, waited, boundedOutput(stdout), boundedOutput(stderr))
 }
-func tailOutput(s string) string {
-	if len(s) <= 8000 {
-		return s
-	}
-	return "[output truncated]\n" + s[len(s)-8000:]
+
+// commandOutputTokens bounds what a command tool returns: twice Codex's
+// default max_output_tokens, cut the way Codex cuts it.
+const commandOutputTokens = 20000
+
+// boundedOutput cuts output to commandOutputTokens. Unlike Codex it leaves
+// room for its own notice, so a result already cut is not cut again.
+func boundedOutput(output string) string {
+	return truncateMiddle(output, commandOutputTokens, commandOutputTokens*2-128)
 }
