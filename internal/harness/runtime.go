@@ -90,6 +90,11 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	variant, err := config.NormalizeOutputVariant(cfg.OutputVariant)
+	if err != nil {
+		return nil, err
+	}
+	outputVariant.Store(variant)
 	promptVariant, err := config.NormalizePromptVariant(cfg.PromptVariant)
 	if err != nil {
 		return nil, err
@@ -143,7 +148,7 @@ func New(cfg config.Config, options Options) (*Runtime, error) {
 	r.seatID = seat.ID
 	r.mu.Unlock()
 	seat.start()
-	r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "runtime", Text: "runtime started", Metadata: map[string]any{"tool_shape": r.toolShape, "prompt_variant": r.promptVariant}})
+	r.emit(seam.Event{AgentID: seat.ID, AgentTitle: seat.Title, Kind: "runtime", Text: "runtime started", Metadata: map[string]any{"tool_shape": r.toolShape, "prompt_variant": r.promptVariant, "output_variant": outputVariant.Load()}})
 	return r, nil
 }
 

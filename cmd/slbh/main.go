@@ -80,6 +80,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "slbh:", err)
 		os.Exit(2)
 	}
+	if _, err := config.NormalizeOutputVariant(loaded.OutputVariant); err != nil {
+		fmt.Fprintln(os.Stderr, "slbh:", err)
+		os.Exit(2)
+	}
 	// Whether a prompt flag was SUPPLIED, not whether it is non-empty: `slbh -p ""` is a
 	// caller who meant to run headless and got the prompt wrong, and silently opening the
 	// TUI instead would strand a script on a terminal it does not have.

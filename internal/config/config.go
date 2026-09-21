@@ -67,6 +67,10 @@ type Config struct {
 	// one of PromptVariants; empty is the branch default. It is read from
 	// SLBH_PROMPT_VARIANT only and is never persisted.
 	PromptVariant string
+	// OutputVariant selects how an over-limit command output is cut, one of
+	// OutputVariants; empty is the head-and-tail cut. It is read from
+	// SLBH_OUTPUT_VARIANT only and is never persisted.
+	OutputVariant string
 	// toolShapeFile is the persisted value, kept apart so that Save never
 	// writes an environment or flag override back into config.json.
 	toolShapeFile string
@@ -194,6 +198,7 @@ func Load() Config {
 		cfg.ToolShape = shape
 	}
 	cfg.PromptVariant = strings.TrimSpace(os.Getenv("SLBH_PROMPT_VARIANT"))
+	cfg.OutputVariant = strings.TrimSpace(os.Getenv("SLBH_OUTPUT_VARIANT"))
 	if cfg.LeafModel == "" {
 		cfg.LeafModel = cfg.SubagentModel
 	}
@@ -436,4 +441,32 @@ func NormalizePromptVariant(variant string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("unknown prompt variant %q; expected one of %s", variant, strings.Join(PromptVariants, ", "))
+}
+
+// Output variants for the T7 follow-up to the large-input test (slb-org
+// org/tool-large-t7-plan-2026-09-21.md). Headtail, the default, keeps the
+// first and last part of an over-limit output; hint adds "read a range
+// instead" to that notice; short shows none of the output, only its size and
+// the same hint, as read_file's refusal of a large file does.
+const (
+	OutputVariantHeadTail = "headtail"
+	OutputVariantHint     = "hint"
+	OutputVariantShort    = "short"
+)
+
+// OutputVariants lists the accepted SLBH_OUTPUT_VARIANT values.
+var OutputVariants = []string{OutputVariantHeadTail, OutputVariantHint, OutputVariantShort}
+
+// NormalizeOutputVariant maps empty to headtail and refuses an unknown value.
+func NormalizeOutputVariant(variant string) (string, error) {
+	variant = strings.TrimSpace(variant)
+	if variant == "" {
+		return OutputVariantHeadTail, nil
+	}
+	for _, known := range OutputVariants {
+		if variant == known {
+			return variant, nil
+		}
+	}
+	return "", fmt.Errorf("unknown output variant %q; expected one of %s", variant, strings.Join(OutputVariants, ", "))
 }

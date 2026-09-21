@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/slbdotdev/slbh/internal/config"
@@ -532,8 +533,22 @@ func backgroundOutput(s job.Snapshot, stdout, stderr string, waited time.Duratio
 // default max_output_tokens, cut the way Codex cuts it.
 const commandOutputTokens = 20000
 
+// outputVariant is the process's config.OutputVariants value, set once by
+// NewRuntime. It is process-wide because boundedOutput's callers have no
+// runtime in hand; it exists only for the T7 follow-up experiment.
+var outputVariant atomic.Value
+
 // boundedOutput cuts output to commandOutputTokens. Unlike Codex it leaves
 // room for its own notice, so a result already cut is not cut again.
 func boundedOutput(output string) string {
-	return truncateMiddle(output, commandOutputTokens, commandOutputTokens*2-128)
+	variant, _ := outputVariant.Load().(string)
+	tokens := approxTokens(output)
+	if variant == config.OutputVariantShort && tokens > commandOutputTokens {
+		return fmt.Sprintf("output not shown: %d tokens, %d lines, over the %d-token limit; read a range instead", tokens, strings.Count(strings.TrimSuffix(output, "\n"), "\n")+1, commandOutputTokens)
+	}
+	cut := truncateMiddle(output, commandOutputTokens, commandOutputTokens*2-128)
+	if variant == config.OutputVariantHint && tokens > commandOutputTokens {
+		cut = strings.Replace(cut, ")\nTotal output lines:", "); read a range instead\nTotal output lines:", 1)
+	}
+	return cut
 }
