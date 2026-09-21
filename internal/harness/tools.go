@@ -102,7 +102,7 @@ func buildToolDefinitions(shape, variant string) []provider.Tool {
 func slbhPrimaryTools(stringArg func(string) map[string]any, variant string) []provider.Tool {
 	patch := applyPatchDescription
 	if variant == config.PromptVariantFacts {
-		patch += applyPatchFacts
+		patch = strings.TrimSuffix(applyPatchDescription, applyPatchPlacement) + applyPatchFacts
 	}
 	return []provider.Tool{
 		{Name: "edit_file", Description: "Replace an exact string in a file atomically.", Parameters: map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "old": map[string]any{"type": "string"}, "new": map[string]any{"type": "string"}}, "required": []string{"path", "old", "new"}}},
@@ -114,11 +114,16 @@ func slbhPrimaryTools(stringArg func(string) map[string]any, variant string) []p
 
 const applyPatchDescription = "Edit, add, delete or move files with one patch, applied only if every hunk matches. Either a unified diff (git apply; hunk line counts need not be exact) or:\n" +
 	"*** Begin Patch\n*** Update File: path\n@@ optional nearby line\n context\n-old\n+new\n*** Add File: path\n+line\n*** Delete File: path\n*** End Patch\n" +
-	"An Update File may be followed by *** Move to: newpath. In this format hunks are found by their context lines, not line numbers; a unified diff also uses its line numbers."
+	"An Update File may be followed by *** Move to: newpath." + applyPatchPlacement
 
-// applyPatchFacts and commandOutputFacts are the facts variant's additions:
-// how a hunk is placed and what happens to long output, stated as behaviour
-// and not as advice (seekLines, applyPatch and boundedOutput).
+// applyPatchPlacement is the description's closing sentence on hunk
+// placement; the facts variant replaces it with applyPatchFacts.
+const applyPatchPlacement = " In this format hunks are found by their context lines, not line numbers; a unified diff also uses its line numbers."
+
+// applyPatchFacts and commandOutputFacts are the facts variant's text: how a
+// hunk is placed, replacing applyPatchPlacement, and what happens to long
+// output, appended. Behaviour, not advice (seekLines, applyPatch and
+// boundedOutput).
 const applyPatchFacts = " A unified diff is applied with git apply, which places each hunk where its context lines match nearest its stated line. In the other format, each @@ line and hunk matches the first occurrence after the previous hunk in that file, comparing lines exactly, then ignoring trailing whitespace, then ignoring whitespace at both ends."
 
 const commandOutputFacts = " Output over 20,000 tokens (about 80,000 characters) keeps its first and last 40,000 characters and states how many tokens were dropped between them, whether the run finished, failed or is still in the background."

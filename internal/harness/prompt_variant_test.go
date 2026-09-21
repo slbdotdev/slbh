@@ -52,7 +52,7 @@ func TestMainPromptVariantKeepsTheOldPrompt(t *testing.T) {
 	}
 }
 
-// facts changes exactly four descriptions, each by a suffix, and nothing else:
+// facts changes exactly four descriptions and nothing else:
 // the arm it serves has to differ from lean only in those words.
 func TestFactsPromptVariantOnlyExtendsCommandAndPatchDescriptions(t *testing.T) {
 	info, facts := variantRuntime(t, config.PromptVariantInfo), variantRuntime(t, config.PromptVariantFacts)
@@ -73,12 +73,16 @@ func TestFactsPromptVariantOnlyExtendsCommandAndPatchDescriptions(t *testing.T) 
 			continue
 		}
 		changed[base[i].Name] = true
-		suffix := commandOutputFacts
+		want := base[i].Description + commandOutputFacts
 		if base[i].Name == "apply_patch" {
-			suffix = applyPatchFacts
+			// The placement sentence is replaced, not contradicted.
+			want = strings.TrimSuffix(base[i].Description, applyPatchPlacement) + applyPatchFacts
+			if strings.Contains(extended[i].Description, "not line numbers") {
+				t.Fatal("facts apply_patch still says hunks ignore line numbers")
+			}
 		}
-		if extended[i].Description != base[i].Description+suffix {
-			t.Fatalf("%s description is not the base plus its fact suffix: %q", base[i].Name, extended[i].Description)
+		if extended[i].Description != want {
+			t.Fatalf("%s description is not its fact variant: %q", base[i].Name, extended[i].Description)
 		}
 	}
 	for _, name := range []string{"apply_patch", "bash", "python"} {
