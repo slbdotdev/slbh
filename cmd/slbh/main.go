@@ -34,8 +34,8 @@ Runtime flags:
       --workdir PATH       directory the agent works in (default: cwd)
       --model SLUG         model for the runtime Seat
       --effort LEVEL       reasoning effort for the runtime Seat
-      --tool-shape SHAPE   primary tools for native agents: slbh (default),
-                           mid, lean, anthropic or codex; overrides
+      --tool-shape SHAPE   primary tools for native agents: lean (default),
+                           mid, full, anthropic or codex; overrides
                            SLBH_TOOL_SHAPE and config.json's tool_shape
 
 Exit status: 0 clean shutdown, 1 runtime or protocol error, 2 usage.
@@ -54,7 +54,7 @@ func main() {
 	fs.StringVar(&workdir, "workdir", "", "directory the agent works in")
 	fs.StringVar(&model, "model", "", "model for the runtime Seat")
 	fs.StringVar(&effort, "effort", "", "reasoning effort for the runtime Seat")
-	fs.StringVar(&toolShape, "tool-shape", "", "primary tool shape: slbh, mid, lean, anthropic or codex")
+	fs.StringVar(&toolShape, "tool-shape", "", "primary tool shape: lean (default), mid, full, anthropic or codex")
 	fs.BoolVar(&headlessMode, "headless", false, "run the persistent JSONL runtime protocol")
 	fs.BoolVar(&enableIntern, "intern", false, "run the read-only Intern watcher")
 

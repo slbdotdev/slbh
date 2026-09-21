@@ -31,10 +31,13 @@ func TestToolShapePrecedenceAndPersistence(t *testing.T) {
 }
 
 func TestNormalizeToolShape(t *testing.T) {
-	for input, want := range map[string]string{"": ToolShapeSlbh, " codex ": ToolShapeCodex, "anthropic": ToolShapeAnthropic, "slbh": ToolShapeSlbh} {
+	for input, want := range map[string]string{"": ToolShapeLean, " codex ": ToolShapeCodex, "anthropic": ToolShapeAnthropic, "full": ToolShapeFull, "mid": ToolShapeMid, "lean": ToolShapeLean} {
 		if got, err := NormalizeToolShape(input); err != nil || got != want {
 			t.Fatalf("%q = %q, %v", input, got, err)
 		}
+	}
+	if _, err := NormalizeToolShape("slbh"); err == nil {
+		t.Fatal("the retired name slbh was accepted")
 	}
 	if _, err := NormalizeToolShape("Anthropic"); err == nil {
 		t.Fatal("a near miss was accepted")

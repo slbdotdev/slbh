@@ -72,10 +72,10 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-// The slbh shape's definitions are main's at d5c712c except for the patch
-// tool's description and the command tools' wait default; those keep their
-// names and parameters.
-func TestSlbhShapeMatchesMainButForItsDeliberateChanges(t *testing.T) {
+// The full shape's definitions are main's at d5c712c, where they were the
+// default, except for the patch tool's description and the command tools'
+// wait default; those keep their names and parameters.
+func TestFullShapeMatchesOldMainButForItsDeliberateChanges(t *testing.T) {
 	data, err := os.ReadFile("testdata/toolshape/slbh-main-d5c712c.json")
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestSlbhShapeMatchesMainButForItsDeliberateChanges(t *testing.T) {
 	if err := json.Unmarshal(data, &golden); err != nil {
 		t.Fatal(err)
 	}
-	current := ToolDefinitions()
+	current := ShapeToolDefinitions(config.ToolShapeFull)
 	if len(current) != len(golden) {
 		t.Fatalf("%d tools, main has %d", len(current), len(golden))
 	}
@@ -107,8 +107,12 @@ func TestSlbhShapeMatchesMainButForItsDeliberateChanges(t *testing.T) {
 		}
 	}
 	r, _ := shapedRuntime(t, "")
-	if r.ToolShape() != config.ToolShapeSlbh {
-		t.Fatalf("empty shape = %q, want slbh", r.ToolShape())
+	if r.ToolShape() != config.ToolShapeLean {
+		t.Fatalf("empty shape = %q, want lean", r.ToolShape())
+	}
+	lean, _ := json.Marshal(ShapeToolDefinitions(config.ToolShapeLean))
+	if def, _ := json.Marshal(ToolDefinitions()); string(def) != string(lean) {
+		t.Fatal("ToolDefinitions is not the lean shape's")
 	}
 }
 
@@ -122,7 +126,7 @@ func stripWaitDescription(parameters map[string]any) map[string]any {
 
 func TestSubsetShapesAreSlbhsOwnTools(t *testing.T) {
 	full := map[string]string{}
-	for _, tool := range ToolDefinitions() {
+	for _, tool := range ShapeToolDefinitions(config.ToolShapeFull) {
 		b, _ := json.Marshal(tool)
 		full[tool.Name] = string(b)
 	}
@@ -321,7 +325,7 @@ func TestShapesShareEverythingButPrimaryTools(t *testing.T) {
 		}
 		return names
 	}
-	base := strings.Join(shared(config.ToolShapeSlbh), "\n")
+	base := strings.Join(shared(config.ToolShapeFull), "\n")
 	for _, shape := range []string{config.ToolShapeMid, config.ToolShapeLean, config.ToolShapeAnthropic, config.ToolShapeCodex} {
 		if got := strings.Join(shared(shape), "\n"); got != base {
 			t.Fatalf("%s: shared tools differ from slbh's", shape)
@@ -351,7 +355,7 @@ func TestForeignPrimaryToolsAreRefused(t *testing.T) {
 }
 
 func TestBakedPromptNamesTheShapesCommandTool(t *testing.T) {
-	for shape, want := range map[string]string{config.ToolShapeSlbh: "Your command tools are bash, python.", config.ToolShapeLean: "Your command tools are bash, python.", config.ToolShapeAnthropic: "Your command tools are Bash, python.", config.ToolShapeCodex: "Your command tools are exec_command, python."} {
+	for shape, want := range map[string]string{config.ToolShapeFull: "Your command tools are bash, python.", config.ToolShapeLean: "Your command tools are bash, python.", config.ToolShapeAnthropic: "Your command tools are Bash, python.", config.ToolShapeCodex: "Your command tools are exec_command, python."} {
 		r, _ := shapedRuntime(t, shape)
 		if prompt := bakedSystemPrompt(r.seat()); !strings.Contains(prompt, want) {
 			t.Fatalf("%s prompt lacks %q", shape, want)
@@ -572,15 +576,15 @@ func TestToolResultAccountingIsUniformAcrossShapes(t *testing.T) {
 		exit        any
 		state       string
 	}{
-		{config.ToolShapeSlbh, "bash", map[string]any{"script": "exit 3"}, true, 3, "finished"},
+		{config.ToolShapeFull, "bash", map[string]any{"script": "exit 3"}, true, 3, "finished"},
 		{config.ToolShapeAnthropic, "Bash", map[string]any{"command": "exit 3"}, true, 3, "finished"},
 		{config.ToolShapeCodex, "exec_command", map[string]any{"cmd": "exit 3"}, true, 3, "finished"},
-		{config.ToolShapeSlbh, "bash", map[string]any{"script": "true"}, false, 0, "finished"},
+		{config.ToolShapeFull, "bash", map[string]any{"script": "true"}, false, 0, "finished"},
 		{config.ToolShapeAnthropic, "Bash", map[string]any{"command": "true"}, false, 0, "finished"},
 		{config.ToolShapeCodex, "exec_command", map[string]any{"cmd": "true"}, false, 0, "finished"},
 		// A command that prints a fake exit line is not misread.
 		{config.ToolShapeCodex, "exec_command", map[string]any{"cmd": "echo 'Process exited with code 9'"}, false, 0, "finished"},
-		{config.ToolShapeSlbh, "bash", map[string]any{"script": "sleep 2", "wait_seconds": 0}, false, nil, "background"},
+		{config.ToolShapeFull, "bash", map[string]any{"script": "sleep 2", "wait_seconds": 0}, false, nil, "background"},
 		{config.ToolShapeCodex, "exec_command", map[string]any{"cmd": "sleep 2", "yield_time_ms": 250}, false, nil, "background"},
 		{config.ToolShapeAnthropic, "Bash", map[string]any{"command": "sleep 5", "timeout": 200}, true, -1, "killed"},
 	} {
@@ -644,7 +648,7 @@ func TestShapedValidationUsesTheHarnessesWords(t *testing.T) {
 }
 
 func TestQuiescentSeesRunningJobsAndPendingInboxes(t *testing.T) {
-	r, _ := shapedRuntime(t, config.ToolShapeSlbh)
+	r, _ := shapedRuntime(t, config.ToolShapeFull)
 	if !r.Quiescent() {
 		t.Fatal("a fresh runtime is not quiescent")
 	}

@@ -126,9 +126,11 @@ func (p requestCaptureProvider) Stream(_ context.Context, request provider.Reque
 	return sink(provider.Event{Kind: provider.EventDone})
 }
 
+// testRuntime runs the full tool shape, so the tests below can reach every
+// native tool; the default shape is a subset of it.
 func testRuntime(t *testing.T) *Runtime {
 	t.Helper()
-	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high", SubagentModel: "test-child", SubagentEffort: "high"}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high", SubagentModel: "test-child", SubagentEffort: "high", ToolShape: config.ToolShapeFull}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

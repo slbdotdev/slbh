@@ -21,10 +21,11 @@ import (
 
 const scientificPythonPackageNames = "numpy, scipy, pandas, matplotlib, sympy, rebound, astropy, skyfield, jplephem"
 
-// ToolDefinitions is the stable tool prefix sent to every provider request.
-// Keep ordering stable: provider prefix caching keys include this schema.
+// ToolDefinitions is the default shape's stable tool prefix, sent to every
+// provider request. Keep ordering stable: provider prefix caching keys
+// include this schema.
 func ToolDefinitions() []provider.Tool {
-	return buildToolDefinitions(config.ToolShapeSlbh)
+	return buildToolDefinitions(config.ToolShapeLean)
 }
 
 // ShapeToolDefinitions is ToolDefinitions for a named tool shape.
@@ -44,7 +45,7 @@ func buildToolDefinitions(shape string) []provider.Tool {
 		all = codexPrimaryTools()
 	default:
 		all = append(readtools.Definitions(), slbhPrimaryTools(stringArg)...)
-		if names, ok := primaryToolNames[shape]; ok && shape != config.ToolShapeSlbh {
+		if names, ok := primaryToolNames[shape]; ok && shape != config.ToolShapeFull {
 			keep := map[string]bool{}
 			for _, name := range names {
 				keep[name] = true
@@ -175,7 +176,7 @@ func (r *Runtime) ExecuteTool(agentID, name, raw string) (string, error) {
 	switch name {
 	case "glob", "grep", "read_file", "read_bytes", "read_lines":
 		out, err := readtools.Execute(base, name, raw)
-		if err != nil && r.toolShape != config.ToolShapeSlbh {
+		if err != nil && r.toolShape != config.ToolShapeFull {
 			// The subset shapes have no range readers to point at.
 			err = errors.New(strings.Replace(err.Error(), "use read_lines or read_bytes instead", "read a range with bash instead", 1))
 		}

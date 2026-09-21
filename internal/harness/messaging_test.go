@@ -82,7 +82,7 @@ func toolEvent(index int, id, name, args string) provider.Event {
 func messagingRuntime(t *testing.T) (*Runtime, *boundaryProvider) {
 	t.Helper()
 	p := &boundaryProvider{calls: make(chan pendingInference, 16)}
-	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "passive", SubagentModel: "passive", LeafModel: "passive"}, Options{Provider: func(model string) (provider.Provider, error) {
+	r, err := New(config.Config{Home: t.TempDir(), SeatModel: "passive", SubagentModel: "passive", LeafModel: "passive", ToolShape: config.ToolShapeFull}, Options{Provider: func(model string) (provider.Provider, error) {
 		if model == "active" {
 			return p, nil
 		}

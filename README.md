@@ -396,26 +396,37 @@ call/result pairs; the next inference receives all of that work and the new
 messages. A response without tools cannot end the turn while messages are
 pending. Message transport is independent of the lossy UI event channel.
 
-Available tools are:
+Available tools, in the default `lean` shape, are:
 
-- Files: `glob`, `grep`, `read_file`, `read_bytes`, `read_lines`, `edit_file`,
-  `apply_patch`, and `write_file`.
-- Jobs: `bash` and, on Windows, `pwsh`; `python` uses the managed scientific
-  environment. `job` lists, reads, or kills jobs with its `action` field.
+- Files and shell: `apply_patch` and `bash`, and on Windows `pwsh`. Reading,
+  searching and most editing happen through the shell. `apply_patch` takes
+  either a unified diff, applied with `git apply --recount` so hunk line
+  counts need not be exact, or Codex's `*** Begin Patch` format, whose hunks
+  are found by their context lines. A patch applies only if every hunk
+  matches.
+- Jobs: `python` uses the managed scientific environment. `job` lists, reads,
+  or kills jobs with its `action` field.
 - Agents: `list_subagents`, `launch_subagent`, `msg_subagent`, and
   `end_subagent`.
 
 ### Tool shapes
 
-The files and shell tools above are the default `slbh` **tool shape**. Two
-other shapes replace just that primary set with the tools another harness
-gives its model, and leave everything else unchanged: `python`, `pwsh`, `job`,
-the agent tools and the prompt, apart from the sentence naming the command
-tools.
+The files and shell tools above are the default `lean` **tool shape**. The
+other shapes replace just that primary set and leave everything else
+unchanged: `python`, `pwsh`, `job`, the agent tools and the prompt, apart from
+the sentence naming the command tools. `mid` and `full` are slbh's own tools
+and texts; `anthropic` and `codex` reproduce another harness's.
+
+The default was chosen by measurement. On GLM 5.3 Flash, over 180 trials,
+`lean` and `mid` each cost about 0.72× `full`'s tokens at equal correctness,
+and did not differ from each other (slb-org `org/tool-lean-2026-09-21.md`).
+The other shapes stay selectable for experiments.
 
 | shape | primary tools | reproduces |
 | --- | --- | --- |
-| `slbh` (default) | `glob`, `grep`, `read_file`, `read_bytes`, `read_lines`, `edit_file`, `apply_patch`, `write_file`, `bash` | this harness |
+| `lean` (default) | `apply_patch`, `bash` | this harness |
+| `mid` | `read_file`, `apply_patch`, `bash` | this harness |
+| `full` | `glob`, `grep`, `read_file`, `read_bytes`, `read_lines`, `edit_file`, `apply_patch`, `write_file`, `bash` | this harness, before 2026-09-21 |
 | `anthropic` | `Bash`, `Read`, `Edit`, `Write` | Claude Code 2.1.278 |
 | `codex` | `exec_command`, `write_stdin`, `apply_patch` | Codex CLI 0.155.1 |
 
@@ -504,8 +515,11 @@ File arguments may be absolute or relative; relative paths resolve against the
 active agent's working directory. slbh does not add a filesystem permission
 boundary, so the operating system determines whether a requested path or
 working directory is usable. Reads and job output are bounded. `bash`, `pwsh`,
-and `python` start a job, wait up to `wait_seconds` (default five seconds), and
-background it if it is still running; `wait_seconds: 0` backgrounds immediately.
+and `python` start a job, wait up to `wait_seconds` (default ten seconds, as
+Codex), and background it if it is still running; `wait_seconds: 0`
+backgrounds immediately. Their output, and the output carried with a failed
+call, is cut the way Codex cuts it — head and tail kept, with a notice of what
+was dropped — at 20,000 tokens, twice Codex's default.
 Jobs and agent activity are recorded in the
 active session transcript.
 

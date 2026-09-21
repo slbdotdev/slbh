@@ -63,9 +63,9 @@ func newShapeState() *shapeState {
 }
 
 var primaryToolNames = map[string][]string{
-	config.ToolShapeSlbh:      {"glob", "grep", "read_file", "read_bytes", "read_lines", "edit_file", "apply_patch", "write_file", "bash"},
-	config.ToolShapeMid:       {"read_file", "apply_patch", "bash"},
 	config.ToolShapeLean:      {"apply_patch", "bash"},
+	config.ToolShapeMid:       {"read_file", "apply_patch", "bash"},
+	config.ToolShapeFull:      {"glob", "grep", "read_file", "read_bytes", "read_lines", "edit_file", "apply_patch", "write_file", "bash"},
 	config.ToolShapeAnthropic: {"Bash", "Read", "Edit", "Write"},
 	config.ToolShapeCodex:     {"exec_command", "write_stdin", "apply_patch"},
 }

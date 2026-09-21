@@ -59,8 +59,8 @@ type Config struct {
 	SubagentModel  string
 	LeafModel      string
 	SubagentEffort string
-	// ToolShape selects the native agents' primary tool set: ToolShapeSlbh,
-	// ToolShapeAnthropic or ToolShapeCodex. Empty means slbh. SLBH_TOOL_SHAPE
+	// ToolShape selects the native agents' primary tool set, one of
+	// ToolShapes. Empty means lean. SLBH_TOOL_SHAPE
 	// overrides the file; ValidateToolShape refuses anything else.
 	ToolShape string
 	// toolShapeFile is the persisted value, kept apart so that Save never
@@ -366,34 +366,36 @@ func getenv(name, fallback string) string {
 	return fallback
 }
 
-// Tool shapes. slbh is the harness's own set and the default; mid and lean
-// are subsets of it with the same tools and texts; anthropic and codex
-// reproduce the primary tools of Claude Code and the Codex CLI.
+// Tool shapes. lean is slbh's default: bash and apply_patch as the primary
+// tools. mid adds read_file and full is slbh's original set; both keep slbh's
+// own tools and texts. anthropic and codex reproduce the primary tools of
+// Claude Code and the Codex CLI. On GLM, lean and mid cost ~0.72x full's
+// tokens at equal correctness (slb-org org/tool-lean-2026-09-21.md).
 const (
-	ToolShapeSlbh      = "slbh"
-	ToolShapeMid       = "mid"
 	ToolShapeLean      = "lean"
+	ToolShapeMid       = "mid"
+	ToolShapeFull      = "full"
 	ToolShapeAnthropic = "anthropic"
 	ToolShapeCodex     = "codex"
 )
 
 // ToolShapes lists the accepted tool_shape values in documentation order.
-var ToolShapes = []string{ToolShapeSlbh, ToolShapeMid, ToolShapeLean, ToolShapeAnthropic, ToolShapeCodex}
+var ToolShapes = []string{ToolShapeLean, ToolShapeMid, ToolShapeFull, ToolShapeAnthropic, ToolShapeCodex}
 
-// NativeToolShape reports whether shape is slbh's own tool set or a subset of
-// it, executed by slbh's own handlers.
+// NativeToolShape reports whether shape is one of slbh's own tool sets,
+// executed by slbh's own handlers.
 func NativeToolShape(shape string) bool {
-	return shape == ToolShapeSlbh || shape == ToolShapeMid || shape == ToolShapeLean
+	return shape == ToolShapeLean || shape == ToolShapeMid || shape == ToolShapeFull
 }
 
-// NormalizeToolShape maps empty to slbh and refuses an unknown value. There is
+// NormalizeToolShape maps empty to lean and refuses an unknown value. There is
 // no fallback: a run on the wrong tool set looks exactly like a run on the
 // right one, so a typo has to stop the program rather than quietly select the
 // default.
 func NormalizeToolShape(shape string) (string, error) {
 	shape = strings.TrimSpace(shape)
 	if shape == "" {
-		return ToolShapeSlbh, nil
+		return ToolShapeLean, nil
 	}
 	for _, known := range ToolShapes {
 		if shape == known {

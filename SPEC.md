@@ -228,12 +228,18 @@ migration used by the runtime's delegation contract:
 | Codex final answer | `89101df` | a Codex leaf returns its turn's `final_answer` message, read with the turn id the app-server sends beside the item; commentary no longer runs into the result |
 | native Ollama wire | `e672775` | `ollama-chat` speaks `/api/chat`: NDJSON stream, effort as the `think` string, a policy `options` sampler block sent verbatim and refused on other wires or for unknown keys, `num_ctx` and `num_predict` from `contextWindow` and `maxOutputTokens`; the compiled local default moves to it. An output-limit stop on any wire raises a `warning` event into the transcript. Live against Ollama 0.34.1: reply ends `stop`, tool call round-trips, a 16-token bound ends `length`, and a seeded A/B shows `presence_penalty` reaches the sampler |
 
-On branch `tool-shape`, not yet merged: the **tool shape** toggle. `tool_shape`,
-`SLBH_TOOL_SHAPE` or `--tool-shape` selects `slbh` (the default, whose
-definitions are pinned byte for byte against `main`), `anthropic` (Claude
-Code 2.1.278's `Bash`/`Read`/`Edit`/`Write`) or `codex` (Codex 0.155.1's
-`exec_command`/`write_stdin`/`apply_patch`). A shape replaces only the primary
-tools. Captures of both harnesses, and the pins against them, live in
+The **tool shape** toggle. `tool_shape`, `SLBH_TOOL_SHAPE` or `--tool-shape`
+selects `lean` (the default: `apply_patch` and `bash`), `mid` (adds
+`read_file`), `full` (slbh's original set, the default before 2026-09-21),
+`anthropic` (Claude Code 2.1.278's `Bash`/`Read`/`Edit`/`Write`) or `codex`
+(Codex 0.155.1's `exec_command`/`write_stdin`/`apply_patch`). A shape replaces
+only the primary tools. `lean` became the default on the evidence of slb-org
+`org/tool-lean-2026-09-21.md`: on GLM, `lean` and `mid` cost about 0.72×
+`full`'s tokens at equal correctness. Every native shape describes
+`apply_patch` accurately (unified diff via `git apply --recount`, or the Begin
+Patch format), waits 10 s before backgrounding a command, and truncates
+command output head-and-tail at 20,000 tokens. Captures of both foreign
+harnesses, and the pins against them, live in
 `internal/harness/testdata/toolshape/`. An unknown shape refuses to start.
 Tool results carry a uniform `error` flag and `exit_code`. See the README's
 *Tool shapes*.
