@@ -397,6 +397,17 @@ call/result pairs; the next inference receives all of that work and the new
 messages. A response without tools cannot end the turn while messages are
 pending. Message transport is independent of the lossy UI event channel.
 
+A native agent's system prompt states its host, command tools, scratch
+directory, working directory and local date, then its layer's org
+instructions, then the working directory's project instructions, then its
+layer's skills. Project instructions are read from the enclosing git root
+down to the working directory, outer first, one file per directory:
+`AGENTS.md`, or `CLAUDE.md` where there is no `AGENTS.md`. Outside a git
+repository only the working directory is read. They are bounded at 32 KiB in
+total, Codex's default; the document that crosses the bound is cut with a
+notice and later ones are dropped. Codex and Claude Code leaves load their
+own.
+
 Available tools, in the default `lean` shape, are:
 
 - Files and shell: `apply_patch` and `bash`, and on Windows `pwsh`. Reading,

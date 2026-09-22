@@ -902,7 +902,8 @@ func compactMessages(history []provider.Message, keep int) ([]provider.Message, 
 	return append([]provider.Message{marker}, recent...), start
 }
 
-// systemPrompt assembles an agent's system prompt from its two layers.
+// systemPrompt assembles an agent's system prompt from its two layers, then
+// the working directory's project instructions and the layer's skills.
 //
 // The split is by what owns the truth. Everything bakedSystemPrompt returns is
 // harness mechanics — how *this build* behaves — and only the binary knows it,
@@ -919,6 +920,9 @@ func systemPrompt(a *Agent) string {
 	if strings.TrimSpace(layer) != "" {
 		prompt += fmt.Sprintf("\n\nOrg instructions for your layer (%s). These are managed by the fleet and define what an agent at this depth may and may not do. Where they appear to contradict the runtime mechanics above, the mechanics are facts about this build and stand; the layer policy governs everything else.\n\n%s", config.LayerForDepth(a.Depth), layer)
 	}
+	// Project instructions follow the org's, as they do in Codex and Claude
+	// Code leaves, whose own harnesses load them for their working directory.
+	prompt += projectDocPrompt(a.WorkDir)
 	if skills := a.runtime.LayerSkillPrompt(a.Depth); skills != "" {
 		prompt += "\n\n" + skills
 	}
@@ -927,10 +931,11 @@ func systemPrompt(a *Agent) string {
 	return prompt
 }
 
-// bakedSystemPrompt is the harness-mechanics half: identity, the host and its
-// command tools, how messages arrive, and for a launcher how subagents
-// behave. It states only what the tool descriptions do not; launch rules,
-// message addressing and job-warning details live on the tools themselves.
+// bakedSystemPrompt is the harness-mechanics half: identity, the host, its
+// command tools, working directory and date, how messages arrive, and for a
+// launcher how subagents behave. It states only what the tool descriptions do
+// not; launch rules, message addressing and job-warning details live on the
+// tools themselves.
 //
 // It states facts, not advice (owner, 2026-09-22). It used to carry a
 // paragraph on how to think and behavioural rules (scratch use, act on each
@@ -941,6 +946,8 @@ func systemPrompt(a *Agent) string {
 func bakedSystemPrompt(a *Agent) string {
 	prompt := fmt.Sprintf("You are %s, a native agent in slbh runtime %s at depth %d.", a.Title, a.runtime.ID(), a.Depth) +
 		fmt.Sprintf("\n\nThis host is %s. Your command tools are %s. TMPDIR, TMP and TEMP point at your agent scratch directory, %s.", runtime.GOOS, strings.Join(commandToolNames(a.runtime.toolShape), ", "), filepath.Join(a.runtime.runtimeDir, "agents", a.ID, "scratch")) +
+		workDirFact(a.WorkDir) +
+		fmt.Sprintf(" The local date is %s.", promptClock().Format("Monday 2006-01-02 (MST)")) +
 		"\n\nMessages reach you at your next tool or API call boundary, or wake you if you are idle: steers from the owner or other agents, subagent results, and background job output. A warning that a job or subagent is still running is sent once and never repeated."
 	// Subagent facts only for an agent that can launch a child. A leaf
 	// cannot launch anything, and the mechanics themselves are in the
@@ -949,6 +956,19 @@ func bakedSystemPrompt(a *Agent) string {
 		prompt += "\n\nSubagents run asynchronously; each one's result arrives as a message. A subagent remains in the agent tree until end_subagent stops it. You can launch children at the next depth. Depth-1 children may use the configured child model; deeper children need a real model or short name, and may run on the native, Codex or Claude Code harness."
 	}
 	return prompt
+}
+
+// promptClock dates the prompt. The prompt is built once per turn, so the date
+// is current for every turn and changes the cached prefix at most once a day.
+var promptClock = time.Now
+
+// workDirFact names the directory relative paths and commands resolve
+// against, or nothing when the runtime could not determine one.
+func workDirFact(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	return fmt.Sprintf(" Your working directory is %s; relative paths and commands resolve against it.", dir)
 }
 
 // toolFailure renders a failed tool call for the model.
