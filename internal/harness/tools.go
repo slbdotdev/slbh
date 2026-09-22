@@ -465,6 +465,12 @@ func (r *Runtime) applyPatch(base, patch string) (string, error) {
 func (r *Runtime) executeCommandTool(agentID, base, name string, values map[string]any) (string, error) {
 	script := value(values, "script")
 	if script == "" {
+		// Unadvertised alias: models trained on Claude Code and Codex send
+		// "command" for this argument (MiMo V2.6 Flash and Qwen3.8 Flash
+		// on the 2026-09-22 Pluto trials).
+		script = value(values, "command")
+	}
+	if script == "" {
 		return "", fmt.Errorf("script is required")
 	}
 	cwd := valueDefault(values, "cwd", base)

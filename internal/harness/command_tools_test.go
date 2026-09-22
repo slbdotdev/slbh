@@ -36,6 +36,21 @@ func TestCommandToolsRunMultilineAndSpecialScripts(t *testing.T) {
 	}
 }
 
+func TestCommandToolAcceptsCommandAlias(t *testing.T) {
+	r := testRuntime(t)
+	out, err := executeCommandTest(t, r, "bash", map[string]any{"command": "printf via-command"})
+	if err != nil || out != "via-command" {
+		t.Fatalf("output=%q err=%v", out, err)
+	}
+	out, err = executeCommandTest(t, r, "bash", map[string]any{"script": "printf via-script", "command": "printf ignored"})
+	if err != nil || out != "via-script" {
+		t.Fatalf("script should win: output=%q err=%v", out, err)
+	}
+	if _, err := executeCommandTest(t, r, "bash", map[string]any{}); err == nil || !strings.Contains(err.Error(), "script is required") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestCommandToolFailureIncludesOutputAndExitCode(t *testing.T) {
 	r := testRuntime(t)
 	out, err := executeCommandTest(t, r, "bash", map[string]any{"script": "echo before-failure; echo diagnostic >&2; exit 7"})
