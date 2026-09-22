@@ -1,3 +1,5 @@
+***This project, and ALL of it's associated documentation, was produced entirely by a system of coordinating AI agents. I have never read any of the code, and that is the point. This is an experiment.***
+
 # slbh
 
 `slbh` is the Linux-first runtime for org v0.3, not a fourth managed harness.
