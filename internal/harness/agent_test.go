@@ -124,18 +124,22 @@ func TestSystemPromptDirectsAsyncChildHandling(t *testing.T) {
 	prompt := systemPrompt(seat)
 	for _, phrase := range []string{
 		"You are seat, a native agent in slbh runtime " + r.ID() + " at depth 0.",
-		"Keep your thinking brief and focused",
-		"use a tool to find out rather than reasoning at length",
+		"TMPDIR, TMP and TEMP point at your agent scratch directory",
 		"next tool or API call boundary",
-		"never defer one to the end",
 		"is sent once and never repeated",
-		"Never sleep, poll, or run wait loops",
-		"end your turn and you will be woken",
-		"End each subagent with end_subagent",
-		"Launch one child at the next depth with a relevant title.",
+		"each one's result arrives as a message",
+		"A subagent remains in the agent tree until end_subagent stops it.",
+		"You can launch children at the next depth.",
 	} {
 		if !strings.Contains(prompt, phrase) {
 			t.Fatalf("seat system prompt missing %q: %s", phrase, prompt)
+		}
+	}
+	// The prompt states facts, not advice (owner, 2026-09-22): no thinking
+	// paragraph and none of the behavioural rules it once carried.
+	for _, dropped := range []string{"Keep your thinking brief", "never defer one", "Never sleep, poll", "End each subagent", "use it for temporary files"} {
+		if strings.Contains(prompt, dropped) {
+			t.Fatalf("seat system prompt still carries %q", dropped)
 		}
 	}
 	if strings.Contains(prompt, "Keep answers actionable and concise") {
@@ -151,15 +155,15 @@ func TestSystemPromptDirectsAsyncChildHandling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := systemPrompt(manager); !strings.Contains(got, "deeper children must name a real model or short name explicitly") {
+	if got := systemPrompt(manager); !strings.Contains(got, "deeper children need a real model or short name") {
 		t.Fatalf("manager prompt does not describe model selection: %s", got)
 	}
 	leafPrompt := systemPrompt(leaf)
 	if strings.Contains(leafPrompt, "Roles you can launch") || strings.Contains(leafPrompt, "end_subagent") {
 		t.Fatalf("leaf prompt carries launch guidance: %s", leafPrompt)
 	}
-	if !strings.Contains(leafPrompt, "Keep your thinking brief and focused") {
-		t.Fatalf("leaf prompt lost the shared guidance: %s", leafPrompt)
+	if !strings.Contains(leafPrompt, "next tool or API call boundary") {
+		t.Fatalf("leaf prompt lost the shared mechanics: %s", leafPrompt)
 	}
 	for _, tool := range r.toolDefinitions(leaf.ID) {
 		if tool.Name == "launch_subagent" {

@@ -927,20 +927,26 @@ func systemPrompt(a *Agent) string {
 	return prompt
 }
 
-// bakedSystemPrompt is the harness-mechanics half: identity, how to think,
-// how messages arrive, and for a launcher how subagents behave. It states
-// only what the tool descriptions do not; launch rules, message addressing
-// and job-warning details live on the tools themselves.
+// bakedSystemPrompt is the harness-mechanics half: identity, the host and its
+// command tools, how messages arrive, and for a launcher how subagents
+// behave. It states only what the tool descriptions do not; launch rules,
+// message addressing and job-warning details live on the tools themselves.
+//
+// It states facts, not advice (owner, 2026-09-22). It used to carry a
+// paragraph on how to think and behavioural rules (scratch use, act on each
+// message at once, never poll, end each subagent); each rule gave way to the
+// fact behind it. Measured against the old text on GLM in the large-input
+// test (slb-org org/tool-large-2026-09-21.md): 1.02x the tokens, interval
+// 0.86-1.21, at equal correctness.
 func bakedSystemPrompt(a *Agent) string {
 	prompt := fmt.Sprintf("You are %s, a native agent in slbh runtime %s at depth %d.", a.Title, a.runtime.ID(), a.Depth) +
-		"\n\nKeep your thinking brief and focused, moving directly to the next action or conclusion without unnecessary elaboration. When a question can be settled by looking — reading a file, running a command, checking a result — use a tool to find out rather than reasoning at length about what is likely true." +
-		fmt.Sprintf("\n\nThis host is %s. Your command tools are %s. TMPDIR, TMP and TEMP point at your agent scratch directory, %s; use it for temporary files instead of /tmp, your working directory, or your home directory.", runtime.GOOS, strings.Join(commandToolNames(a.runtime.toolShape), ", "), filepath.Join(a.runtime.runtimeDir, "agents", a.ID, "scratch")) +
-		"\n\nMessages reach you at your next tool or API call boundary, or wake you if you are idle: steers from the owner or other agents, subagent results, and background job output. Act on each in the current turn; never defer one to the end. A warning that a job or subagent is still running is sent once and never repeated. Decide then: kill or end it, keep waiting for its result, or do other work."
-	// Launch guidance only for an agent that can launch a child. A leaf
+		fmt.Sprintf("\n\nThis host is %s. Your command tools are %s. TMPDIR, TMP and TEMP point at your agent scratch directory, %s.", runtime.GOOS, strings.Join(commandToolNames(a.runtime.toolShape), ", "), filepath.Join(a.runtime.runtimeDir, "agents", a.ID, "scratch")) +
+		"\n\nMessages reach you at your next tool or API call boundary, or wake you if you are idle: steers from the owner or other agents, subagent results, and background job output. A warning that a job or subagent is still running is sent once and never repeated."
+	// Subagent facts only for an agent that can launch a child. A leaf
 	// cannot launch anything, and the mechanics themselves are in the
 	// launch_subagent description and enforced at launch.
 	if a.runtime.canLaunch(a) {
-		prompt += "\n\nSubagents run asynchronously and report back as messages. Never sleep, poll, or run wait loops to watch one; if there is no other useful work, end your turn and you will be woken. End each subagent with end_subagent once its work is complete. Launch one child at the next depth with a relevant title. Depth-1 children may use the configured child model; deeper children must name a real model or short name explicitly and may select native, Codex, or Claude Code with the harness field."
+		prompt += "\n\nSubagents run asynchronously; each one's result arrives as a message. A subagent remains in the agent tree until end_subagent stops it. You can launch children at the next depth. Depth-1 children may use the configured child model; deeper children need a real model or short name, and may run on the native, Codex or Claude Code harness."
 	}
 	return prompt
 }
