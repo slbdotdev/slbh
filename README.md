@@ -311,8 +311,25 @@ from the routing policy above, and from the resolved provider instance rather
 than from a lookup by model name: only the instance knows which endpoint the
 request will really reach, so a name-keyed pin could size the window for a
 route this request is not taking.
-Automatic compaction keeps the most recent 24 messages and writes a durable
-marker; `/compact` does the same on demand. Requests stream responses and
+
+Compaction follows pi's default. It keeps the most recent 20,000 estimated
+tokens verbatim (a quarter of the window, if that is less), cut at a user
+message or a tool call and never between a call and its result, so a long
+single turn can be cut inside itself. Everything before the cut, the first
+request included, is replaced by a structured summary (Goal, Constraints &
+Preferences, Progress, Key Decisions, Next Steps, Critical Context) that the
+agent's own model writes in one tool-free request, bounded at 13,107 output
+tokens, from a text rendering of those messages with each tool result and
+thinking block cut to 2,000 characters. A later compaction updates the
+previous summary in place. The summary request and its usage are recorded in
+the transcript marked `purpose: compaction`, and its usage never becomes the
+agent's context reading. If the summary fails, is cut off, calls a tool or is
+empty, the earlier messages are dropped behind a marker instead and a
+`warning` says why. `/compact` does the same on demand for an idle agent and
+refuses a busy one; the seam's `keep` field keeps that many messages instead
+of the token tail when it is above zero.
+
+Requests stream responses and
 include tool definitions, reasoning options where supported, usage, and a
 stable `prompt_cache_key`.
 
@@ -363,7 +380,7 @@ Input history is stored as JSON lines in `$SLBH_HOME/history`, normally
 | `/effort LEVEL` | Change the seat agent's effort. |
 | `/agents` | Record the current agent tree as a status event. |
 | `/jobs` | Record current jobs as a status event. |
-| `/compact` | Compact the selected agent's history. |
+| `/compact` | Summarize the selected idle agent's earlier history with its own model. |
 | `/mouse` | Toggle mouse capture: off leaves text selectable, on adds wheel scrolling. |
 
 When a child agent is selected, submitted text is sent to that child as a

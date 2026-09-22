@@ -698,7 +698,7 @@ func (r *Runtime) compact(agentID string, keep int) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("agent %q not found", agentID)
 	}
-	return agent.Compact(keep), nil
+	return agent.Compact(keep)
 }
 
 func (r *Runtime) clear(agentID string) error {
@@ -889,7 +889,12 @@ func serializableEvent(event seam.Event) seam.Event {
 }
 
 func (r *Runtime) recordInferenceRequest(agent *Agent, round int, req provider.Request, p provider.Provider) {
-	metadata := map[string]any{"round": round}
+	r.recordRequest(agent, map[string]any{"round": round}, req, p)
+}
+
+// recordRequest records any request an agent sends, with the metadata that
+// places it: a round of the turn, or compaction's summary.
+func (r *Runtime) recordRequest(agent *Agent, metadata map[string]any, req provider.Request, p provider.Provider) {
 	if payloadProvider, ok := p.(provider.RequestPayloadProvider); ok {
 		payload, err := payloadProvider.RequestPayload(req)
 		if err != nil {

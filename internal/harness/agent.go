@@ -357,7 +357,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			return
 		}
 		history = a.appendMessages(history, a.takeMessages())
-		history = a.compactHistoryIfNeeded(history, contextWindow, system, tools)
+		history = a.compactHistoryIfNeeded(turnCtx, p, model, effort, history, contextWindow, system, tools)
 		if round >= 100 {
 			a.fail(fmt.Errorf("provider/tool round limit reached"))
 			return
@@ -724,67 +724,6 @@ func formatJobResult(snapshot job.Snapshot, stdout, stderr string) string {
 	return fmt.Sprintf("status: %s\nexit_code: %d\nstdout:\n%s\nstderr:\n%s", snapshot.Status, snapshot.ExitCode, boundedOutput(stdout), boundedOutput(stderr))
 }
 
-// Compact keeps the most recent work and leaves a durable marker in the
-// transcript. It is intentionally deterministic and local: a provider outage
-// must never make compaction block the agent.
-func (a *Agent) Compact(keep int) int {
-	if codex := a.codexBackend(); codex != nil {
-		codex.compact()
-		return 0
-	}
-	if claude := a.claudeBackend(); claude != nil {
-		claude.compact()
-		return 0
-	}
-	if keep < 4 {
-		keep = 4
-	}
-	a.mu.Lock()
-	compacted, dropped := compactMessages(a.history, keep)
-	if dropped == 0 {
-		a.mu.Unlock()
-		return 0
-	}
-	a.history = compacted
-	a.mu.Unlock()
-	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
-	return dropped
-}
-
-func (a *Agent) maybeCompact(contextWindow int, system string, tools []provider.Tool) {
-	a.mu.RLock()
-	history := append([]provider.Message(nil), a.history...)
-	anchor := a.contextAnchor
-	a.mu.RUnlock()
-	compacted, dropped := compactHistory(history, contextWindow, system, tools, 24, anchor)
-	if dropped == 0 {
-		return
-	}
-	a.mu.Lock()
-	a.history = compacted
-	a.mu.Unlock()
-	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
-}
-
-func (a *Agent) compactHistoryIfNeeded(history []provider.Message, contextWindow int, system string, tools []provider.Tool) []provider.Message {
-	a.mu.RLock()
-	anchor := a.contextAnchor
-	a.mu.RUnlock()
-	compacted, dropped := compactHistory(history, contextWindow, system, tools, 24, anchor)
-	if dropped > 0 {
-		a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: fmt.Sprintf("compacted %d earlier messages", dropped)})
-		return compacted
-	}
-	return history
-}
-
-func compactHistory(history []provider.Message, contextWindow int, system string, tools []provider.Tool, keep int, anchor contextAnchor) ([]provider.Message, int) {
-	if !contextLimitReached(contextWindow, system, history, tools, anchor) {
-		return history, 0
-	}
-	return compactMessages(history, keep)
-}
-
 func contextBudget(contextWindow int) int {
 	return contextWindow * compactAtNumerator / compactAtDenominator
 }
@@ -878,28 +817,6 @@ func (a *Agent) resolveContextWindow(ctx context.Context, p provider.Provider) i
 	a.contextWindow = window
 	a.mu.Unlock()
 	return window
-}
-
-func compactMessages(history []provider.Message, keep int) ([]provider.Message, int) {
-	if keep < 4 {
-		keep = 4
-	}
-	if len(history) <= keep {
-		return history, 0
-	}
-	start := len(history) - keep
-	// Never begin the retained suffix with an assistant/tool message. Walking
-	// back to a user message keeps tool calls and their results structurally
-	// attached to the turn that requested them.
-	for start > 0 && history[start].Role != "user" {
-		start--
-	}
-	if start == 0 {
-		return history, 0
-	}
-	recent := append([]provider.Message(nil), history[start:]...)
-	marker := provider.Message{Role: "user", Content: fmt.Sprintf("[compacted %d earlier messages; preserve their conclusions]", start)}
-	return append([]provider.Message{marker}, recent...), start
 }
 
 // systemPrompt assembles an agent's system prompt from its two layers, then

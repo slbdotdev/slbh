@@ -76,6 +76,13 @@ type eventBatchMsg seam.EventBatch
 // markdownTickMsg catches up a block the render throttle held back.
 type markdownTickMsg time.Time
 
+// compactDoneMsg reports a /compact that ran off the update loop: a native
+// agent's compaction waits on its model to write the summary.
+type compactDoneMsg struct {
+	replaced int
+	err      error
+}
+
 type modelCatalogMsg struct {
 	catalog []provider.Catalog
 	err     error
@@ -226,6 +233,13 @@ func (m Model) Update(msg tea.Msg) (result tea.Model, command tea.Cmd) {
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case compactDoneMsg:
+		if msg.err != nil {
+			m.addLocal("error", msg.err.Error())
+		} else {
+			m.addLocal("status", fmt.Sprintf("compacted %d earlier messages; the full transcript remains available", msg.replaced))
+		}
+		return m, nil
 	case modelCatalogMsg:
 		m.modelsLoading = false
 		m.modelCatalog = msg.catalog
@@ -669,11 +683,11 @@ func (m *Model) handleCommand(command string) tea.Cmd {
 			m.addLocal("status", "mouse capture off: drag to select text; PgUp/PgDn and Ctrl-U/Ctrl-D scroll")
 		}
 	case "/compact":
-		reply, err := m.runtime.Do(seam.CompactCommand{AgentID: m.viewAgentID, Keep: 24})
-		if err != nil {
-			m.addLocal("error", err.Error())
-		} else {
-			m.addLocal("status", fmt.Sprintf("compacted %d earlier messages; recent transcript remains available", reply.Dropped))
+		agentID := m.viewAgentID
+		m.addLocal("status", "compacting: the agent's model is summarizing its earlier messages")
+		return func() tea.Msg {
+			reply, err := m.runtime.Do(seam.CompactCommand{AgentID: agentID})
+			return compactDoneMsg{replaced: reply.Dropped, err: err}
 		}
 	default:
 		m.addLocal("error", "unknown command: "+name)
