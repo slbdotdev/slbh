@@ -277,7 +277,7 @@ func TestLiveNativeSeatManagerCodexLeafContinuation(t *testing.T) {
 	cfg.ApprovedModels = []string{cfg.SeatModel}
 	codexModel := os.Getenv("SLBH_CODEX_TEST_MODEL")
 	if codexModel == "" {
-		codexModel = "gpt-5.6-luna"
+		codexModel = "gpt-6-luna"
 	}
 	runtime, err := New(cfg, Options{})
 	if err != nil {

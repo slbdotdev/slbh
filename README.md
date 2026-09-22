@@ -171,7 +171,7 @@ messages. The optional `harness` field selects `native`, `codex`, or
 Code children receive the model name unchanged:
 
 ```json
-{"title":"codex-worker","harness":"codex","model":"gpt-5.6-luna","brief":"..."}
+{"title":"codex-worker","harness":"codex","model":"gpt-6-luna","brief":"..."}
 ```
 
 **Project instructions.** A native agent's prompt includes one `AGENTS.md`

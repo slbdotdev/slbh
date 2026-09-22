@@ -18,7 +18,7 @@ func TestLiveCodexLeafRoundTrip(t *testing.T) {
 	}
 	model := os.Getenv("SLBH_CODEX_TEST_MODEL")
 	if model == "" {
-		model = "gpt-5.6-luna"
+		model = "gpt-6-luna"
 	}
 	r, err := New(config.Config{Home: t.TempDir()}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
 	if err != nil {
@@ -61,7 +61,7 @@ func TestLiveCodexLeafBidirectionalSteer(t *testing.T) {
 	}
 	model := os.Getenv("SLBH_CODEX_TEST_MODEL")
 	if model == "" {
-		model = "gpt-5.6-luna"
+		model = "gpt-6-luna"
 	}
 	r, err := New(config.Config{Home: t.TempDir()}, Options{Provider: func(string) (provider.Provider, error) { return fakeProvider{}, nil }})
 	if err != nil {
