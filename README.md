@@ -52,13 +52,14 @@ Provider routing is automatic:
 - `local/` model names route to the desktop RTX 5080's Ollama server without
   an API key. The default local model is `local/q27-UD-Q2_K_XL-64k`, served as
   `q27-UD-Q2_K_XL-64k` on Ollama.
-- `DEEPSEEK_API_KEY` routes `deepseek/` and `deepseek-` model names to
-  DeepSeek.
 - `ZAI_API_KEY` routes `zai/` and `glm-` model names to Z.ai.
 - `CEREBRAS_API_KEY` routes `cerebras/` model names to Cerebras. Only the
   prefixed spelling routes there: the models it serves are open-weight ones
   OpenRouter and the desktop serve too, so a bare `qwen-3.8-27b` would be
   ambiguous where `glm-` is not.
+- DeepSeek has no native route: its models, such as
+  `deepseek/deepseek-v4.1-flash`, go through OpenRouter on their policy
+  entry like any other model.
 - Other models use `SLBH_ENDPOINT` with `OPENROUTER_API_KEY`. The endpoint
   defaults to the OpenRouter chat-completions endpoint.
 
@@ -176,7 +177,7 @@ one hole in this guarantee that you sign for by hand.
 A route names the protocol it speaks, and slbh implements three.
 
 - `openai-chat` — the OpenAI-shaped chat-completions protocol: OpenRouter,
-  DeepSeek and Z.ai's coding endpoint. Effort is `reasoning_effort`.
+  Cerebras and Z.ai's coding endpoint. Effort is `reasoning_effort`.
 - `anthropic-messages` — the Anthropic-shaped Messages protocol, which the
   Z.ai coding plan also exposes. Effort is `output_config.effort`, sent with
   `x-api-key` and `anthropic-version`.
@@ -525,8 +526,12 @@ working directory is usable. Reads and job output are bounded. `bash`, `pwsh`,
 and `python` start a job, wait up to `wait_seconds` (default ten seconds, as
 Codex), and background it if it is still running; `wait_seconds: 0`
 backgrounds immediately. Their output, the output carried with a failed call,
-and a background job's delivered result are cut the way Codex cuts it — head and tail kept, with a notice of what
-was dropped — at 20,000 tokens, twice Codex's default.
+and a background job's delivered result are bounded at 20,000 tokens: over
+that, the result is a notice of the output's size with its first and last ten
+lines (each side at most 1,000 characters), and the agent reads a range if it
+needs more. The `codex` tool shape keeps Codex's own head-and-tail cut. The
+command tools take their script as `script`, or as `command`, which models
+trained on other harnesses send.
 Jobs and agent activity are recorded in the
 active session transcript.
 
