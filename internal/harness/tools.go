@@ -507,8 +507,43 @@ func backgroundOutput(s job.Snapshot, stdout, stderr string, waited time.Duratio
 // default max_output_tokens, cut the way Codex cuts it.
 const commandOutputTokens = 20000
 
-// boundedOutput cuts output to commandOutputTokens. Unlike Codex it leaves
-// room for its own notice, so a result already cut is not cut again.
+// boundedOutput replaces an output over commandOutputTokens with a notice of
+// its size and its first and last edgeLineCount lines. It used to keep the
+// first and last 40,000 characters, Codex's way; an agent that printed a
+// whole file then carried that ~20k-token cut in every later request. The
+// output-limit test (slb-org org/tool-output-2026-09-21.md) measured this
+// form at 0.81x the old one's tokens on DeepSeek and 0.93x on GLM, with no
+// loss of correctness on either. A result already cut is short, so it is
+// never cut again.
 func boundedOutput(output string) string {
-	return truncateMiddle(output, commandOutputTokens, commandOutputTokens*2-128)
+	tokens := approxTokens(output)
+	if tokens <= commandOutputTokens {
+		return output
+	}
+	lines := strings.Count(strings.TrimSuffix(output, "\n"), "\n") + 1
+	head, tail := edgeLines(output)
+	return fmt.Sprintf("output cut: %d tokens, %d lines, over the %d-token limit; the first and last %d lines are shown; read a range instead\n%s\n…\n%s", tokens, lines, commandOutputTokens, edgeLineCount, head, tail)
+}
+
+// edgeLineCount and edgeChars bound what boundedOutput keeps of an
+// over-limit output: that many lines from each end, and no more than that
+// many characters from each end, since one line can be very long.
+const (
+	edgeLineCount = 10
+	edgeChars     = 1000
+)
+
+// edgeLines returns the first and last edgeLineCount lines of output, each
+// side cut to edgeChars at the far edge from the middle.
+func edgeLines(output string) (string, string) {
+	all := strings.Split(strings.TrimSuffix(output, "\n"), "\n")
+	head := strings.Join(all[:min(edgeLineCount, len(all))], "\n")
+	tail := strings.Join(all[max(0, len(all)-edgeLineCount):], "\n")
+	if len(head) > edgeChars {
+		head = head[:edgeChars] + "…"
+	}
+	if len(tail) > edgeChars {
+		tail = "…" + tail[len(tail)-edgeChars:]
+	}
+	return head, tail
 }

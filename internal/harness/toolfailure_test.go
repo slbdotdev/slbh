@@ -39,10 +39,10 @@ func TestToolFailureTruncatesRunawayOutput(t *testing.T) {
 	if len(got) > limit {
 		t.Fatalf("result is %d bytes, want at most %d", len(got), limit)
 	}
-	if !strings.Contains(got, "Warning: truncated output") || !strings.Contains(got, "tokens truncated") {
+	if !strings.Contains(got, "over the 20000-token limit") || !strings.Contains(got, "read a range instead") {
 		t.Fatal("truncation must be visible to the model, not silent")
 	}
-	if !strings.HasPrefix(got, "tool error: exit status 2\nWarning") || !strings.Contains(got, "start") || !strings.HasSuffix(got, "end") {
+	if !strings.HasPrefix(got, "tool error: exit status 2\noutput cut: ") || !strings.Contains(got, "start") || !strings.HasSuffix(got, "end") {
 		t.Fatalf("the error, the head and the tail must survive truncation: %q", got[:60])
 	}
 	if again := boundedOutput(strings.TrimPrefix(got, "tool error: exit status 2\n")); again != strings.TrimPrefix(got, "tool error: exit status 2\n") {

@@ -211,7 +211,7 @@ func TestCommandToolsWaitTenSecondsAndBoundTheirOutput(t *testing.T) {
 		t.Fatalf("a 6-second command should finish inline: %q %v", out, err)
 	}
 	out, err = call(t, r, "bash", map[string]any{"script": "echo first; head -c 200000 /dev/zero | tr '\\0' x; echo; echo last"})
-	if err != nil || len(out) > commandOutputTokens*4 || !strings.HasPrefix(out, "Warning: truncated output") || !strings.Contains(out, "first") || !strings.HasSuffix(out, "last\n") {
+	if err != nil || len(out) > 2500 || !strings.HasPrefix(out, "output cut: ") || !strings.Contains(out, "first") || !strings.HasSuffix(out, "last") {
 		t.Fatalf("large output: %d bytes, %v", len(out), err)
 	}
 }
@@ -788,7 +788,7 @@ func TestCommandOutcomesAreFlaggedWhereverTheyEnd(t *testing.T) {
 		}
 	}
 	text := formatJobResult(job.Snapshot{ID: "j", Status: job.Complete}, "first"+strings.Repeat("x", 400000)+"last", "")
-	if len(text) > commandOutputTokens*4+200 || !strings.Contains(text, "Warning: truncated output") || !strings.Contains(text, "first") || !strings.Contains(text, "last") {
+	if len(text) > 2700 || !strings.Contains(text, "output cut: ") || !strings.Contains(text, "first") || !strings.Contains(text, "last") {
 		t.Fatalf("delivered result is %d bytes, not bounded head and tail", len(text))
 	}
 }
