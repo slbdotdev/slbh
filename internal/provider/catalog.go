@@ -182,7 +182,7 @@ func catalogSpecsFor(policy Policy) []catalogSpec {
 		}
 	}
 	specs := make([]catalogSpec, 0, len(byFamily))
-	for _, family := range []string{"deepseek", "zai", "cerebras", "openrouter"} {
+	for _, family := range []string{"zai", "cerebras", "openrouter"} {
 		if spec, ok := byFamily[family]; ok {
 			specs = append(specs, spec)
 			delete(byFamily, family)

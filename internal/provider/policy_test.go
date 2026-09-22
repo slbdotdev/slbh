@@ -52,11 +52,15 @@ func testPolicy() Policy {
 	}
 	orr := openai(OpenRouterEndpoint, 0)
 	orr.Provider = &ProviderPosture{ZDR: BoolPtr(true), DataCollection: "deny", Sort: "throughput"}
+	// DeepSeek is reached only through OpenRouter, so its route is an
+	// OpenRouter route with a posture like any other.
+	deepseek := openai(OpenRouterEndpoint, 0)
+	deepseek.Provider = &ProviderPosture{ZDR: BoolPtr(true), DataCollection: "deny", Only: []string{"deepinfra/fp8"}, AllowFallbacks: BoolPtr(false)}
 	return Policy{Version: PolicyVersion, Routes: map[string]RoutePolicy{
 		"zai/glm-5.3-flash":  openai("https://api.z.ai/api/coding/paas/v4/chat/completions", 1000000),
 		"zai/glm-5.3-flashx": openai("https://api.z.ai/api/coding/paas/v4/chat/completions", 1000000),
 		"zai/glm-5.3":        openai("https://api.z.ai/api/coding/paas/v4/chat/completions", 1000000),
-		"deepseek-v4-flash":  openai("https://api.deepseek.com/chat/completions", 0),
+		"deepseek-v4-flash":  deepseek,
 		LocalModelID:         openai("http://fractal.wyvern-temperature.ts.net:11434/v1/chat/completions", 0),
 		"vendor/model":       orr,
 	}}
@@ -261,7 +265,7 @@ func TestEffortValueRefusesAnUnmappableLevel(t *testing.T) {
 
 func TestRequestPayloadRefusesAnUnmappableLevelOnARoutedProvider(t *testing.T) {
 	// The refusal has to reach the request, not merely exist on the type.
-	t.Setenv("DEEPSEEK_API_KEY", "test-key-not-a-credential")
+	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
 	policy := testPolicy()
 	entry := policy.Routes["deepseek-v4-flash"]
 	entry.Effort.Levels = map[string]string{"low": "low", "medium": "medium", "high": "high"}

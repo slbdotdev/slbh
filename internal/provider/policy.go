@@ -106,9 +106,14 @@ type ProviderPosture struct {
 	// simply forgot `zdr` would otherwise decode to false and quietly ship a
 	// request with the org's zero-data-retention guarantee dropped, which is
 	// indistinguishable on the wire from one that never had it.
-	ZDR            *bool     `json:"zdr"`
-	DataCollection string    `json:"data_collection"`
-	Sort           string    `json:"sort,omitempty"`
+	ZDR            *bool  `json:"zdr"`
+	DataCollection string `json:"data_collection"`
+	Sort           string `json:"sort,omitempty"`
+	// Only restricts the route to the named providers, and AllowFallbacks
+	// false keeps OpenRouter from going beyond them when they fail. Together
+	// they pin one upstream, so every request on the route runs one build.
+	Only           []string  `json:"only,omitempty"`
+	AllowFallbacks *bool     `json:"allow_fallbacks,omitempty"`
 	Ignore         []string  `json:"ignore,omitempty"`
 	MaxPrice       *MaxPrice `json:"max_price,omitempty"`
 }
@@ -116,7 +121,8 @@ type ProviderPosture struct {
 // Complete reports whether a posture carries the two fields that are the
 // guarantee rather than a preference.
 //
-// `sort`, `ignore` and `max_price` are routing preferences and their absence
+// `sort`, `only`, `allow_fallbacks`, `ignore` and `max_price` are routing
+// preferences and their absence
 // costs money or latency. `zdr` and `data_collection` are the posture itself,
 // and their absence costs the guarantee, so only those two are required.
 func (p *ProviderPosture) Complete() error {

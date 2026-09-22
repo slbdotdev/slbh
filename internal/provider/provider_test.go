@@ -97,11 +97,10 @@ func TestRequestPayloadRoundTripsExactly(t *testing.T) {
 }
 
 func TestNormalizeDeepSeekModel(t *testing.T) {
-	if got := NormalizeModel("deepseek/deepseek-v4.1-flash"); got != "deepseek-v4-flash" {
+	// deepseek/deepseek-v4.1-flash is OpenRouter's id and must reach it as
+	// written; it was once folded into the direct API's deepseek-v4-flash.
+	if got := NormalizeModel(" deepseek/deepseek-v4.1-flash "); got != "deepseek/deepseek-v4.1-flash" {
 		t.Fatalf("got %q", got)
-	}
-	if got := (&HTTPProvider{Flavor: "deepseek"}).modelID("deepseek-v4-flash"); got != "deepseek-v4-flash" {
-		t.Fatalf("native model id got %q", got)
 	}
 	if got := (&HTTPProvider{Flavor: "openrouter"}).modelID("deepseek-v4-flash"); got != "deepseek/deepseek-v4-flash" {
 		t.Fatalf("OpenRouter model id got %q", got)
@@ -374,6 +373,7 @@ func TestPinnedContextWindowComesFromPolicy(t *testing.T) {
 
 	// A route the policy describes without a contextWindow reports no pin
 	// rather than a zero window, so discovery and the fallback still run.
+	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
 	for _, model := range []string{"deepseek-v4-flash", LocalModelID} {
 		p := forModelHTTP(t, model, OpenRouterEndpoint, false, testPolicy())
 		if window, ok := p.PinnedContextWindow(); ok {
@@ -397,9 +397,9 @@ func TestRouteKeyNormalizesEverySpellingOfARoute(t *testing.T) {
 		{LocalModelID, LocalModelID},
 		{localWireModelID, LocalModelID},
 		{"deepseek-v4-flash", "deepseek-v4-flash"},
-		// NormalizeModel's existing alias folding still applies underneath.
-		{"deepseek/deepseek-v4.1-flash", "deepseek-v4-flash"},
-		{"deepseek-v4.1-flash", "deepseek-v4-flash"},
+		// DeepSeek names are OpenRouter's and fold into nothing.
+		{"deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash"},
+		{"deepseek-v4.1-flash", "deepseek-v4.1-flash"},
 		// The OpenRouter namespace is a different route to the same model and
 		// keeps its own key, so phase 3 can carry a posture for it.
 		{"z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash"},
@@ -475,10 +475,34 @@ func TestResolveRouteRefusesRatherThanFallingThroughToOpenRouter(t *testing.T) {
 		}
 	}
 
-	// The same refusal for the other native family.
-	t.Setenv("DEEPSEEK_API_KEY", "")
-	if _, err := ResolveRoute("deepseek-v4-flash", OpenRouterEndpoint, false, testPolicy()); err == nil {
-		t.Fatal("a deepseek model with no DEEPSEEK_API_KEY did not refuse")
+}
+
+func TestDeepSeekIsReachedOnlyThroughOpenRouter(t *testing.T) {
+	// DeepSeek is not a native family: every DeepSeek spelling resolves on
+	// its policy entry, which is an OpenRouter route, and a DEEPSEEK_API_KEY
+	// in the environment changes nothing.
+	t.Setenv("DEEPSEEK_API_KEY", "test-key-not-a-credential")
+	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
+	policy := testPolicy()
+	policy.Routes["deepseek/deepseek-v4.1-flash"] = policy.Routes["deepseek-v4-flash"]
+	for _, model := range []string{"deepseek-v4-flash", "deepseek/deepseek-v4.1-flash"} {
+		route, err := ResolveRoute(model, OpenRouterEndpoint, false, policy)
+		if err != nil {
+			t.Fatalf("%s: %v", model, err)
+		}
+		if route.Flavor != "openrouter" || route.Endpoint != OpenRouterEndpoint || route.APIKey == "" {
+			t.Fatalf("%s resolved to flavor %q at %q; DeepSeek is used only through OpenRouter", model, route.Flavor, route.Endpoint)
+		}
+	}
+
+	// A leftover entry that points at the direct API with no OpenRouter
+	// posture refuses rather than sending anything there.
+	stale := testPolicy()
+	entry := stale.Routes["deepseek-v4-flash"]
+	entry.Endpoint, entry.Provider = "https://api.deepseek.com/chat/completions", nil
+	stale.Routes["deepseek-v4-flash"] = entry
+	if route, err := ResolveRoute("deepseek-v4-flash", OpenRouterEndpoint, false, stale); err == nil {
+		t.Fatalf("a direct DeepSeek entry resolved (flavor %q, endpoint %q) instead of refusing", route.Flavor, route.Endpoint)
 	}
 }
 
