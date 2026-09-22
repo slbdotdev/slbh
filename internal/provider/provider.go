@@ -96,6 +96,8 @@ type wireProviderObject struct {
 	ZDR            bool          `json:"zdr"`
 	DataCollection string        `json:"data_collection"`
 	Sort           string        `json:"sort,omitempty"`
+	Only           []string      `json:"only,omitempty"`
+	AllowFallbacks *bool         `json:"allow_fallbacks,omitempty"`
 	Ignore         []string      `json:"ignore,omitempty"`
 	MaxPrice       *wireMaxPrice `json:"max_price,omitempty"`
 }
@@ -122,6 +124,13 @@ func providerObjectFor(route Route) *wireProviderObject {
 	}
 	if posture.ZDR != nil {
 		object.ZDR = *posture.ZDR
+	}
+	if len(posture.Only) > 0 {
+		object.Only = append([]string(nil), posture.Only...)
+	}
+	if posture.AllowFallbacks != nil {
+		allow := *posture.AllowFallbacks
+		object.AllowFallbacks = &allow
 	}
 	if len(posture.Ignore) > 0 {
 		object.Ignore = append([]string(nil), posture.Ignore...)
@@ -246,7 +255,7 @@ const openRouterEndpoint = OpenRouterEndpoint
 type Route struct {
 	// Key is the authoritative route key, such as "zai/glm-5.3-flash".
 	Key string
-	// Flavor is the provider family: zai, deepseek, cerebras, openrouter or
+	// Flavor is the provider family: zai, cerebras, openrouter or
 	// local.
 	Flavor string
 	// Endpoint is the URL this route posts inference to.
@@ -315,8 +324,11 @@ func nativeRouteFor(key string) (nativeRoute, bool) {
 		// flavor out of every credential path below rather than being
 		// something the caller must remember.
 		return nativeRoute{flavor: RemoteProviderName}, true
-	case strings.HasPrefix(key, "deepseek/") || strings.HasPrefix(key, "deepseek-"):
-		return nativeRoute{flavor: "deepseek", endpoint: "https://api.deepseek.com/chat/completions", keyEnv: "DEEPSEEK_API_KEY"}, true
+	// There is no DeepSeek family here, deliberately. The org reaches DeepSeek
+	// only through OpenRouter (slb-org models.md, 2026-09-22), and OpenRouter's
+	// ids for it begin `deepseek/`, so a native arm on that prefix sent them
+	// to api.deepseek.com with DEEPSEEK_API_KEY instead: the one account the
+	// org does not use, which failed as an empty balance.
 	case strings.HasPrefix(key, "zai/"):
 		return nativeRoute{flavor: "zai", endpoint: "https://api.z.ai/api/coding/paas/v4/chat/completions", keyEnv: "ZAI_API_KEY"}, true
 	case strings.HasPrefix(key, "cerebras/"):
@@ -710,16 +722,12 @@ func ForModel(model, endpointOverride string, endpointExplicit bool, policy Poli
 	return instance, nil
 }
 
-// NormalizeModel keeps the old draft spelling from producing a provider 400
-// while leaving user-selected model names untouched otherwise.
+// NormalizeModel trims a model name and otherwise leaves it as the user
+// wrote it. It used to rewrite `deepseek/deepseek-v4.1-flash` to the direct
+// DeepSeek API's `deepseek-v4-flash`; that string is OpenRouter's id for the
+// model, and DeepSeek is used only through OpenRouter, so the rewrite went.
 func NormalizeModel(model string) string {
-	model = strings.TrimSpace(model)
-	switch model {
-	case "deepseek/deepseek-v4.1-flash", "deepseek-v4.1-flash":
-		return "deepseek-v4-flash"
-	default:
-		return model
-	}
+	return strings.TrimSpace(model)
 }
 
 func (p *HTTPProvider) modelID(model string) string {
@@ -729,8 +737,6 @@ func (p *HTTPProvider) modelID(model string) string {
 		return strings.TrimPrefix(model, LocalProviderName+"/")
 	case RemoteProviderName:
 		return strings.TrimPrefix(model, RemoteProviderName+"/")
-	case "deepseek":
-		return strings.TrimPrefix(model, "deepseek/")
 	case "zai":
 		return strings.TrimPrefix(model, "zai/")
 	case "cerebras":
@@ -950,7 +956,7 @@ func PayloadSHA256(payload []byte) string {
 
 func (p *HTTPProvider) Stream(ctx context.Context, req Request, sink StreamSink) error {
 	if !CredentialFreeFlavor(p.Flavor) && p.APIKey == "" {
-		return fmt.Errorf("provider API key is not configured (set OPENROUTER_API_KEY, DEEPSEEK_API_KEY, or ZAI_API_KEY)")
+		return fmt.Errorf("provider API key is not configured (set OPENROUTER_API_KEY or ZAI_API_KEY)")
 	}
 	// OpenRouter accepts prompt_cache_key; native providers safely ignore the
 	// extra metadata in their compatible endpoint. The prefix itself is kept

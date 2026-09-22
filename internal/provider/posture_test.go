@@ -93,6 +93,43 @@ func TestProviderObjectIsExactForOpenRouter(t *testing.T) {
 	}
 }
 
+func TestProviderObjectPinsOneUpstream(t *testing.T) {
+	// only and allow_fallbacks: false are what pin a route to one provider,
+	// so every request on it runs one build. Both must reach the wire.
+	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
+	p := forModelHTTP(t, "deepseek-v4-flash", OpenRouterEndpoint, false, testPolicy())
+	payload, err := p.RequestPayload(Request{Model: "deepseek-v4-flash", System: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, present := providerObjectIn(t, payload)
+	if !present {
+		t.Fatal("the pinned OpenRouter route sent no provider object")
+	}
+	only, _ := object["only"].([]any)
+	if !reflect.DeepEqual(only, []any{"deepinfra/fp8"}) {
+		t.Fatalf("only = %v, want deepinfra/fp8", object["only"])
+	}
+	if object["allow_fallbacks"] != false {
+		t.Fatalf("allow_fallbacks = %v, want false", object["allow_fallbacks"])
+	}
+
+	// A route that states neither sends neither: the default is OpenRouter's.
+	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
+	open := forModelHTTP(t, "z-ai/glm-5.3-flash", OpenRouterEndpoint, false, fleetPolicy())
+	payload, err = open.RequestPayload(Request{Model: "z-ai/glm-5.3-flash", System: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, _ = providerObjectIn(t, payload)
+	if _, ok := object["only"]; ok {
+		t.Fatalf("an unpinned route sent only: %v", object["only"])
+	}
+	if _, ok := object["allow_fallbacks"]; ok {
+		t.Fatalf("an unpinned route sent allow_fallbacks: %v", object["allow_fallbacks"])
+	}
+}
+
 func TestProviderObjectIsAbsentOnEveryOtherRoute(t *testing.T) {
 	// zdr and data_collection are OpenRouter concepts. Sending them to the
 	// Z.ai plan endpoint or to a server on the house network would be a false
@@ -108,7 +145,7 @@ func TestProviderObjectIsAbsentOnEveryOtherRoute(t *testing.T) {
 	// the happy accident that those entries are usually empty — and a policy
 	// with no posture on them cannot tell the two apart.
 	misconfigured := fleetPolicy()
-	for _, key := range []string{"zai/glm-5.3-flash", "deepseek-v4-flash", LocalModelID} {
+	for _, key := range []string{"zai/glm-5.3-flash", LocalModelID} {
 		route := misconfigured.Routes[key]
 		route.Provider = &ProviderPosture{
 			ZDR:            BoolPtr(true),
@@ -120,7 +157,7 @@ func TestProviderObjectIsAbsentOnEveryOtherRoute(t *testing.T) {
 		misconfigured.Routes[key] = route
 	}
 
-	for _, model := range []string{"zai/glm-5.3-flash", "deepseek-v4-flash", LocalModelID} {
+	for _, model := range []string{"zai/glm-5.3-flash", LocalModelID} {
 		for name, policy := range map[string]Policy{"no posture in policy": fleetPolicy(), "posture wrongly present": misconfigured} {
 			p := forModelHTTP(t, model, OpenRouterEndpoint, false, policy)
 			payload, err := p.RequestPayload(Request{Model: model, System: "s"})

@@ -144,7 +144,6 @@ func TestReasoningFieldsSurviveOnEveryOtherOpenAIChatRoute(t *testing.T) {
 	// The omission is scoped to the flavor that refuses the field. Dropping it
 	// everywhere would silently cost the reasoning stream on the routes that
 	// only echo it when asked.
-	t.Setenv("DEEPSEEK_API_KEY", "test-key-not-a-credential")
 	t.Setenv("OPENROUTER_API_KEY", "test-key-not-a-credential")
 
 	replayed := []Message{{Role: "assistant", Content: "earlier", ReasoningContent: "earlier thinking"}}
