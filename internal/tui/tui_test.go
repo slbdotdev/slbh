@@ -889,6 +889,22 @@ func TestCompactionRendersAsItsOwnBlock(t *testing.T) {
 	}
 }
 
+func TestToolCallMarkupRendersAsANote(t *testing.T) {
+	markup := "<tool_call>\n<function=bash>\n<parameter=script>\nuname -r\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=read_file>\n<parameter=path>\n/etc/hostname\n</parameter>\n</function>\n</tool_call>"
+	renderModel := Model{}
+	for name, tc := range map[string]struct{ text, want, not string }{
+		"after prose": {"Let me look." + "\n\n" + markup, "tool call written as text, not run: bash, read_file", "<function="},
+		"alone":       {markup, "tool call written as text, not run: bash, read_file", "<tool_call>"},
+		"streaming":   {"Let me look.\n\n<tool_call>\n", "tool call written as text, not run", "<tool_call>"},
+		"fenced":      {"The format is:\n```\n" + markup + "\n```", "<function=bash>", "not run"},
+	} {
+		got := ansi.Strip(renderModel.renderEvent(seam.Event{Kind: "assistant", Text: tc.text}, 80))
+		if !strings.Contains(got, tc.want) || strings.Contains(got, tc.not) {
+			t.Errorf("%s: rendered %q, want %q and not %q", name, got, tc.want, tc.not)
+		}
+	}
+}
+
 func TestNonChatHeaderTalliesThinkingTimeAndToolCalls(t *testing.T) {
 	start := time.Unix(100, 0)
 	events := []seam.Event{

@@ -20,6 +20,7 @@ import (
 	"github.com/slbdotdev/slbh/internal/config"
 	"github.com/slbdotdev/slbh/internal/provider"
 	"github.com/slbdotdev/slbh/internal/seam"
+	"github.com/slbdotdev/slbh/internal/toolmarkup"
 )
 
 var (
@@ -1285,7 +1286,7 @@ func (m *Model) clearCurrentView() {
 func (m *Model) renderEvent(event seam.Event, width int) string {
 	switch event.Kind {
 	case "assistant":
-		return renderChatBlock(agentTitle(event, "agent"), m.renderMarkdown(markdownBlockKey(event), event.Text, width), width, assistantBubble)
+		return renderChatBlock(agentTitle(event, "agent"), m.renderMarkdown(markdownBlockKey(event), withoutToolMarkup(event.Text), width), width, assistantBubble)
 	case "user":
 		return renderChatBlock("user", event.Text, width, userBubble)
 	case "child_result":
@@ -1850,6 +1851,25 @@ func responseType(event seam.Event) string {
 	default:
 		return ""
 	}
+}
+
+// withoutToolMarkup replaces tool-call markup that ends an assistant reply,
+// which a model server returned as text instead of running (the runtime then
+// warns and the turn goes on), with a note naming the calls, so the chat shows
+// what happened rather than raw markup. It applies while the reply streams.
+func withoutToolMarkup(text string) string {
+	prose, names, trailing := toolmarkup.Split(text)
+	if !trailing {
+		return text
+	}
+	note := "*(tool call written as text, not run)*"
+	if len(names) > 0 {
+		note = "*(tool call written as text, not run: " + strings.Join(names, ", ") + ")*"
+	}
+	if prose == "" {
+		return note
+	}
+	return prose + "\n\n" + note
 }
 
 func (m Model) statusLine() string {

@@ -353,6 +353,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 	system := systemPrompt(a)
 	tools := a.runtime.toolDefinitions(a.ID)
 	overflowStage := 0
+	markupRetries := 0
 	for round := 0; ; {
 		if turnCtx.Err() != nil {
 			return
@@ -475,6 +476,21 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			if responseContent != "" || responseReasoning != "" {
 				history = append(history, provider.Message{Role: "assistant", Content: responseContent, ReasoningContent: responseReasoning})
 			}
+			// Tool-call markup the server returned as text is a call that did
+			// not run, not an answer (toolmarkup.go).
+			if names, leaked := leakedToolCalls(responseContent); leaked {
+				markupRetries++
+				if markupRetries > maxToolMarkupRetries {
+					history = a.appendMessages(history, a.takeMessages())
+					a.fail(fmt.Errorf("the model ended %d replies in a row with tool-call markup the server could not run (%s); stopping the turn", markupRetries, strings.Join(names, ", ")))
+					return
+				}
+				note := toolMarkupNote(names, tools)
+				a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "warning", Text: note, Metadata: map[string]any{"purpose": "tool_call_markup", "names": names}})
+				history = append(history, provider.Message{Role: "user", Content: note})
+				round++
+				continue
+			}
 			// Finish and message acceptance share one lock. Input accepted before
 			// this point must be consumed in THIS turn, even after stream EOF.
 			a.mu.Lock()
@@ -498,6 +514,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "turn_done"})
 			return
 		}
+		markupRetries = 0
 		ordered := make([]int, 0, len(calls))
 		for index := range calls {
 			ordered = append(ordered, index)
