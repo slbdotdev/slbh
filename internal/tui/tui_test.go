@@ -167,7 +167,7 @@ func TestAgentPanelUsesPinkTreeMarkers(t *testing.T) {
 	}
 }
 
-func TestReceiveEventsMergesStreamsAndBoundsDisplayHistory(t *testing.T) {
+func TestReceiveEventsMergesStreamsAndRetainsDisplayHistory(t *testing.T) {
 	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +189,7 @@ func TestReceiveEventsMergesStreamsAndBoundsDisplayHistory(t *testing.T) {
 		t.Fatalf("merged assistant text=%q, want %q", got, "first second")
 	}
 
-	toolEvents := make([]seam.Event, maxRetainedViewportEvents+100)
+	toolEvents := make([]seam.Event, 612)
 	for i := range toolEvents {
 		toolEvents[i] = seam.Event{
 			AgentID: seat,
@@ -202,15 +202,110 @@ func TestReceiveEventsMergesStreamsAndBoundsDisplayHistory(t *testing.T) {
 	}
 	m.receiveEvents(toolEvents)
 	if got := len(m.events); got != maxRetainedViewportEvents {
-		t.Fatalf("display history length=%d, want bounded length %d", got, maxRetainedViewportEvents)
+		t.Fatalf("display history length=%d, want %d", got, maxRetainedViewportEvents)
+	}
+	if got := m.events[0].Text; got != "question" {
+		t.Fatalf("display history lost first message: %q", got)
 	}
 	if got := m.events[len(m.events)-1].Text; got != "result-611" {
 		t.Fatalf("display history lost newest event: %q", got)
 	}
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = updated.(Model)
+	m.viewport.GotoTop()
+	if got := ansi.Strip(m.viewport.View()); !strings.Contains(got, "question") {
+		t.Fatalf("first message is not reachable at the top: %q", got)
+	}
+	m.viewport.GotoBottom()
 	if got := ansi.Strip(m.View().Content); !strings.Contains(got, "result-611") {
-		t.Fatalf("stream disappeared after its user anchor was evicted: %q", got)
+		t.Fatalf("newest stream disappeared: %q", got)
+	}
+}
+
+func TestDisplayHistoryEvictsControlsAndToolOutputBeforeMessages(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	seat := seatID(runtime)
+	child := "child"
+	m := New(runtime)
+	messages := []seam.Event{
+		{AgentID: seat, Kind: "user", Text: "first prompt"},
+		{AgentID: seat, Kind: "assistant", Text: "first answer"},
+		{AgentID: child, Kind: "user", Text: "child prompt"},
+		{AgentID: child, Kind: "child_result", Text: "child answer"},
+	}
+	events := append([]seam.Event(nil), messages...)
+	payload := strings.Repeat("request payload ", 4096)
+	for i := 0; i < 700; i++ {
+		for _, kind := range []string{"inference_request", "status", "usage", "turn_done"} {
+			events = append(events, seam.Event{AgentID: seat, Kind: kind, Metadata: map[string]any{"request": payload}})
+		}
+		events = append(events, seam.Event{AgentID: seat, Kind: "tool_result", Text: fmt.Sprintf("result-%d", i)})
+	}
+	m.receiveEvents(events)
+	if got := len(m.events); got != maxRetainedViewportEvents {
+		t.Fatalf("display history length=%d, want %d", got, maxRetainedViewportEvents)
+	}
+	for i, want := range messages {
+		if got := m.events[i]; got.AgentID != want.AgentID || got.Kind != want.Kind || got.Text != want.Text {
+			t.Fatalf("message %d changed to %+v", i, got)
+		}
+	}
+	for _, event := range m.events {
+		if !isViewportEvent(event) {
+			t.Fatalf("control record retained: %q", event.Kind)
+		}
+	}
+	if got := m.events[len(m.events)-1].Text; got != "result-699" {
+		t.Fatalf("newest tool output=%q", got)
+	}
+
+	oldestTool := m.events[len(messages)].Text
+	m.events = m.events[:len(m.events)-1]
+	m.appendViewportEvent(seam.Event{AgentID: seat, Kind: "inference_request", Metadata: map[string]any{"request": payload}})
+	m.appendViewportEvent(seam.Event{AgentID: seat, Kind: "tool_result", Text: "new result"})
+	if got := m.events[len(messages)].Text; got != oldestTool {
+		t.Fatalf("tool output evicted before control record: %q", got)
+	}
+	for _, event := range m.events {
+		if !isViewportEvent(event) {
+			t.Fatalf("control record retained after eviction: %q", event.Kind)
+		}
+	}
+
+	messageOnly := Model{}
+	for i := 0; i <= maxRetainedViewportEvents; i++ {
+		agentID := seat
+		if i%2 == 1 {
+			agentID = child
+		}
+		messageOnly.appendViewportEvent(seam.Event{AgentID: agentID, Kind: "user", Text: fmt.Sprintf("message-%d", i)})
+	}
+	if got := len(messageOnly.events); got != maxRetainedViewportEvents+1 {
+		t.Fatalf("message-only history retained %d messages", got)
+	}
+}
+
+func TestRenderCachesHoldRetainedMessageHistory(t *testing.T) {
+	m := Model{}
+	for i := 0; i <= renderedEventCacheLimit; i++ {
+		m.events = append(m.events, seam.Event{AgentID: "seat", Kind: "user", Text: fmt.Sprintf("message-%d", i)})
+	}
+	for _, event := range m.events {
+		m.renderEventCached(event, 40)
+	}
+	if got := len(m.eventRenderCache); got != len(m.events) {
+		t.Fatalf("event render cache retained %d of %d messages", got, len(m.events))
+	}
+	for i := 0; i <= markdownRenderCacheLimit; i++ {
+		m.cacheRenderedMarkdown(markdownCacheKey{source: fmt.Sprintf("message-%d", i), width: 40}, "rendered")
+	}
+	if got := len(m.markdownCache); got != markdownRenderCacheLimit+1 {
+		t.Fatalf("markdown render cache retained %d messages", got)
 	}
 }
 
@@ -749,6 +844,18 @@ func TestMessageViewportScrollsWithKeyboardAndMouse(t *testing.T) {
 	if !m.viewport.AtBottom() {
 		t.Fatal("viewport should start at the bottom")
 	}
+	m.history = []string{"earlier prompt"}
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(Model)
+	if m.viewport.AtBottom() || m.input.Value() != "" {
+		t.Fatalf("Up should scroll an empty-input viewport without recalling history (offset=%d input=%q)", m.viewport.YOffset(), m.input.Value())
+	}
+	upOffset := m.viewport.YOffset()
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(Model)
+	if m.viewport.YOffset() <= upOffset || m.focusAgents {
+		t.Fatalf("Down should scroll the viewport (offset=%d focusAgents=%v)", m.viewport.YOffset(), m.focusAgents)
+	}
 
 	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyPgUp})
 	m = updated.(Model)
@@ -773,6 +880,11 @@ func TestMessageViewportScrollsWithKeyboardAndMouse(t *testing.T) {
 	}
 	if m.userScrolled {
 		t.Fatal("viewport remained marked as scrolled after reaching the bottom")
+	}
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModCtrl})
+	m = updated.(Model)
+	if !m.focusAgents {
+		t.Fatal("Ctrl-Down did not focus the agent list")
 	}
 }
 
@@ -886,17 +998,22 @@ func TestHistoryIsMachineGlobalAndBashStyle(t *testing.T) {
 	m.input.SetValue("draft")
 	updated, _ := m.updateKey(tea.KeyPressMsg{Code: tea.KeyUp})
 	m = updated.(Model)
+	if got := m.input.Value(); got != "draft" {
+		t.Fatalf("plain Up changed draft to %q", got)
+	}
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModAlt})
+	m = updated.(Model)
 	if got := m.input.Value(); got != "second" {
 		t.Fatalf("first Up recalled %q, want second", got)
 	}
-	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModAlt})
 	m = updated.(Model)
 	if got := m.input.Value(); got != "first\nline" {
 		t.Fatalf("second Up recalled %q, want multiline first message", got)
 	}
-	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModAlt})
 	m = updated.(Model)
-	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	updated, _ = m.updateKey(tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModAlt})
 	m = updated.(Model)
 	if got := m.input.Value(); got != "draft" {
 		t.Fatalf("Down past newest history returned %q, want draft", got)

@@ -36,15 +36,17 @@ var (
 
 const nonChatBlockHeight = 10
 
-// maxRetainedViewportEvents bounds the interactive display state. The runtime
-// transcript and event stream remain durable and complete; the TUI only needs
-// a recent window to stay responsive while a tool-heavy turn emits thousands
-// of control records.
+// maxRetainedViewportEvents is a soft cap on display state; the runtime
+// transcript remains complete. Keep every message from every agent, evicting
+// control records first and then the oldest non-message output when full.
+// Messages alone may exceed the cap so earlier chat stays scrollable.
 const maxRetainedViewportEvents = 512
 
+// These cache limits are floors. Each grows to twice the retained event count
+// so a full refresh can reuse old blocks while streaming adds new versions.
 const markdownRenderCacheLimit = 512
 
-const renderedEventCacheLimit = maxRetainedViewportEvents * 2
+const renderedEventCacheLimit = 1024
 
 // markdownThrottle bounds how often a streamed message is re-rendered.
 const markdownThrottle = 100 * time.Millisecond
@@ -331,9 +333,8 @@ func (m *Model) receiveEvents(events []seam.Event) {
 	}
 }
 
-// appendViewportEvent folds streamed fragments before they enter the bounded
-// display history. This prevents a long assistant or reasoning stream from
-// losing its beginning merely because it crossed the retention boundary.
+// appendViewportEvent folds adjacent stream fragments before applying the
+// display bound, avoiding one retained event per chunk.
 func (m *Model) appendViewportEvent(event seam.Event) {
 	if len(m.events) > 0 {
 		previous := &m.events[len(m.events)-1]
@@ -360,10 +361,23 @@ func (m *Model) appendViewportEvent(event seam.Event) {
 		}
 	}
 	m.events = append(m.events, event)
-	if len(m.events) > maxRetainedViewportEvents {
-		drop := len(m.events) - maxRetainedViewportEvents
-		copy(m.events, m.events[drop:])
-		m.events = m.events[:maxRetainedViewportEvents]
+	for len(m.events) > maxRetainedViewportEvents {
+		drop := -1
+		for i, retained := range m.events {
+			if !isViewportEvent(retained) {
+				drop = i
+				break
+			}
+			if drop == -1 && !isMessage(retained) {
+				drop = i
+			}
+		}
+		if drop == -1 {
+			break
+		}
+		copy(m.events[drop:], m.events[drop+1:])
+		m.events[len(m.events)-1] = seam.Event{}
+		m.events = m.events[:len(m.events)-1]
 	}
 }
 
@@ -410,20 +424,28 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if msg.Code == tea.KeyUp {
-		if m.recallHistory(-1) {
-			return m, nil
-		}
+	if msg.Mod.Contains(tea.ModAlt) && msg.Code == tea.KeyUp {
+		m.recallHistory(-1)
+		return m, nil
 	}
-	if msg.Code == tea.KeyDown && m.historyIndex != -1 {
-		if m.recallHistory(1) {
-			return m, nil
-		}
+	if msg.Mod.Contains(tea.ModAlt) && msg.Code == tea.KeyDown {
+		m.recallHistory(1)
+		return m, nil
 	}
-	if msg.Code == tea.KeyDown && !strings.Contains(m.input.Value(), "\n") {
+	if msg.Mod.Contains(tea.ModCtrl) && msg.Code == tea.KeyDown {
 		m.focusAgents = true
 		m.input.Blur()
 		return m, nil
+	}
+	if msg.Mod == 0 && m.input.Value() == "" {
+		switch msg.Code {
+		case tea.KeyUp:
+			m.scrollUp()
+			return m, nil
+		case tea.KeyDown:
+			m.scrollDown()
+			return m, nil
+		}
 	}
 	if msg.Code == tea.KeyEnter {
 		cmd := m.submit()
@@ -479,7 +501,7 @@ func (m *Model) scrollUpBy(lines int) {
 		lines = 1
 	}
 	m.viewport.ScrollUp(lines)
-	m.userScrolled = true
+	m.userScrolled = !m.viewport.AtBottom()
 }
 
 func (m *Model) scrollDown() {
@@ -1134,10 +1156,6 @@ func (m *Model) refreshView() {
 	}
 	width := max(1, m.chatWidth())
 	m.markdownRendererForWidth(width)
-	// A bounded display history can evict the original user event while a
-	// tool-heavy turn is still producing output. In that case the remaining
-	// stream is still useful and must not disappear merely because the normal
-	// conversation anchor is gone.
 	hasUser := false
 	for _, event := range m.events {
 		if event.AgentID == m.viewAgentID && event.Kind == "user" {
@@ -1285,7 +1303,7 @@ func (m *Model) renderEventCached(event seam.Event, width int) string {
 	if m.eventRenderCache == nil {
 		m.eventRenderCache = make(map[renderedEventCacheKey]string)
 	}
-	if len(m.eventRenderCache) >= renderedEventCacheLimit {
+	if len(m.eventRenderCache) >= max(renderedEventCacheLimit, 2*len(m.events)) {
 		clear(m.eventRenderCache)
 	}
 	m.eventRenderCache[key] = rendered
@@ -1378,7 +1396,7 @@ func (m *Model) cacheRenderedMarkdown(key markdownCacheKey, rendered string) {
 	if m.markdownCache == nil {
 		m.markdownCache = make(map[markdownCacheKey]string)
 	}
-	if len(m.markdownCache) >= markdownRenderCacheLimit {
+	if len(m.markdownCache) >= max(markdownRenderCacheLimit, 2*len(m.events)) {
 		clear(m.markdownCache)
 		clear(m.markdownRecent)
 	}
@@ -1526,8 +1544,7 @@ func (m Model) View() (view tea.View) {
 		bar := m.inputFrame()
 		agents := m.agentPanel()
 		status := m.statusLine()
-		// Keep the agent list in the bottom control area. Besides matching the
-		// layout contract, this makes Down from the input naturally enter it.
+		// Keep the agent list in the bottom control area.
 		parts := []string{chat, bar}
 		if agents != "" {
 			parts = append(parts, agents)
@@ -1578,8 +1595,8 @@ func wrapToWidth(text string, width int) string {
 }
 
 // rollingBlock keeps non-chat output from expanding the message viewport.
-// The complete event remains in the runtime transcript; the TUI's display
-// history is intentionally bounded so rendering cost cannot grow forever.
+// The complete event remains in the runtime transcript; only the newest lines
+// are rendered so tool-heavy turns do not expand the viewport indefinitely.
 func rollingBlock(text string, width int) string {
 	wrapped := wrapToWidth(text, width)
 	lines := strings.Split(wrapped, "\n")
