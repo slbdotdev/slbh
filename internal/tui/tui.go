@@ -1211,6 +1211,12 @@ func (m *Model) refreshView() {
 			end := i
 			parts := make([]string, 0, 1)
 			for end < len(visible) && !isMessage(visible[end]) {
+				// A thinking span after other output opens the next round's
+				// block. One rolling window over several rounds let each new
+				// thought push the previous round's out through the top.
+				if end > i && visible[end].Kind == "thinking" && visible[end-1].Kind != "thinking" {
+					break
+				}
 				parts = append(parts, m.renderEventCached(visible[end], width))
 				end++
 			}

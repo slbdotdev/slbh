@@ -793,6 +793,40 @@ func TestNonChatBlocksRollAtTenLines(t *testing.T) {
 	}
 }
 
+func TestLaterThinkingDoesNotRollEarlierRoundsAway(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	numbered := func(prefix string) string {
+		lines := make([]string, 12)
+		for i := range lines {
+			lines[i] = fmt.Sprintf("%s %02d", prefix, i+1)
+		}
+		return strings.Join(lines, "\n")
+	}
+	m := New(runtime)
+	m.width = 40
+	m.viewport.SetHeight(200)
+	m.events = []seam.Event{
+		{AgentID: seatID(runtime), Kind: "user", Text: "hi"},
+		{AgentID: seatID(runtime), Kind: "thinking", Text: numbered("first")},
+		{AgentID: seatID(runtime), Kind: "tool_result", Text: "done", Metadata: map[string]any{"name": "quick_bash"}},
+		{AgentID: seatID(runtime), Kind: "thinking", Text: numbered("second")},
+	}
+	m.refreshView()
+	content := ansi.Strip(m.viewport.View())
+	for _, want := range []string{"first 12", "done", "second 12"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("content lacks %q: the later round rolled it away: %q", want, content)
+		}
+	}
+	if got := strings.Count(content, "• thinking"); got != 2 {
+		t.Fatalf("got %d thinking headers, want one block per round: %q", got, content)
+	}
+}
+
 func TestNonChatHeaderTalliesThinkingTimeAndToolCalls(t *testing.T) {
 	start := time.Unix(100, 0)
 	events := []seam.Event{
