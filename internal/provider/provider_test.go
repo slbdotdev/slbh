@@ -51,6 +51,9 @@ func TestStablePrefixKeyIgnoresUserTurns(t *testing.T) {
 	if StablePrefixKey(first) == StablePrefixKey(descriptionChanged) {
 		t.Fatal("tool description changes must change the cache key")
 	}
+	if key := StablePrefixKey(first); len(key) > 64 {
+		t.Fatalf("cache key %q is %d characters; prompt_cache_key allows 64", key, len(key))
+	}
 }
 
 func TestRequestPayloadRoundTripsExactly(t *testing.T) {

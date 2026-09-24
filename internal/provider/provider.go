@@ -998,7 +998,12 @@ func StablePrefixKey(req Request) string {
 		Tools  []Tool `json:"tools"`
 	}{Model: req.Model, System: req.System, Tools: req.Tools})
 	sum := sha256.Sum256(encoded)
-	return "slbh-" + hex.EncodeToString(sum[:])
+	// Half the digest, so the key is 37 characters. OpenAI's API caps
+	// prompt_cache_key at 64 and NInfer enforces the cap with a 400; the full
+	// digest made 69, which OpenRouter and Z.ai tolerated and a rented
+	// ninfer-serve refused on the first request. 128 bits still separates
+	// every prefix one host will ever send.
+	return "slbh-" + hex.EncodeToString(sum[:16])
 }
 
 // errTruncatedStream reports a response that ended before its wire's terminal
