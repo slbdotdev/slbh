@@ -393,7 +393,7 @@ func TestStatusLineFormatsContextAndCacheStats(t *testing.T) {
 		CacheHitTokens:  1152,
 		CacheMissTokens: 246,
 	}
-	if got := formatContextStats(agent); got != "1.3k/126.7k" {
+	if got := formatContextStats(agent); got != "1.3k/128k" {
 		t.Fatalf("context stats = %q", got)
 	}
 	if got := formatCacheStats(agent); got != "82%" {

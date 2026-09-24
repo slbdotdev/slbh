@@ -1845,12 +1845,10 @@ func formatContextStats(agent seam.AgentSnapshot) string {
 	if agent.ContextWindow <= 0 {
 		return "--/--"
 	}
+	// Used over the route's whole window, so the total stays fixed while the
+	// numerator grows.
 	used := max(0, agent.ContextUsed)
-	available := agent.ContextWindow - used
-	if available < 0 {
-		available = 0
-	}
-	return fmt.Sprintf("%s/%s", formatTokens(used), formatTokens(available))
+	return fmt.Sprintf("%s/%s", formatTokens(used), formatTokens(agent.ContextWindow))
 }
 
 func formatCacheStats(agent seam.AgentSnapshot) string {
