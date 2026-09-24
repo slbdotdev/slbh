@@ -333,6 +333,7 @@ func (a *Agent) compacted(ctx context.Context, p provider.Provider, model, effor
 	}
 	replaced := cut - first
 	recent := history[cut:]
+	defer a.beginCompacting(replaced)()
 	summary, err := a.summarize(ctx, p, summaryRequest(model, effort, history[first:cut], previous, hasPrevious))
 	if ctx.Err() != nil {
 		return history, 0
@@ -347,6 +348,30 @@ func (a *Agent) compacted(ctx context.Context, p provider.Provider, model, effor
 	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compact", Text: summary, Metadata: map[string]any{"mode": "summary", "replaced": replaced, "updated": hasPrevious}})
 	message := provider.Message{Role: "user", Content: compactSummaryPrefix + summary + compactSummarySuffix}
 	return append([]provider.Message{message}, recent...), replaced
+}
+
+// beginCompacting shows that a summary is being written, which on a long
+// history takes as long as a turn and otherwise looks like a stalled agent.
+// The returned func restores the prior status unless something else, such as
+// a turn that started during /compact, has set one since.
+func (a *Agent) beginCompacting(replaced int) func() {
+	a.mu.Lock()
+	prior := a.status
+	a.status = "compacting"
+	a.mu.Unlock()
+	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: "compacting"})
+	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compacting", Text: fmt.Sprintf("compacting %d earlier messages", replaced), Metadata: map[string]any{"purpose": "compaction", "replaced": replaced}})
+	return func() {
+		a.mu.Lock()
+		restore := a.status == "compacting"
+		if restore {
+			a.status = prior
+		}
+		a.mu.Unlock()
+		if restore {
+			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: prior})
+		}
+	}
 }
 
 // compactHistoryIfNeeded is the turn loop's compaction: at 70% of the window,

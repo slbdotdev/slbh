@@ -24,7 +24,9 @@ records every session as an append-only JSONL transcript.
 - **Managed shell jobs.** Commands run as jobs that can be backgrounded,
   inspected while running, and killed.
 - **Automatic compaction.** History is summarized when context usage reaches
-  70% of the model's window.
+  70% of the model's window. While the summary is written the agent's status
+  is `compacting` and a `compacting` event names how many messages it replaces;
+  the `compact` event that follows carries the summary.
 
 ## Requirements
 
@@ -261,6 +263,11 @@ SLBH_RUN_LIVE_TESTS=1 go test -tags live_integration ./internal/harness \
 
 SLBH_RUN_CODEX_TESTS=1 go test -tags live_integration ./internal/harness \
   -run '^TestLiveCodexLeaf' -count=1 -timeout 10m
+
+# Compaction end to end on a real route with its window shrunk to 16,384;
+# SLBH_ACCEPT_COMPACT_ROUTE picks the route (default the rented 5090).
+SLBH_ACCEPT_COMPACT=1 go test -tags live_integration ./internal/harness \
+  -run TestAcceptanceCompaction -count=1 -timeout 10m
 ```
 
 Messaging changes must be tested for model-visible delivery during active

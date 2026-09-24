@@ -736,7 +736,8 @@ func (m *Model) handleCommand(command string) tea.Cmd {
 		}
 	case "/compact":
 		agentID := m.viewAgentID
-		m.addLocal("status", "compacting: the agent's model is summarizing its earlier messages")
+		// The runtime reports the compaction itself: a compacting line and
+		// status while the summary is written, then the summary.
 		return func() tea.Msg {
 			reply, err := m.runtime.Do(seam.CompactCommand{AgentID: agentID})
 			return compactDoneMsg{replaced: reply.Dropped, err: err}
@@ -1241,10 +1242,7 @@ func (m *Model) refreshView() {
 			end := i
 			parts := make([]string, 0, 1)
 			for end < len(visible) && !isMessage(visible[end]) {
-				// A thinking span after other output opens the next round's
-				// block. One rolling window over several rounds let each new
-				// thought push the previous round's out through the top.
-				if end > i && visible[end].Kind == "thinking" && visible[end-1].Kind != "thinking" {
+				if end > i && opensNonChatBlock(visible[end-1], visible[end]) {
 					break
 				}
 				parts = append(parts, m.renderEventCached(visible[end], width))
@@ -1822,10 +1820,23 @@ func metadataString(event seam.Event, key string) string {
 	return strings.TrimSpace(fmt.Sprint(value))
 }
 
+// opensNonChatBlock reports whether event starts a new gray block after
+// previous. A thinking span after other output opens the next round's block,
+// and a compaction gets a block of its own: one rolling window over several
+// rounds let each new thought, or a long summary, push the earlier output out
+// through the top.
+func opensNonChatBlock(previous, event seam.Event) bool {
+	return (event.Kind == "thinking" && previous.Kind != "thinking") || event.Kind == "compacting" || previous.Kind == "compact"
+}
+
 func responseType(event seam.Event) string {
 	switch event.Kind {
 	case "thinking":
 		return "thinking"
+	case "compacting":
+		return "compacting"
+	case "compact":
+		return "compacted"
 	case "tool", "tool_result":
 		name, _ := event.Metadata["name"].(string)
 		if name != "" {

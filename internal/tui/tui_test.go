@@ -827,6 +827,58 @@ func TestLaterThinkingDoesNotRollEarlierRoundsAway(t *testing.T) {
 	}
 }
 
+func TestCompactionRendersAsItsOwnBlock(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	numbered := func(prefix string) string {
+		lines := make([]string, 12)
+		for i := range lines {
+			lines[i] = fmt.Sprintf("%s %02d", prefix, i+1)
+		}
+		return strings.Join(lines, "\n")
+	}
+	seat := seatID(runtime)
+	m := New(runtime)
+	m.width = 60
+	m.viewport.SetHeight(200)
+	m.events = []seam.Event{
+		{AgentID: seat, Kind: "user", Text: "hi"},
+		{AgentID: seat, Kind: "thinking", Text: numbered("round")},
+		{AgentID: seat, Kind: "tool_result", Text: "done", Metadata: map[string]any{"name": "bash"}},
+		{AgentID: seat, Kind: "compacting", Text: "compacting 3 earlier messages"},
+	}
+	m.refreshView()
+	trimmed := func() string {
+		lines := strings.Split(ansi.Strip(m.viewport.View()), "\n")
+		for i := range lines {
+			lines[i] = strings.TrimRight(lines[i], " ")
+		}
+		return strings.Join(lines, "\n")
+	}
+	content := trimmed()
+	if !strings.Contains(content, "\n• compacting\ncompacting 3 earlier messages\n") {
+		t.Fatalf("compaction in progress is not shown on its own: %q", content)
+	}
+
+	m.events = append(m.events,
+		seam.Event{AgentID: seat, Kind: "compact", Text: numbered("summary"), Metadata: map[string]any{"mode": "summary"}},
+		seam.Event{AgentID: seat, Kind: "tool_result", Text: "after", Metadata: map[string]any{"name": "bash"}},
+	)
+	m.refreshView()
+	content = trimmed()
+	for _, want := range []string{"round 12", "done", "• compacting · compacted", "summary 12", "after"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("content lacks %q: %q", want, content)
+		}
+	}
+	if strings.Count(content, "• ") != 4 {
+		t.Fatalf("want user, round, compaction and the next output as four blocks: %q", content)
+	}
+}
+
 func TestNonChatHeaderTalliesThinkingTimeAndToolCalls(t *testing.T) {
 	start := time.Unix(100, 0)
 	events := []seam.Event{

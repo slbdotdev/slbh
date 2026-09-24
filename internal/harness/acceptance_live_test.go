@@ -892,3 +892,81 @@ func acceptEstimatedTokens(system string, history []provider.Message) int {
 }
 
 var _ = sort.Strings
+
+// TestAcceptanceCompaction drives automatic compaction end to end on a real
+// route: the managed policy's route, wire and endpoint, with only its pinned
+// window shrunk so that three large tool results cross 70% of it. The agent
+// must show compacting while each summary is written, replace its history
+// with a summary, and still answer from a fact stated before any compaction.
+// SLBH_ACCEPT_COMPACT_ROUTE picks the route; it defaults to the rented 5090,
+// which costs nothing per call while it is up.
+func TestAcceptanceCompaction(t *testing.T) {
+	if os.Getenv("SLBH_ACCEPT_COMPACT") != "1" {
+		t.Skip("set SLBH_ACCEPT_COMPACT=1 to run a live compaction (about six requests)")
+	}
+	route := strings.TrimSpace(os.Getenv("SLBH_ACCEPT_COMPACT_ROUTE"))
+	if route == "" {
+		route = "remote/fafstmobel-cinference"
+	}
+	cfg := acceptPolicy(t)
+	entry, ok := cfg.Policy.Routes[route]
+	if !ok {
+		t.Fatalf("route %q is not in the managed policy", route)
+	}
+	// 16,384 compacts at about 11.5k tokens; the output bound must fit in it.
+	entry.ContextWindow = 16384
+	if entry.MaxOutputTokens == 0 || entry.MaxOutputTokens > 4096 {
+		entry.MaxOutputTokens = 4096
+	}
+	cfg.Policy.Routes[route] = entry
+	cfg.Home = t.TempDir()
+	cfg.SeatModel = route
+	cfg.SeatEffort = entry.DefaultEffort
+	cfg.ApprovedModels = []string{route}
+
+	instance, _ := acceptProvider(t, cfg, route)
+	live := &liveProvider{inner: instance}
+	runtime, err := New(cfg, Options{Provider: func(string) (provider.Provider, error) { return live, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	seat := runtime.seat()
+	start := time.Now()
+	seat.Send("The codeword is PELICAN-42. Remember it. Now run these three shell commands one at a time, each in its own " +
+		"separate tool call, waiting for each result before the next: `seq -f 'row %06g' 1 1500`, then " +
+		"`seq -f 'row %06g' 1501 3000`, then `seq -f 'row %06g' 3001 4500`. Do not summarize the output. " +
+		"After the third, reply with only the codeword.")
+	waitLiveTurn(t, runtime, 1)
+
+	var compacting, statuses, summaries int
+	var answer strings.Builder
+	for _, event := range agentEvents(runtime, seat.ID) {
+		switch {
+		case event.Kind == "compacting":
+			compacting++
+		case event.Kind == "status" && event.Text == "compacting":
+			statuses++
+		case event.Kind == "compact" && event.Metadata["mode"] == "summary":
+			summaries++
+		case event.Kind == "assistant":
+			answer.WriteString(event.Text)
+		}
+	}
+	t.Logf("%s: %d compactions (%d summaries) in %s; answer %q", route, compacting, summaries, time.Since(start).Round(time.Second), strings.TrimSpace(answer.String()))
+	if summaries == 0 {
+		t.Fatal("no summary compaction happened")
+	}
+	if compacting != statuses || compacting < summaries {
+		t.Fatalf("%d compacting lines and %d compacting statuses for %d summaries", compacting, statuses, summaries)
+	}
+	if _, ok := previousSummary(seat.History()); !ok {
+		t.Fatal("the history does not open with a summary")
+	}
+	if !strings.Contains(answer.String(), "PELICAN-42") {
+		t.Fatalf("the fact stated before compaction was lost: %q", answer.String())
+	}
+	if status := seat.Snapshot().Status; status != "idle" {
+		t.Fatalf("status after the turn = %q, want idle", status)
+	}
+}
