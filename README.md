@@ -158,7 +158,7 @@ retryable in-stream errors are.
 ## Agents and tools
 
 Each agent has its own history, model, effort, working directory, and inbox.
-A turn may run up to 100 provider/tool rounds.
+A turn may run up to 500 provider/tool rounds.
 
 **Message delivery.** Messages from the user, parents, children, and siblings
 enter the recipient's context in FIFO order at the next call boundary, and an

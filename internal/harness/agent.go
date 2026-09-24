@@ -358,7 +358,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 		}
 		history = a.appendMessages(history, a.takeMessages())
 		history = a.compactHistoryIfNeeded(turnCtx, p, model, effort, history, contextWindow, system, tools)
-		if round >= 100 {
+		if round >= 500 {
 			a.fail(fmt.Errorf("provider/tool round limit reached"))
 			return
 		}
