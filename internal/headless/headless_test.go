@@ -47,15 +47,26 @@ func newRuntime(t *testing.T, p provider.Provider) *harness.Runtime {
 func TestServeIsPersistentAndCarriesTheRuntimeEventStream(t *testing.T) {
 	rt := newRuntime(t, answering{})
 	inR, inW := io.Pipe()
-	var output bytes.Buffer
+	outR, outW := io.Pipe()
 	done := make(chan error, 1)
-	go func() { done <- Serve(context.Background(), rt, inR, &output, Options{}) }()
+	go func() {
+		done <- Serve(context.Background(), rt, inR, outW, Options{})
+		_ = outW.Close()
+	}()
+	decoder := json.NewDecoder(outR)
 	seatID := rt.Agents()[0].ID
-	writeRequest(t, inW, 1, "send_prompt", map[string]any{"agent_id": seatID, "prompt": "first"})
-	writeRequest(t, inW, 2, "send_prompt", map[string]any{"agent_id": seatID, "prompt": "second"})
-	time.Sleep(50 * time.Millisecond)
+
+	// Each prompt runs to turn_done before the next is sent, so both are
+	// separate turns on one protocol session rather than one merged turn.
+	var messages []map[string]json.RawMessage
+	for id, prompt := range []string{"first", "second"} {
+		writeRequest(t, inW, id+1, "send_prompt", map[string]any{"agent_id": seatID, "prompt": prompt})
+		messages = append(messages, readUntilEvent(t, decoder, "turn_done")...)
+	}
 	writeRequest(t, inW, 3, "close", map[string]any{})
+	messages = append(messages, readUntilID(t, decoder, 3)...)
 	_ = inW.Close()
+	go func() { _, _ = io.Copy(io.Discard, outR) }()
 	select {
 	case err := <-done:
 		if err != nil {
@@ -64,12 +75,11 @@ func TestServeIsPersistentAndCarriesTheRuntimeEventStream(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Serve did not stop after close")
 	}
-	messages := decodeMessages(t, output.Bytes())
 	if !hasResponseID(messages, 1) || !hasResponseID(messages, 2) || !hasResponseID(messages, 3) {
 		t.Fatalf("protocol responses missing: %v", messages)
 	}
-	if countEventMessages(messages) == 0 {
-		t.Fatalf("event stream was empty: %v", messages)
+	if got := countAssistantEvents(messages); got != 2 {
+		t.Fatalf("assistant events = %d, want one per prompt: %v", got, messages)
 	}
 }
 
@@ -182,16 +192,6 @@ func hasResponseID(messages []map[string]json.RawMessage, id int) bool {
 	return false
 }
 
-func countEventMessages(messages []map[string]json.RawMessage) int {
-	count := 0
-	for _, message := range messages {
-		if string(message["method"]) == `"event"` {
-			count++
-		}
-	}
-	return count
-}
-
 func readUntilEvent(t *testing.T, decoder *json.Decoder, kind string) []map[string]json.RawMessage {
 	t.Helper()
 	var messages []map[string]json.RawMessage
@@ -206,9 +206,17 @@ func readUntilEvent(t *testing.T, decoder *json.Decoder, kind string) []map[stri
 		}
 		var event struct {
 			Kind string `json:"kind"`
+			Text string `json:"text"`
 		}
-		if err := json.Unmarshal(message["params"], &event); err == nil && event.Kind == kind {
+		if err := json.Unmarshal(message["params"], &event); err != nil {
+			continue
+		}
+		if event.Kind == kind {
 			return messages
+		}
+		// A failed turn never reaches turn_done; stop rather than wait forever.
+		if event.Kind == "error" {
+			t.Fatalf("error event while waiting for %s: %s", kind, event.Text)
 		}
 	}
 }

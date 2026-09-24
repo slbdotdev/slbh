@@ -146,13 +146,6 @@ func TestSystemPromptDirectsAsyncChildHandling(t *testing.T) {
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // windowProvider is a ContextWindowProvider that reports a discoverable window
 // and no route policy, so a pin can be proved to beat discovery and not merely
 // the fallback. discovery records whether the catalog was consulted at all.

@@ -2,6 +2,7 @@ package harness
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/slbdotdev/slbh/internal/provider"
@@ -42,7 +43,7 @@ func toolMarkupNote(names []string, tools []provider.Tool) string {
 	}
 	var undeclared []string
 	for _, name := range names {
-		if !declared[name] && !contains(undeclared, name) {
+		if !declared[name] && !slices.Contains(undeclared, name) {
 			undeclared = append(undeclared, name)
 		}
 	}
@@ -53,13 +54,4 @@ func toolMarkupNote(names []string, tools []provider.Tool) string {
 		note += " The markup could not be parsed as a call."
 	}
 	return note + " Your tools are: " + strings.Join(available, ", ") + ". Call one of them, or answer without a tool call."
-}
-
-func contains(values []string, value string) bool {
-	for _, v := range values {
-		if v == value {
-			return true
-		}
-	}
-	return false
 }

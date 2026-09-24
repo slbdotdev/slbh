@@ -166,19 +166,7 @@ func (openAIChatWire) payload(p *HTTPProvider, req Request) ([]byte, error) {
 		StreamOptions:    streamOptions{IncludeUsage: true},
 		Provider:         providerObjectFor(p.Route),
 	}
-	if len(req.Tools) > 0 {
-		body.Tools = make([]wireTool, 0, len(req.Tools))
-		for _, tool := range req.Tools {
-			body.Tools = append(body.Tools, wireTool{
-				Type: "function",
-				Function: wireToolFunction{
-					Name:        tool.Name,
-					Description: tool.Description,
-					Parameters:  tool.Parameters,
-				},
-			})
-		}
-	}
+	body.Tools = toolsToWire(req.Tools)
 	return json.Marshal(body)
 }
 
@@ -248,16 +236,7 @@ func (openAIChatWire) requestFromPayload(payload []byte) (Request, error) {
 		CacheKey:    body.PromptCacheKey,
 		Temperature: body.Temperature,
 	}
-	if len(body.Tools) > 0 {
-		request.Tools = make([]Tool, 0, len(body.Tools))
-		for _, tool := range body.Tools {
-			request.Tools = append(request.Tools, Tool{
-				Name:        tool.Function.Name,
-				Description: tool.Function.Description,
-				Parameters:  tool.Function.Parameters,
-			})
-		}
-	}
+	request.Tools = toolsFromWire(body.Tools)
 	return request, nil
 }
 

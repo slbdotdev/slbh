@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1147,7 +1148,7 @@ func TestLaunchSubagentToolAdvertisesLeafHarnessModelFields(t *testing.T) {
 		t.Fatalf("launch_subagent properties = %#v", launch.Parameters["properties"])
 	}
 	required, ok := launch.Parameters["required"].([]string)
-	if !ok || !containsString(required, "title") || !containsString(required, "brief") || containsString(required, "role") {
+	if !ok || !slices.Contains(required, "title") || !slices.Contains(required, "brief") || slices.Contains(required, "role") {
 		t.Fatalf("launch required fields = %#v", launch.Parameters["required"])
 	}
 	harness, ok := properties["harness"].(map[string]any)
@@ -1176,15 +1177,6 @@ func TestLaunchSubagentToolAdvertisesLeafHarnessModelFields(t *testing.T) {
 	if len(r.toolDefinitions(manager.ID)) == 0 {
 		t.Fatal("depth-1 child lost launch_subagent tool")
 	}
-}
-
-func containsString(values []string, wanted string) bool {
-	for _, value := range values {
-		if value == wanted {
-			return true
-		}
-	}
-	return false
 }
 
 func TestChildResultReachesParent(t *testing.T) {

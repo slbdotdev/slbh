@@ -282,33 +282,6 @@ func boolValue(values map[string]any, key string) bool {
 	return value
 }
 
-func uint64Value(values map[string]any, key string) (uint64, error) {
-	value, ok := values[key].(float64)
-	if !ok || value < 1 || value != float64(uint64(value)) {
-		return 0, fmt.Errorf("%s must be a positive integer", key)
-	}
-	return uint64(value), nil
-}
-
-func stringSliceValue(values map[string]any, key string) ([]string, error) {
-	raw, present := values[key]
-	if !present {
-		return nil, nil
-	}
-	items, ok := raw.([]any)
-	if !ok {
-		return nil, fmt.Errorf("%s must be an array of strings", key)
-	}
-	result := make([]string, len(items))
-	for index, item := range items {
-		text, ok := item.(string)
-		if !ok {
-			return nil, fmt.Errorf("%s must be an array of strings", key)
-		}
-		result[index] = text
-	}
-	return result, nil
-}
 func jsonString(value any) (string, error) {
 	b, err := json.MarshalIndent(value, "", "  ")
 	return string(b), err

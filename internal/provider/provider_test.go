@@ -56,6 +56,34 @@ func TestStablePrefixKeyIgnoresUserTurns(t *testing.T) {
 	}
 }
 
+// TestToolFreePayloadsOmitToolsOnBothFunctionWires pins what the shared
+// toolsToWire/toolsFromWire helpers must keep: a request with no tools, nil or
+// empty, sends no "tools" field on either wire and decodes back to nil.
+func TestToolFreePayloadsOmitToolsOnBothFunctionWires(t *testing.T) {
+	for _, wire := range []string{WireOpenAIChat, WireOllamaChat} {
+		p, err := NewHTTPOnWire("https://example.invalid/v1/chat/completions", "test-key", wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tools := range [][]Tool{nil, {}} {
+			payload, err := p.RequestPayload(Request{Model: "vendor/model", System: "system", Messages: []Message{{Role: "user", Content: "hi"}}, Tools: tools})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(payload, []byte(`"tools"`)) {
+				t.Fatalf("%s: tool-free payload carries tools: %s", wire, payload)
+			}
+			decoded, err := RequestFromPayloadOnWire(wire, payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Tools != nil {
+				t.Fatalf("%s: decoded tools = %#v, want nil", wire, decoded.Tools)
+			}
+		}
+	}
+}
+
 func TestRequestPayloadRoundTripsExactly(t *testing.T) {
 	temperature := 0.2
 	req := Request{
