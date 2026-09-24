@@ -922,6 +922,64 @@ func TestMessageViewportScrollsWithKeyboardAndMouse(t *testing.T) {
 	}
 }
 
+func TestArrowsMoveInputCursorUntilItsEdges(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	m := New(runtime)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(Model)
+	child := launchTestSubagent(t, runtime, "child")
+	updated, _ = m.Update(eventMsg(seam.Event{AgentID: child.ID, AgentTitle: child.Title, Kind: "status", Text: "subagent launched"}))
+	m = updated.(Model)
+	key := func(code rune) {
+		t.Helper()
+		updated, _ := m.updateKey(tea.KeyPressMsg{Code: code})
+		m = updated.(Model)
+	}
+
+	m.input.SetValue("one\ntwo\nthree")
+	key(tea.KeyUp)
+	key(tea.KeyUp)
+	if m.input.Line() != 0 || m.focusAgents || m.input.Value() != "one\ntwo\nthree" {
+		t.Fatalf("Up should walk the cursor to the first line (line=%d focus=%v value=%q)", m.input.Line(), m.focusAgents, m.input.Value())
+	}
+	key(tea.KeyDown)
+	key(tea.KeyDown)
+	if m.input.Line() != 2 || m.focusAgents {
+		t.Fatalf("Down should walk the cursor back to the last line (line=%d focus=%v)", m.input.Line(), m.focusAgents)
+	}
+	key(tea.KeyDown)
+	if !m.focusAgents || m.agents[m.selected].ID != child.ID {
+		t.Fatalf("Down on the bottom row should select the first root subagent (focus=%v selected=%d agents=%v)", m.focusAgents, m.selected, formatAgents(m.agents))
+	}
+	key(tea.KeyUp)
+	key(tea.KeyUp)
+	if m.focusAgents {
+		t.Fatal("Up from the seat entry should return focus to the input")
+	}
+
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 24})
+	m = updated.(Model)
+	m.input.SetValue(strings.Repeat("wrapped words ", 6))
+	if m.input.LineInfo().Height < 2 {
+		t.Fatalf("test line did not wrap: %+v", m.input.LineInfo())
+	}
+	row := m.input.LineInfo().RowOffset
+	key(tea.KeyUp)
+	if m.input.LineInfo().RowOffset != row-1 || m.focusAgents {
+		t.Fatalf("Up should move within a wrapped line (row %d -> %d)", row, m.input.LineInfo().RowOffset)
+	}
+	key(tea.KeyDown)
+	key(tea.KeyDown)
+	if !m.focusAgents {
+		t.Fatal("Down on the wrapped line's last row should leave the input")
+	}
+}
+
 func TestInputFrameExpandsForMultilineMessages(t *testing.T) {
 	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
 	if err != nil {

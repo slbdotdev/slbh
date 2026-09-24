@@ -433,19 +433,24 @@ func (m Model) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.Mod.Contains(tea.ModCtrl) && msg.Code == tea.KeyDown {
-		m.focusAgents = true
-		m.input.Blur()
+		m.focusAgentList()
 		return m, nil
 	}
-	if msg.Mod == 0 && m.input.Value() == "" {
-		switch msg.Code {
-		case tea.KeyUp:
-			m.scrollUp()
-			return m, nil
-		case tea.KeyDown:
+	// Plain arrows belong to the input's cursor and only act at its edges. With
+	// mouse capture off the terminal sends the wheel as arrows, so the edges
+	// scroll: Up on the top row scrolls up, and Down on the bottom row scrolls
+	// back down before it leaves the input for the first root subagent.
+	if msg.Mod == 0 && msg.Code == tea.KeyUp && m.inputCursorOnTopRow() {
+		m.scrollUp()
+		return m, nil
+	}
+	if msg.Mod == 0 && msg.Code == tea.KeyDown && m.inputCursorOnBottomRow() {
+		if !m.viewport.AtBottom() {
 			m.scrollDown()
 			return m, nil
 		}
+		m.focusAgentList()
+		return m, nil
 	}
 	if msg.Code == tea.KeyEnter {
 		cmd := m.submit()
@@ -490,6 +495,31 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.scrollDownBy(m.viewport.MouseWheelDelta)
 	}
 	return m, nil
+}
+
+// inputCursorOnTopRow and inputCursorOnBottomRow compare visual rows, so a
+// long line that wraps is walked row by row before the cursor leaves it.
+func (m *Model) inputCursorOnTopRow() bool {
+	return m.input.Line() == 0 && m.input.LineInfo().RowOffset == 0
+}
+
+func (m *Model) inputCursorOnBottomRow() bool {
+	info := m.input.LineInfo()
+	return m.input.Line() == m.input.LineCount()-1 && info.RowOffset >= info.Height-1
+}
+
+// focusAgentList moves focus to the agent list with the first root subagent
+// selected, or the seat when there is no subagent.
+func (m *Model) focusAgentList() {
+	m.selected = 0
+	for i, agent := range m.agents {
+		if agent.Depth == 1 {
+			m.selected = i
+			break
+		}
+	}
+	m.focusAgents = true
+	m.input.Blur()
 }
 
 func (m *Model) scrollUp() {
