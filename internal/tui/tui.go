@@ -1870,7 +1870,7 @@ func (m Model) statusLine() string {
 		formatContextStats(current),
 		formatCacheStats(current),
 	}
-	if jobs := len(m.runtime.JobSnapshots()); jobs > 0 {
+	if jobs := runningJobs(m.runtime.JobSnapshots()); jobs > 0 {
 		parts = append(parts, fmt.Sprintf("jobs %d", jobs))
 	}
 	if agents := len(m.agents); agents > 1 {
@@ -1880,6 +1880,18 @@ func (m Model) statusLine() string {
 		parts = append(parts, "mouse")
 	}
 	return wrapToWidth(dim.Render(strings.Join(parts, " · ")), width)
+}
+
+// runningJobs counts jobs still running. The runtime keeps finished jobs for
+// inspection, so their total only ever grows and says nothing about now.
+func runningJobs(jobs []seam.JobSnapshot) int {
+	running := 0
+	for _, job := range jobs {
+		if job.Status == "running" {
+			running++
+		}
+	}
+	return running
 }
 
 func formatContextStats(agent seam.AgentSnapshot) string {

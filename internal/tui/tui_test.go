@@ -386,6 +386,16 @@ func TestEndedSubagentLeavesActivePanelButKeepsTranscript(t *testing.T) {
 	}
 }
 
+func TestStatusLineCountsOnlyRunningJobs(t *testing.T) {
+	jobs := []seam.JobSnapshot{{Status: "complete"}, {Status: "running"}, {Status: "failed"}, {Status: "killed"}, {Status: "running"}}
+	if got := runningJobs(jobs); got != 2 {
+		t.Fatalf("runningJobs = %d, want the 2 still running", got)
+	}
+	if got := runningJobs(jobs[:1]); got != 0 {
+		t.Fatalf("runningJobs = %d for finished jobs only, want 0", got)
+	}
+}
+
 func TestStatusLineFormatsContextAndCacheStats(t *testing.T) {
 	agent := seam.AgentSnapshot{
 		ContextWindow:   128000,
