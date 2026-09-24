@@ -27,6 +27,12 @@ records every session as an append-only JSONL transcript.
   70% of the model's window. While the summary is written the agent's status
   is `compacting` and a `compacting` event names how many messages it replaces;
   the `compact` event that follows carries the summary.
+- **Context overflow recovery.** A request the provider refuses as over the
+  context window is made smaller and retried, never failed with the cause
+  left in history: oversized tool results are cut to their first and last
+  lines, then the history is compacted, then any other oversized message is
+  cut, then everything but the latest message is compacted. Each step is
+  reported as a `warning` event.
 
 ## Requirements
 
@@ -268,6 +274,11 @@ SLBH_RUN_CODEX_TESTS=1 go test -tags live_integration ./internal/harness \
 # SLBH_ACCEPT_COMPACT_ROUTE picks the route (default the rented 5090).
 SLBH_ACCEPT_COMPACT=1 go test -tags live_integration ./internal/harness \
   -run TestAcceptanceCompaction -count=1 -timeout 10m
+
+# A real overflow: four parallel dense outputs refused by the route's own
+# window; SLBH_ACCEPT_OVERFLOW_ROUTE picks the route (default the rented 5090).
+SLBH_ACCEPT_OVERFLOW=1 go test -tags live_integration ./internal/harness \
+  -run TestAcceptanceOverflowRecovery -count=1 -timeout 10m
 ```
 
 Messaging changes must be tested for model-visible delivery during active

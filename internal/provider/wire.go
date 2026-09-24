@@ -2,9 +2,11 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -103,6 +105,25 @@ func (e *StatusError) Error() string {
 // the work and is reported at once, and three silent retries would spend three
 // times the quota before anyone heard about it.
 func (e *StatusError) Retryable() bool { return e.Status >= 500 }
+
+// contextOverflowMessage matches the refusals a request over the context
+// window draws. Recorded: the rented ninfer-serve's `context_length_exceeded`
+// ("prepared prompt exceeds Engine max_context"), and Z.ai's 1261, "Prompt
+// exceeds max length" on the coding wire and "prompt is too long" on the
+// Anthropic one (slb-org slbh-capability-matrix-2026-09-13.md). The rest are
+// the OpenAI, vLLM and llama.cpp wordings of the same refusal.
+var contextOverflowMessage = regexp.MustCompile(`(?i)context[ _]length|context window|max(imum)?[ _]context|prompt is too long|prompt exceeds max length|exceeds the (available )?context|too many tokens|input is too long`)
+
+// IsContextOverflow reports whether err is a provider's refusal of a request
+// as larger than the model's context window. Retrying it unchanged cannot
+// succeed; only a smaller request can.
+func IsContextOverflow(err error) bool {
+	var status *StatusError
+	if !errors.As(err, &status) || status.Status < 400 || status.Status >= 500 {
+		return false
+	}
+	return status.Code == "context_length_exceeded" || status.Code == "1261" || status.Status == 413 || contextOverflowMessage.MatchString(status.Message)
+}
 
 // retryable is the optional capability Retry consults. An error that does not
 // implement it is retried, which keeps transport failures — the case retrying

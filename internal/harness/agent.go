@@ -352,6 +352,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 	contextWindow := a.resolveContextWindow(turnCtx, p)
 	system := systemPrompt(a)
 	tools := a.runtime.toolDefinitions(a.ID)
+	overflowStage := 0
 	for round := 0; ; {
 		if turnCtx.Err() != nil {
 			return
@@ -452,6 +453,16 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 		responseContent := answer.String()
 		responseReasoning := reasoning.String()
 		if err != nil {
+			// A refusal for size is answered by making the request smaller
+			// (overflow.go), never by failing with the cause still in history.
+			if provider.IsContextOverflow(err) && responseContent == "" && responseReasoning == "" {
+				recovered, stage, changed := a.recoverFromOverflow(turnCtx, p, model, effort, history, contextWindow, overflowStage, err)
+				overflowStage = stage
+				if changed {
+					history = recovered
+					continue
+				}
+			}
 			if responseContent != "" || responseReasoning != "" {
 				history = append(history, provider.Message{Role: "assistant", Content: responseContent, ReasoningContent: responseReasoning})
 			}
@@ -459,6 +470,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			a.fail(err)
 			return
 		}
+		overflowStage = 0
 		if len(calls) == 0 {
 			if responseContent != "" || responseReasoning != "" {
 				history = append(history, provider.Message{Role: "assistant", Content: responseContent, ReasoningContent: responseReasoning})

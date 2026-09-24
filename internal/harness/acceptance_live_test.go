@@ -970,3 +970,62 @@ func TestAcceptanceCompaction(t *testing.T) {
 		t.Fatalf("status after the turn = %q, want idle", status)
 	}
 }
+
+// TestAcceptanceOverflowRecovery overflows a real route's real window and
+// requires the agent to recover rather than fail: four parallel commands of
+// dense numbered rows each pass the 20,000-token command cap by the
+// four-bytes-per-token estimate, and together run to about 260k real tokens.
+// On the rented 5090 (196,608) that is refused as context_length_exceeded.
+// It needs a model that makes the four calls in one response.
+func TestAcceptanceOverflowRecovery(t *testing.T) {
+	if os.Getenv("SLBH_ACCEPT_OVERFLOW") != "1" {
+		t.Skip("set SLBH_ACCEPT_OVERFLOW=1 to overflow a live route's window (about three requests)")
+	}
+	route := strings.TrimSpace(os.Getenv("SLBH_ACCEPT_OVERFLOW_ROUTE"))
+	if route == "" {
+		route = "remote/fafstmobel-cinference"
+	}
+	cfg := acceptPolicy(t)
+	cfg.Home = t.TempDir()
+	cfg.SeatModel = route
+	cfg.SeatEffort = cfg.Policy.Routes[route].DefaultEffort
+	cfg.ApprovedModels = []string{route}
+	instance, _ := acceptProvider(t, cfg, route)
+	runtime, err := New(cfg, Options{Provider: func(string) (provider.Provider, error) { return &liveProvider{inner: instance}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	seat := runtime.seat()
+	seat.Send("In ONE response, make FOUR bash tool calls at once, in parallel, without waiting between them: " +
+		"`seq -f 'row %06g' 1 7270`, `seq -f 'row %06g' 7271 14540`, `seq -f 'row %06g' 14541 21810`, " +
+		"`seq -f 'row %06g' 21811 29080`. Do not summarize the output. After the results arrive, reply with the single word DONE.")
+	events, _ := waitIdleTurn(t, runtime, seat.ID, 0)
+
+	var calls, refusals, recoveries int
+	var answer strings.Builder
+	for _, event := range events {
+		switch {
+		case event.Kind == "tool_start":
+			calls++
+		case event.Kind == "request_error" && provider.IsContextOverflow(&provider.StatusError{Status: 400, Message: event.Text}):
+			refusals++
+		case event.Kind == "warning" && event.Metadata["purpose"] == "overflow":
+			recoveries++
+		case event.Kind == "assistant":
+			answer.WriteString(event.Text)
+		case event.Kind == "error":
+			t.Fatalf("the agent failed instead of recovering: %s", event.Text)
+		}
+	}
+	t.Logf("%s: %d calls, %d refusals, %d recoveries; answer %q", route, calls, refusals, recoveries, strings.TrimSpace(answer.String()))
+	if refusals == 0 {
+		t.Fatalf("nothing was refused (%d calls), so nothing was recovered from; the model may not have made the calls in parallel", calls)
+	}
+	if recoveries == 0 || !strings.Contains(answer.String(), "DONE") {
+		t.Fatalf("recoveries %d, answer %q", recoveries, answer.String())
+	}
+	if status := seat.Snapshot().Status; status != "idle" {
+		t.Fatalf("status = %q, want idle", status)
+	}
+}
