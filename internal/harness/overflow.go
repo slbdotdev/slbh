@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -25,7 +26,9 @@ import (
 //     tool result to compactResultMaxChars, so it cannot overflow on the
 //     result that caused this;
 //  3. cut any other oversized message, pasted input or a delivered result,
-//     so that no message can hold the agent over the window;
+//     and any oversized reasoning or tool-call arguments, so that no message
+//     can hold the agent over the window; the summary is left whole, since
+//     its own output bound (compactSummaryMaxTokens) already limits it;
 //  4. compact again keeping only the latest message or call, for a tail of
 //     many small messages that is dense enough to overflow on its own.
 //
@@ -85,21 +88,50 @@ func (a *Agent) warnOverflow(cause error, action string) {
 	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "warning", Text: "the provider refused the request as over the context window; " + action + " and retrying: " + cause.Error(), Metadata: map[string]any{"purpose": "overflow"}})
 }
 
-// cutOversized replaces the content of every message that eligible accepts
-// and that is over overflowMessageChars with its first and last lines. The
-// history is copied, never edited in place: a turn's history shares its
-// backing array with the one it was read from.
+// cutOversized cuts every message that eligible accepts: its content and
+// its reasoning, each when over overflowMessageChars, to their first and last
+// lines, and its tool-call arguments, when over it, to a valid JSON stub, so
+// the call and its result stay paired. It returns the number of messages
+// changed. The history is copied, never edited in place: a turn's history
+// shares its backing array with the one it was read from.
 func cutOversized(history []provider.Message, eligible func(provider.Message) bool) ([]provider.Message, int) {
 	out := append([]provider.Message(nil), history...)
 	changed := 0
 	for i, message := range out {
-		if len(message.Content) <= overflowMessageChars || !eligible(message) {
+		if !eligible(message) {
 			continue
 		}
-		lines := strings.Count(strings.TrimSuffix(message.Content, "\n"), "\n") + 1
-		head, tail := edgeLines(message.Content)
-		out[i].Content = fmt.Sprintf("content cut after the provider refused the request as over its context window: %d bytes, %d lines; the first and last %d lines are shown\n%s\n…\n%s", len(message.Content), lines, edgeLineCount, head, tail)
-		changed++
+		cut := false
+		if len(message.Content) > overflowMessageChars {
+			out[i].Content = overflowCut(message.Content)
+			cut = true
+		}
+		if len(message.ReasoningContent) > overflowMessageChars {
+			out[i].ReasoningContent = overflowCut(message.ReasoningContent)
+			cut = true
+		}
+		copied := false
+		for j, call := range message.ToolCalls {
+			if len(call.Function.Arguments) <= overflowMessageChars {
+				continue
+			}
+			if !copied {
+				out[i].ToolCalls = append([]provider.ToolCall(nil), message.ToolCalls...)
+				copied = true
+			}
+			stub, _ := json.Marshal(map[string]string{"cut": fmt.Sprintf("%d bytes of arguments cut after the provider refused the request as over its context window", len(call.Function.Arguments))})
+			out[i].ToolCalls[j].Function.Arguments = string(stub)
+			cut = true
+		}
+		if cut {
+			changed++
+		}
 	}
 	return out, changed
+}
+
+func overflowCut(text string) string {
+	lines := strings.Count(strings.TrimSuffix(text, "\n"), "\n") + 1
+	head, tail := edgeLines(text)
+	return fmt.Sprintf("content cut after the provider refused the request as over its context window: %d bytes, %d lines; the first and last %d lines are shown\n%s\n…\n%s", len(text), lines, edgeLineCount, head, tail)
 }

@@ -256,6 +256,9 @@ func TestCompactionStatusIsRestoredOnlyIfUnchanged(t *testing.T) {
 			result <- seat.compactHistoryIfNeeded(context.Background(), p, "m", "low", longTurn(20, 4000), 20000, "system", nil)
 		}()
 		waitEntered(t, p.entered)
+		if status := seat.Snapshot().Status; status != "compacting" {
+			t.Fatalf("status during the summary = %q, want compacting", status)
+		}
 		seat.setStatus("waiting")
 		close(p.gate)
 		<-result
@@ -263,4 +266,89 @@ func TestCompactionStatusIsRestoredOnlyIfUnchanged(t *testing.T) {
 			t.Fatalf("status = %q, want the one set during the summary", status)
 		}
 	})
+	// /compact on an idle agent, then a turn that starts and compacts too:
+	// whichever finishes first must not put back a status the other has
+	// replaced, and the last to finish restores the turn's.
+	for _, order := range []string{"compact first", "turn first"} {
+		t.Run("overlapping compactions, "+order, func(t *testing.T) {
+			manual := &scriptedCompactionProvider{window: 8000, summary: "## Goal\nx", entered: make(chan struct{}, 1), gate: make(chan struct{})}
+			turn := &scriptedCompactionProvider{window: 8000, summary: "## Goal\ny", entered: make(chan struct{}, 1), gate: make(chan struct{})}
+			r := compactionRuntime(t, manual)
+			seat := r.seat()
+			done := make(chan struct{}, 2)
+			go func() {
+				seat.compactHistoryIfNeeded(context.Background(), manual, "m", "low", longTurn(20, 4000), 20000, "system", nil)
+				done <- struct{}{}
+			}()
+			waitEntered(t, manual.entered)
+			seat.setStatus("thinking") // the turn starts
+			go func() {
+				seat.compactHistoryIfNeeded(context.Background(), turn, "m", "low", longTurn(20, 4000), 20000, "system", nil)
+				done <- struct{}{}
+			}()
+			waitEntered(t, turn.entered)
+			first, second := manual, turn
+			if order == "turn first" {
+				first, second = turn, manual
+			}
+			close(first.gate)
+			<-done
+			if status := seat.Snapshot().Status; order == "compact first" && status != "compacting" {
+				t.Fatalf("after /compact finished under the turn's compaction, status = %q, want compacting", status)
+			} else if order == "turn first" && status != "thinking" {
+				t.Fatalf("after the turn's compaction finished, status = %q, want thinking", status)
+			}
+			close(second.gate)
+			<-done
+			if status := seat.Snapshot().Status; status != "thinking" {
+				t.Fatalf("after both, status = %q, want thinking", status)
+			}
+			var last string
+			for _, event := range agentEvents(r, seat.ID) {
+				if event.Kind == "status" {
+					last = event.Text
+				}
+			}
+			if last != "thinking" {
+				t.Fatalf("last status event = %q, want thinking", last)
+			}
+		})
+	}
+}
+
+// loopingProvider calls a tool on every request, forever.
+type loopingProvider struct {
+	mu       sync.Mutex
+	requests int
+}
+
+func (p *loopingProvider) PinnedContextWindow() (int, bool) { return 1_000_000, true }
+
+func (p *loopingProvider) Stream(_ context.Context, _ provider.Request, sink provider.StreamSink) error {
+	p.mu.Lock()
+	p.requests++
+	p.mu.Unlock()
+	if err := sink(provider.Event{Kind: provider.EventTool, ToolName: "no_such_tool", ToolCallID: "x", Input: "{}"}); err != nil {
+		return err
+	}
+	if err := sink(provider.Event{Kind: provider.EventUsage, StopReason: "tool_calls"}); err != nil {
+		return err
+	}
+	return sink(provider.Event{Kind: provider.EventDone})
+}
+
+// A turn runs 500 provider/tool rounds and then fails with the reason.
+func TestTurnStopsAtTheRoundLimit(t *testing.T) {
+	p := &loopingProvider{}
+	r := compactionRuntime(t, p)
+	seat := r.seat()
+	seat.Send("loop")
+	// 500 rounds take a few seconds, and ten times that under -race.
+	events, _ := waitIdleTurnWithin(t, r, seat.ID, 0, 3*time.Minute)
+	if last := events[len(events)-1]; last.Kind != "error" || !strings.Contains(last.Text, "round limit") {
+		t.Fatalf("turn ended with %s %q, want the round-limit error", last.Kind, last.Text)
+	}
+	if p.requests != 500 {
+		t.Fatalf("%d requests, want 500", p.requests)
+	}
 }

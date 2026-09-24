@@ -44,8 +44,16 @@ type Agent struct {
 	Harness  string
 	WorkDir  string
 
-	mu            sync.RWMutex
-	status        string
+	mu     sync.RWMutex
+	status string
+	// statusMu is held across a status change and the event that reports it,
+	// so the last status event is always the agent's status: two changes can
+	// otherwise publish in the opposite order to the one they happened in.
+	// Lock order: statusMu, then mu.
+	statusMu sync.Mutex
+	// compactingGen identifies the compaction that owns a "compacting" status,
+	// so an earlier one that finishes second cannot restore over a later one.
+	compactingGen uint64
 	history       []provider.Message
 	inbox         []agentMessage
 	busy          bool
@@ -459,6 +467,11 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			if provider.IsContextOverflow(err) && responseContent == "" && responseReasoning == "" {
 				recovered, stage, changed := a.recoverFromOverflow(turnCtx, p, model, effort, history, contextWindow, overflowStage, err)
 				overflowStage = stage
+				if turnCtx.Err() != nil {
+					// Cancelled while recovering, by /clear or shutdown: not
+					// an overflow the agent failed on.
+					return
+				}
 				if changed {
 					history = recovered
 					continue
@@ -493,9 +506,11 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			}
 			// Finish and message acceptance share one lock. Input accepted before
 			// this point must be consumed in THIS turn, even after stream EOF.
+			a.statusMu.Lock()
 			a.mu.Lock()
 			if len(a.inbox) > 0 {
 				a.mu.Unlock()
+				a.statusMu.Unlock()
 				continue
 			}
 			if a.historyEpoch == epoch {
@@ -504,6 +519,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			a.status = "idle"
 			a.mu.Unlock()
 			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: "idle"})
+			a.statusMu.Unlock()
 			if a.ParentID != "" && answer.Len() > 0 {
 				if parent, ok := a.runtime.lookupAgent(a.ParentID); ok {
 					if err := parent.receiveChildResult(a, answer.String()); err != nil {
@@ -578,6 +594,8 @@ func (a *Agent) fail(err error) {
 }
 
 func (a *Agent) setStatus(status string) {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
 	a.mu.Lock()
 	a.status = status
 	a.mu.Unlock()

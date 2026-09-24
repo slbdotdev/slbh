@@ -164,7 +164,11 @@ type Model struct {
 	markdownStale      bool
 	markdownTicking    bool
 	eventRenderCache   map[renderedEventCacheKey]string
-	frameProfiler      *frameProfiler
+	// onlyMessages records that the last retention scan found nothing but
+	// messages, which are never evicted; until something evictable arrives,
+	// appending more messages need not scan the whole history again.
+	onlyMessages  bool
+	frameProfiler *frameProfiler
 	// mouseCapture is off by default so the terminal keeps its own click and
 	// drag, which is what selecting and copying text needs. Turning it on
 	// trades that away for wheel scrolling.
@@ -306,11 +310,23 @@ func (m *Model) receiveEvents(events []seam.Event) {
 			viewChanged = true
 		}
 	}
+	selectedID := ""
+	if m.selected >= 0 && m.selected < len(m.agents) {
+		selectedID = m.agents[m.selected].ID
+	}
 	m.agents = activeAgents(m.runtime.Agents())
 	if !containsAgent(m.agents, m.viewAgentID) {
 		m.viewAgentID = seatID(m.runtime)
 		m.userScrolled = false
 		viewChanged = true
+	}
+	// Keep the selection on the same agent when rows above it come or go;
+	// only a stopped selection falls back to the nearest remaining row.
+	for i, agent := range m.agents {
+		if agent.ID == selectedID {
+			m.selected = i
+			break
+		}
 	}
 	if m.selected >= len(m.agents) {
 		m.selected = max(0, len(m.agents)-1)
@@ -362,7 +378,10 @@ func (m *Model) appendViewportEvent(event seam.Event) {
 		}
 	}
 	m.events = append(m.events, event)
-	for len(m.events) > maxRetainedViewportEvents {
+	if !isViewportEvent(event) || !isMessage(event) {
+		m.onlyMessages = false
+	}
+	for len(m.events) > maxRetainedViewportEvents && !m.onlyMessages {
 		drop := -1
 		for i, retained := range m.events {
 			if !isViewportEvent(retained) {
@@ -374,6 +393,7 @@ func (m *Model) appendViewportEvent(event seam.Event) {
 			}
 		}
 		if drop == -1 {
+			m.onlyMessages = true
 			break
 		}
 		copy(m.events[drop:], m.events[drop+1:])
@@ -1356,8 +1376,12 @@ func isMarkdownEvent(event seam.Event) bool {
 	}
 }
 
+// markdownBlockKey identifies one chat block for the render throttle. The
+// cursor is its first fragment's, which merging keeps, so two replies from
+// one agent never share a key: a reply that opened with the previous one's
+// text would otherwise be shown that reply's render until the next tick.
 func markdownBlockKey(event seam.Event) string {
-	return event.AgentID + "\x00" + event.Kind
+	return fmt.Sprintf("%s\x00%s\x00%d", event.AgentID, event.Kind, event.Cursor)
 }
 
 // renderMarkdown styles agent-authored markdown for a chat block. A streamed
@@ -1540,10 +1564,10 @@ func agentTitle(event seam.Event, fallback string) string {
 }
 
 func isViewportEvent(event seam.Event) bool {
-	// Request payloads, status updates, and usage reports are durable
-	// control-plane records, not chat output. Keep them in Model.events and the
+	// Request payloads, request completions, status updates, and usage
+	// reports are durable control-plane records, not chat output. Keep them in Model.events and the
 	// runtime transcript while omitting them from the message viewport.
-	return event.Kind != "inference_request" && event.Kind != "turn_done" && event.Kind != "status" && event.Kind != "usage"
+	return event.Kind != "inference_request" && event.Kind != "request_done" && event.Kind != "turn_done" && event.Kind != "status" && event.Kind != "usage"
 }
 
 func messageBlock(text string, width int, background color.Color) string {

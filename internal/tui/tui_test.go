@@ -222,6 +222,26 @@ func TestReceiveEventsMergesStreamsAndRetainsDisplayHistory(t *testing.T) {
 	}
 }
 
+// Past the cap with nothing but messages, appending another message does not
+// rescan the whole history, and output that arrives later is still evicted
+// before any message.
+func TestMessageOnlyHistoryIsNotRescannedOnEveryAppend(t *testing.T) {
+	m := Model{}
+	for i := 0; i < maxRetainedViewportEvents+100; i++ {
+		m.appendViewportEvent(seam.Event{AgentID: "a", Kind: "user", Text: fmt.Sprintf("message %d", i)})
+	}
+	if len(m.events) != maxRetainedViewportEvents+100 || !m.onlyMessages {
+		t.Fatalf("len %d, onlyMessages %v: want every message kept and the scan skipped", len(m.events), m.onlyMessages)
+	}
+	m.appendViewportEvent(seam.Event{AgentID: "a", Kind: "tool_result", Text: "output"})
+	if len(m.events) != maxRetainedViewportEvents+100 || m.events[len(m.events)-1].Kind != "user" {
+		t.Fatalf("tool output was kept over a message: len %d, last %s", len(m.events), m.events[len(m.events)-1].Kind)
+	}
+	if m.events[0].Text != "message 0" {
+		t.Fatalf("a message was evicted: first is %q", m.events[0].Text)
+	}
+}
+
 func TestDisplayHistoryEvictsControlsAndToolOutputBeforeMessages(t *testing.T) {
 	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
 	if err != nil {
@@ -902,6 +922,75 @@ func TestToolCallMarkupRendersAsANote(t *testing.T) {
 		if !strings.Contains(got, tc.want) || strings.Contains(got, tc.not) {
 			t.Errorf("%s: rendered %q, want %q and not %q", name, got, tc.want, tc.not)
 		}
+	}
+}
+
+func TestAgentSelectionFollowsTheAgentWhenAnEarlierOneStops(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	m := New(runtime)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	m = updated.(Model)
+	var children []seam.AgentSnapshot
+	for _, title := range []string{"alpha", "beta", "gamma"} {
+		child := launchTestSubagent(t, runtime, title)
+		children = append(children, child)
+		updated, _ = m.Update(eventMsg(seam.Event{AgentID: child.ID, AgentTitle: title, Kind: "status", Text: "subagent launched"}))
+		m = updated.(Model)
+	}
+	for i, agent := range m.agents {
+		if agent.ID == children[1].ID {
+			m.selected = i
+		}
+	}
+	m.focusAgents = true
+	endTestSubagent(t, runtime, children[0].ID)
+	updated, _ = m.Update(eventMsg(seam.Event{AgentID: children[0].ID, AgentTitle: "alpha", Kind: "status", Text: "stopped"}))
+	m = updated.(Model)
+	if got := m.agents[m.selected].ID; got != children[1].ID {
+		t.Fatalf("selection moved to %q after alpha stopped, want beta; agents %s", m.agents[m.selected].Title, formatAgents(m.agents))
+	}
+	endTestSubagent(t, runtime, children[1].ID)
+	updated, _ = m.Update(eventMsg(seam.Event{AgentID: children[1].ID, AgentTitle: "beta", Kind: "status", Text: "stopped"}))
+	m = updated.(Model)
+	if m.selected < 0 || m.selected >= len(m.agents) {
+		t.Fatalf("selection %d out of range after the selected agent stopped", m.selected)
+	}
+}
+
+func TestRequestCompletionIsNotRenderedAsABlock(t *testing.T) {
+	runtime, err := harness.New(config.Config{Home: t.TempDir(), SeatModel: "test", SeatEffort: "high"}, harness.Options{Provider: func(string) (provider.Provider, error) { return quietProvider{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	seat := seatID(runtime)
+	m := New(runtime)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	m = updated.(Model)
+	for _, event := range []seam.Event{
+		{AgentID: seat, Kind: "user", Text: "hi"},
+		{AgentID: seat, Kind: "assistant", Text: "hello"},
+		{AgentID: seat, Kind: "request_done", Metadata: map[string]any{"round": 0}},
+	} {
+		updated, _ = m.Update(eventMsg(event))
+		m = updated.(Model)
+	}
+	if content := ansi.Strip(m.viewport.View()); strings.Contains(content, "request_done") {
+		t.Fatalf("a request completion rendered as a block: %q", content)
+	}
+}
+
+func TestANewReplyNeverShowsThePreviousRepliesRender(t *testing.T) {
+	m := Model{}
+	first := seam.Event{AgentID: "a", Kind: "assistant", Text: "Hello world", Cursor: 10}
+	second := seam.Event{AgentID: "a", Kind: "assistant", Text: "Hello world, and this reply goes on", Cursor: 20}
+	_ = m.renderEvent(first, 60)
+	if got := ansi.Strip(m.renderEvent(second, 60)); !strings.Contains(got, "goes on") {
+		t.Fatalf("the second reply showed the first one's render inside the throttle: %q", got)
 	}
 }
 

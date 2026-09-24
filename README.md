@@ -75,7 +75,9 @@ slbh [flags]
 | --- | --- |
 | `Enter` | Send input or run a slash command |
 | `Ctrl-J` | Insert a newline |
-| `Up` / `Down` | Recall input history; `Down` moves toward the agent list |
+| Arrows | Move the cursor in the input; at its edges `Up` scrolls the viewport up, and `Down` scrolls back down, then moves to the first root subagent in the agent list |
+| `Alt-Up` / `Alt-Down` | Recall input history |
+| `Ctrl-Down` | Move straight to the agent list |
 | `Tab` | Complete a slash command |
 | `Esc` | Return from the agent list or a child view to the Seat |
 | `PgUp` / `PgDn`, `Ctrl-U` / `Ctrl-D` | Scroll the viewport |

@@ -111,15 +111,18 @@ func (e *StatusError) Retryable() bool { return e.Status >= 500 }
 // ("prepared prompt exceeds Engine max_context"), and Z.ai's 1261, "Prompt
 // exceeds max length" on the coding wire and "prompt is too long" on the
 // Anthropic one (slb-org slbh-capability-matrix-2026-09-13.md). The rest are
-// the OpenAI, vLLM and llama.cpp wordings of the same refusal.
-var contextOverflowMessage = regexp.MustCompile(`(?i)context[ _]length|context window|max(imum)?[ _]context|prompt is too long|prompt exceeds max length|exceeds the (available )?context|too many tokens|input is too long`)
+// the OpenAI, vLLM, llama.cpp and Ollama wordings of the same refusal. Each
+// states that something exceeds the context; an error that merely mentions
+// the context window, such as an unsupported parameter, is not one.
+var contextOverflowMessage = regexp.MustCompile(`(?i)maximum context length|context[ _]length[ _]exceeded|exceeds? (the )?(model'?s? )?(maximum |max |available )?context|max_context|prompt is too long|prompt exceeds max length|too many tokens|input is too long`)
 
 // IsContextOverflow reports whether err is a provider's refusal of a request
 // as larger than the model's context window. Retrying it unchanged cannot
 // succeed; only a smaller request can.
 func IsContextOverflow(err error) bool {
 	var status *StatusError
-	if !errors.As(err, &status) || status.Status < 400 || status.Status >= 500 {
+	// 429 is a rate limit, which some providers word as too many tokens.
+	if !errors.As(err, &status) || status.Status < 400 || status.Status >= 500 || status.Status == 429 {
 		return false
 	}
 	return status.Code == "context_length_exceeded" || status.Code == "1261" || status.Status == 413 || contextOverflowMessage.MatchString(status.Message)

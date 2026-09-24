@@ -25,6 +25,11 @@ type denseServer struct {
 	window int
 	calls  int
 	output int
+	// bytesPerToken is the real density, 1 when zero.
+	bytesPerToken int
+	// summaryEntered and summaryGate, when set, hold summary requests open.
+	summaryEntered chan struct{}
+	summaryGate    chan struct{}
 
 	mu       sync.Mutex
 	refusals int
@@ -47,7 +52,8 @@ func requestBytes(req provider.Request) int {
 }
 
 func (s *denseServer) Stream(ctx context.Context, req provider.Request, sink provider.StreamSink) error {
-	if requestBytes(req) > s.window {
+	density := max(1, s.bytesPerToken)
+	if requestBytes(req)/density > s.window {
 		s.mu.Lock()
 		s.refusals++
 		s.mu.Unlock()
@@ -60,6 +66,14 @@ func (s *denseServer) Stream(ctx context.Context, req provider.Request, sink pro
 		return sink(provider.Event{Kind: provider.EventDone})
 	}
 	if req.System == compactSystemPrompt {
+		if s.summaryEntered != nil {
+			s.summaryEntered <- struct{}{}
+			select {
+			case <-s.summaryGate:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		if err := sink(provider.Event{Kind: provider.EventText, Text: "## Goal\nfinish the task"}); err != nil {
 			return err
 		}
@@ -89,7 +103,12 @@ func overflowRuntime(t *testing.T, server *denseServer) *Runtime {
 // failed turn without one, and returns the events it emitted meanwhile.
 func waitIdleTurn(t *testing.T, r *Runtime, agentID string, after seam.EventCursor) ([]seam.Event, seam.EventCursor) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	return waitIdleTurnWithin(t, r, agentID, after, 20*time.Second)
+}
+
+func waitIdleTurnWithin(t *testing.T, r *Runtime, agentID string, after seam.EventCursor, limit time.Duration) ([]seam.Event, seam.EventCursor) {
+	t.Helper()
+	deadline := time.Now().Add(limit)
 	var events []seam.Event
 	cursor := after
 	for time.Now().Before(deadline) {
@@ -140,6 +159,7 @@ func TestOverflowRecoveryNeverLeavesAnAgentStuck(t *testing.T) {
 		seed    []provider.Message
 		prompt  string
 		warning string
+		not     string
 	}{
 		{
 			name:    "one tool result over the window",
@@ -157,6 +177,28 @@ func TestOverflowRecoveryNeverLeavesAnAgentStuck(t *testing.T) {
 			name:    "a pasted message over the window",
 			server:  &denseServer{window: 20000, calls: 1, output: 100},
 			prompt:  strings.Repeat("pasted log line 12345\n", 800),
+			warning: "cut 1 oversized message",
+		},
+		{
+			name:    "compaction alone fits",
+			server:  &denseServer{window: 20000, calls: 1, output: 100, bytesPerToken: 2},
+			seed:    denseHistory(38, 1000),
+			prompt:  "continue",
+			warning: "compacting now",
+			not:     "compacting all but",
+		},
+		{
+			name:    "oversized tool-call arguments",
+			server:  &denseServer{window: 20000, calls: 1, output: 100},
+			seed:    callHistory(strings.Repeat("7", 30000), ""),
+			prompt:  "continue",
+			warning: "cut 1 oversized message",
+		},
+		{
+			name:    "oversized reasoning",
+			server:  &denseServer{window: 20000, calls: 1, output: 100},
+			seed:    callHistory("{}", strings.Repeat("7", 30000)),
+			prompt:  "continue",
 			warning: "cut 1 oversized message",
 		},
 		{
@@ -180,6 +222,18 @@ func TestOverflowRecoveryNeverLeavesAnAgentStuck(t *testing.T) {
 			seat.Send(tc.prompt)
 			events, cursor := waitIdleTurn(t, r, seat.ID, seam.EventCursor(0))
 			requireRecovered(t, events, tc.warning)
+			for _, event := range events {
+				if tc.not != "" && event.Kind == "warning" && strings.Contains(event.Text, tc.not) {
+					t.Fatalf("recovery went past the step that should have sufficed: %s", event.Text)
+				}
+			}
+			for _, message := range seat.History() {
+				for _, call := range message.ToolCalls {
+					if !json.Valid([]byte(call.Function.Arguments)) {
+						t.Fatalf("tool-call arguments are not valid JSON after recovery: %q", call.Function.Arguments)
+					}
+				}
+			}
 			if server.refusals == 0 {
 				t.Fatal("the server never refused, so nothing was recovered from")
 			}
@@ -224,4 +278,47 @@ func denseHistory(n, size int) []provider.Message {
 		history = append(history, provider.Message{Role: role, Content: strings.Repeat(fmt.Sprint(i%10), size)})
 	}
 	return history
+}
+
+// callHistory is a finished call and its result: arguments and reasoning as
+// given, so either can be the oversized part.
+func callHistory(arguments, reasoning string) []provider.Message {
+	call := bashCall("old-call", arguments)
+	return []provider.Message{
+		{Role: "user", Content: "start"},
+		{Role: "assistant", ReasoningContent: reasoning, ToolCalls: []provider.ToolCall{call}},
+		{Role: "tool", ToolCallID: "old-call", Name: "bash", Content: "ok"},
+	}
+}
+
+// A turn cancelled while recovery is compacting ends quietly: the overflow
+// it was recovering from is not reported as the agent's failure.
+func TestOverflowRecoveryCancelledIsNotAFailure(t *testing.T) {
+	server := &denseServer{window: 20000, calls: 1, output: 100, summaryEntered: make(chan struct{}, 1), summaryGate: make(chan struct{})}
+	r := overflowRuntime(t, server)
+	seat := r.seat()
+	seat.mu.Lock()
+	seat.history = denseHistory(40, 500)
+	seat.mu.Unlock()
+	seat.Send("continue")
+	select {
+	case <-server.summaryEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("recovery never compacted")
+	}
+	seat.ClearHistory()
+	close(server.summaryGate)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, event := range agentEvents(r, seat.ID) {
+			if event.Kind == "error" {
+				t.Fatalf("a cancelled recovery was reported as a failure: %s", event.Text)
+			}
+		}
+		if seat.Snapshot().Status == "idle" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("status = %q after the cancelled turn, want idle", seat.Snapshot().Status)
 }

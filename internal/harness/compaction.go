@@ -352,18 +352,26 @@ func (a *Agent) compacted(ctx context.Context, p provider.Provider, model, effor
 
 // beginCompacting shows that a summary is being written, which on a long
 // history takes as long as a turn and otherwise looks like a stalled agent.
-// The returned func restores the prior status unless something else, such as
-// a turn that started during /compact, has set one since.
+// The returned func restores the prior status only while this compaction
+// still owns the status: not after something else, such as a turn that
+// started during /compact, has set one, and not after a later compaction,
+// that turn's own, has taken it over.
 func (a *Agent) beginCompacting(replaced int) func() {
+	a.statusMu.Lock()
 	a.mu.Lock()
 	prior := a.status
+	a.compactingGen++
+	generation := a.compactingGen
 	a.status = "compacting"
 	a.mu.Unlock()
 	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: "compacting"})
+	a.statusMu.Unlock()
 	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "compacting", Text: fmt.Sprintf("compacting %d earlier messages", replaced), Metadata: map[string]any{"purpose": "compaction", "replaced": replaced}})
 	return func() {
+		a.statusMu.Lock()
+		defer a.statusMu.Unlock()
 		a.mu.Lock()
-		restore := a.status == "compacting"
+		restore := a.status == "compacting" && a.compactingGen == generation
 		if restore {
 			a.status = prior
 		}
