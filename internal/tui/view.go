@@ -310,10 +310,34 @@ func (m Model) agentPanel() string {
 				line += "⚬ "
 			}
 		}
-		line += a.Title + " [" + a.Status + "]"
+		line += a.Title + " [" + formatAgentStatus(a, time.Now()) + "]"
+		if a.ContextWindow > 0 {
+			line += " " + formatContextStats(a)
+		}
 		lines = append(lines, accent.Render(wrapToWidth(line, max(1, m.chatWidth()))))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// formatAgentStatus appends how long the agent has held its status. The
+// event poll wakes the TUI at least every 250ms, so the count stays live.
+func formatAgentStatus(a seam.AgentSnapshot, now time.Time) string {
+	if a.StatusSince.IsZero() {
+		return a.Status
+	}
+	return a.Status + " " + formatElapsed(now.Sub(a.StatusSince))
+}
+
+func formatElapsed(d time.Duration) string {
+	seconds := int(max(0, d) / time.Second)
+	switch {
+	case seconds < 60:
+		return fmt.Sprintf("%ds", seconds)
+	case seconds < 3600:
+		return fmt.Sprintf("%dm%02ds", seconds/60, seconds%60)
+	default:
+		return fmt.Sprintf("%dh%02dm", seconds/3600, seconds%3600/60)
+	}
 }
 
 func seatID(runtime seam.Runtime) string {
@@ -350,7 +374,11 @@ func agentSnapshot(runtime seam.Runtime, agentID string) (seam.AgentSnapshot, bo
 func formatAgents(agents []seam.AgentSnapshot) string {
 	var lines []string
 	for _, a := range agents {
-		lines = append(lines, fmt.Sprintf("%s depth=%d status=%s", a.Title, a.Depth, a.Status))
+		line := fmt.Sprintf("%s depth=%d status=%s", a.Title, a.Depth, formatAgentStatus(a, time.Now()))
+		if a.ContextWindow > 0 {
+			line += " context=" + formatContextStats(a)
+		}
+		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
 }

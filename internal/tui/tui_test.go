@@ -93,7 +93,7 @@ func TestViewFillsTerminalAndWrapsContent(t *testing.T) {
 	if strings.Contains(view, "long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error long error") {
 		t.Fatal("long content was not wrapped")
 	}
-	if got := ansi.Strip(m.agentPanel()); !strings.Contains(got, "seat [idle]") {
+	if got := ansi.Strip(m.agentPanel()); !strings.Contains(got, "seat [idle ") {
 		t.Fatalf("seat-only runtime should show the seat agent: %q", got)
 	}
 	m.agents = append(m.agents, seam.AgentSnapshot{ID: "child", Title: "child", Status: "idle", Depth: 1})
@@ -130,10 +130,10 @@ func TestAgentPanelKeepsAllAgentsInsideTerminal(t *testing.T) {
 	if got := lipgloss.Height(view); got != 24 {
 		t.Fatalf("view height=%d, want 24: %q", got, view)
 	}
-	if !strings.Contains(view, "child [idle]") {
+	if !strings.Contains(view, "child [idle ") {
 		t.Fatalf("agent panel clipped child row: %q", view)
 	}
-	if !strings.Contains(view, "  • child [idle]") {
+	if !strings.Contains(view, "  • child [idle ") {
 		t.Fatalf("level 1 child has incorrect marker or indentation: %q", view)
 	}
 }
@@ -1555,5 +1555,34 @@ func TestFencedCodeKeepsItsOwnBlankLines(t *testing.T) {
 	body := strings.Split(rendered, "\n")[1:]
 	if len(body) < 3 {
 		t.Fatalf("code block collapsed to %d lines, losing its blank lines: %q", len(body), body)
+	}
+}
+
+func TestAgentLineShowsStatusElapsedAndContext(t *testing.T) {
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		since time.Duration
+		want  string
+	}{
+		{0, "tool:bash 0s"},
+		{42 * time.Second, "tool:bash 42s"},
+		{3*time.Minute + 4*time.Second, "tool:bash 3m04s"},
+		{time.Hour + 2*time.Minute, "tool:bash 1h02m"},
+	} {
+		agent := seam.AgentSnapshot{Status: "tool:bash", StatusSince: now.Add(-tc.since)}
+		if got := formatAgentStatus(agent, now); got != tc.want {
+			t.Fatalf("formatAgentStatus after %v = %q, want %q", tc.since, got, tc.want)
+		}
+	}
+	m := Model{width: 120, height: 40, agents: []seam.AgentSnapshot{
+		{Title: "seat", Status: "prefill", StatusSince: time.Now(), ContextWindow: 200000, ContextUsed: 45200},
+		{Title: "child", Depth: 1, Status: "idle", StatusSince: time.Now()},
+	}}
+	got := ansi.Strip(m.agentPanel())
+	if !regexp.MustCompile(`seat \[prefill \ds\] 45\.2k/200k`).MatchString(got) {
+		t.Fatalf("seat line lacks status, elapsed, and context: %q", got)
+	}
+	if strings.Contains(got, "--/--") {
+		t.Fatalf("an agent with no known window shows a placeholder: %q", got)
 	}
 }

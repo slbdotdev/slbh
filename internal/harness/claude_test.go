@@ -350,3 +350,34 @@ func TestClaudeStreamFixtureMapsRuntimeEvents(t *testing.T) {
 		}
 	}
 }
+
+// Claude Code status follows the stream: a tool is named from its tool_use to
+// its tool_result, and assistant output after a turn's result, from a steer
+// written as it ended, is not left showing idle.
+func TestClaudeStatusFollowsStream(t *testing.T) {
+	r := newClaudeTestRuntime(t, "")
+	manager := launchTestManager(t, r)
+	agent, err := r.newAgent("status", manager.ID, 2, "claude-opus-5", "low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.Harness = "claude_code"
+	done := make(chan struct{})
+	close(done)
+	leaf := &claudeLeaf{agent: agent, runtime: r, done: done}
+	step := func(line, want string) {
+		t.Helper()
+		if err := leaf.handleLine([]byte(line)); err != nil {
+			t.Fatal(err)
+		}
+		if got := agent.Snapshot().Status; got != want {
+			t.Fatalf("status after %s = %q, want %q", line, got, want)
+		}
+	}
+	step(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{}},{"type":"tool_use","id":"b","name":"Read","input":{}}]}}`, "tool:Bash")
+	step(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"ok"}]}}`, "tool:Read")
+	step(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b","content":"ok"}]}}`, "working")
+	step(`{"type":"result","subtype":"success","result":"done"}`, "idle")
+	step(`{"type":"assistant","message":{"content":[{"type":"text","text":"steered reply"}]}}`, "working")
+	step(`{"type":"result","subtype":"success","result":"steered reply"}`, "idle")
+}

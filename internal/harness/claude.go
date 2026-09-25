@@ -61,13 +61,17 @@ type claudeLeaf struct {
 	cancel  context.CancelFunc
 	stderr  bytes.Buffer
 
-	mu          sync.Mutex
-	writeMu     sync.Mutex
-	stopped     bool
-	ready       bool
-	sessionID   string
-	answer      strings.Builder
-	turn        int
+	mu        sync.Mutex
+	writeMu   sync.Mutex
+	stopped   bool
+	ready     bool
+	sessionID string
+	answer    strings.Builder
+	turn      int
+	// tools holds the names of tool calls awaiting a result, by call ID and
+	// in call order, so the status names a tool that is still running.
+	tools       map[string]string
+	toolOrder   []string
 	done        chan struct{}
 	stopOnce    sync.Once
 	processOnce sync.Once
@@ -190,7 +194,7 @@ func (c *claudeLeaf) send(message, kind string) error {
 	if err != nil {
 		return fmt.Errorf("write Claude Code turn: %w", err)
 	}
-	c.agent.setStatus("thinking")
+	c.agent.setStatus(c.activityStatus())
 	c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: kind, Text: message, Metadata: map[string]any{"harness": "claude_code"}})
 	return nil
 }
@@ -266,6 +270,9 @@ func (c *claudeLeaf) handleAssistant(event claudeStreamEvent) error {
 	if err := json.Unmarshal(event.Message, &message); err != nil {
 		return fmt.Errorf("decode Claude Code assistant event: %w", err)
 	}
+	// Assistant output means a turn is running. A steer written as the
+	// previous turn ended can have been followed by that turn's idle.
+	c.agent.setStatus(c.activityStatus())
 	for _, block := range message.Content {
 		switch block.Type {
 		case "text":
@@ -278,10 +285,40 @@ func (c *claudeLeaf) handleAssistant(event claudeStreamEvent) error {
 				c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "thinking", Text: block.Thinking, Metadata: map[string]any{"session": event.SessionID, "message": event.UUID, "harness": "claude_code"}})
 			}
 		case "tool_use":
+			c.mu.Lock()
+			if c.tools == nil {
+				c.tools = make(map[string]string)
+			}
+			if _, seen := c.tools[block.ID]; !seen {
+				c.toolOrder = append(c.toolOrder, block.ID)
+			}
+			c.tools[block.ID] = block.Name
+			c.mu.Unlock()
+			c.agent.setStatus(c.activityStatus())
 			c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "tool", Text: string(block.Input), Metadata: map[string]any{"name": block.Name, "call_id": block.ID, "session": event.SessionID, "harness": "claude_code"}})
 		}
 	}
 	return nil
+}
+
+// activityStatus is the status of a running Claude Code turn. The stream
+// carries whole messages, not deltas, so while the model generates there is
+// no telling thinking from output: that is "working". A tool call is exact,
+// from its tool_use to its tool_result.
+func (c *claudeLeaf) activityStatus() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	pending := c.toolOrder[:0]
+	for _, id := range c.toolOrder {
+		if _, ok := c.tools[id]; ok {
+			pending = append(pending, id)
+		}
+	}
+	c.toolOrder = pending
+	if len(pending) == 0 {
+		return "working"
+	}
+	return "tool:" + c.tools[pending[0]]
 }
 
 func (c *claudeLeaf) handleToolResults(event claudeStreamEvent) error {
@@ -293,6 +330,10 @@ func (c *claudeLeaf) handleToolResults(event claudeStreamEvent) error {
 		if block.Type != "tool_result" {
 			continue
 		}
+		c.mu.Lock()
+		delete(c.tools, block.ToolUseID)
+		c.mu.Unlock()
+		c.agent.setStatus(c.activityStatus())
 		c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "tool_result", Text: claudeContentText(block.Content), Metadata: map[string]any{"call_id": block.ToolUseID, "is_error": block.IsError, "session": event.SessionID, "harness": "claude_code"}})
 	}
 	return nil
@@ -333,6 +374,7 @@ func (c *claudeLeaf) handleResult(event claudeStreamEvent) {
 	c.answer.Reset()
 	c.turn++
 	turn := c.turn
+	c.tools, c.toolOrder = nil, nil
 	c.mu.Unlock()
 	c.agent.setStatus("idle")
 	metadata := map[string]any{"session": event.SessionID, "turn": turn, "status": event.Subtype, "harness": "claude_code"}

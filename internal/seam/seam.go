@@ -45,19 +45,21 @@ type EventBatch struct {
 
 // AgentSnapshot is a copy of an agent's externally observable state.
 type AgentSnapshot struct {
-	ID              string `json:"id"`
-	Title           string `json:"title"`
-	ParentID        string `json:"parent_id"`
-	Depth           int    `json:"depth"`
-	Model           string `json:"model"`
-	Effort          string `json:"effort"`
-	Status          string `json:"status"`
-	Harness         string `json:"harness"`
-	WorkDir         string `json:"work_dir"`
-	ContextWindow   int    `json:"context_window"`
-	ContextUsed     int    `json:"context_used"`
-	CacheHitTokens  int    `json:"cache_hit_tokens"`
-	CacheMissTokens int    `json:"cache_miss_tokens"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	ParentID string `json:"parent_id"`
+	Depth    int    `json:"depth"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort"`
+	Status   string `json:"status"`
+	// StatusSince is when Status last changed.
+	StatusSince     time.Time `json:"status_since"`
+	Harness         string    `json:"harness"`
+	WorkDir         string    `json:"work_dir"`
+	ContextWindow   int       `json:"context_window"`
+	ContextUsed     int       `json:"context_used"`
+	CacheHitTokens  int       `json:"cache_hit_tokens"`
+	CacheMissTokens int       `json:"cache_miss_tokens"`
 }
 
 // JobSnapshot is a copy of a background job's externally observable state.

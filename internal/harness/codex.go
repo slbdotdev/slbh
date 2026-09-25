@@ -552,6 +552,9 @@ func (c *codexLeaf) pump(ctx context.Context) {
 			if effort != "" {
 				params["effort"] = effort
 			}
+			// The message has left pending, so from here the leaf is not idle,
+			// even before turn/start answers.
+			c.agent.setStatus("prefill")
 			result, err = c.call(ctx, "turn/start", params)
 		}
 		if err != nil {
@@ -582,7 +585,7 @@ func (c *codexLeaf) pump(ctx context.Context) {
 				c.mu.Lock()
 				c.activeTurn = started.Turn.ID
 				c.mu.Unlock()
-				c.agent.setStatus("thinking")
+				c.agent.setStatus("prefill")
 			}
 		}
 		// One turn/start or steer is in flight at a time. The next message is
@@ -617,6 +620,9 @@ func (c *codexLeaf) handle(message codexWire) {
 		if typ == "collabToolCall" {
 			c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "codex_request_rejected", Text: "Codex collaboration is disabled for leaf workers", Metadata: map[string]any{"thread": params.ThreadID, "turn": params.TurnID, "item": itemID, "harness": "codex"}})
 		}
+		if status := codexItemStatus(typ, params.Item); status != "" && c.turnActive(params.TurnID) {
+			c.agent.setStatus(status)
+		}
 		c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "codex_item_started", Text: typ, Metadata: map[string]any{"thread": params.ThreadID, "turn": params.TurnID, "item": itemID, "harness": "codex"}})
 	case "turn/started":
 		var params struct {
@@ -633,7 +639,7 @@ func (c *codexLeaf) handle(message codexWire) {
 			}
 			c.activeTurn = params.Turn.ID
 			c.mu.Unlock()
-			c.agent.setStatus("thinking")
+			c.agent.setStatus("prefill")
 		}
 	case "item/agentMessage/delta":
 		var params struct{ ThreadID, TurnID, ItemID, Delta string }
@@ -672,6 +678,10 @@ func (c *codexLeaf) handle(message codexWire) {
 		_ = json.Unmarshal(params.Item["type"], &typ)
 		_ = json.Unmarshal(params.Item["phase"], &phase)
 		_ = json.Unmarshal(params.Item["text"], &text)
+		// Between items the turn waits on the model for the next one.
+		if codexItemStatus(typ, params.Item) != "" && c.turnActive(params.TurnID) {
+			c.agent.setStatus("prefill")
+		}
 		if typ == "agentMessage" && text != "" {
 			c.mu.Lock()
 			if phase == "final_answer" || !c.finals[params.TurnID] {
@@ -720,6 +730,42 @@ func (c *codexLeaf) handle(message codexWire) {
 	case "error":
 		c.runtime.emit(seam.Event{AgentID: c.agent.ID, AgentTitle: c.agent.Title, Kind: "error", Text: string(message.Params)})
 	}
+}
+
+// turnActive reports whether turnID is the turn in flight, so an item
+// notification that trails turn/completed cannot overwrite idle.
+func (c *codexLeaf) turnActive(turnID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.activeTurn != "" && (turnID == "" || turnID == c.activeTurn)
+}
+
+// codexItemStatus maps a Codex thread item to the agent status it implies
+// while it runs; "" for items that are not the model's work, such as the
+// user's own message.
+func codexItemStatus(typ string, item map[string]json.RawMessage) string {
+	switch typ {
+	case "reasoning":
+		return "thinking"
+	case "agentMessage":
+		return "output"
+	case "commandExecution":
+		return "tool:exec"
+	case "fileChange":
+		return "tool:apply_patch"
+	case "webSearch":
+		return "tool:web_search"
+	case "contextCompaction":
+		return "compacting"
+	case "mcpToolCall", "dynamicToolCall", "collabToolCall":
+		var tool string
+		_ = json.Unmarshal(item["tool"], &tool)
+		if tool == "" {
+			tool = typ
+		}
+		return "tool:" + tool
+	}
+	return ""
 }
 
 func (c *codexLeaf) handleToolCall(message codexWire) {

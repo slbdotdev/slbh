@@ -608,3 +608,25 @@ func TestCodexLeafClearStartsFreshThread(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexItemStatus(t *testing.T) {
+	for _, tc := range []struct {
+		typ, tool, want string
+	}{
+		{"reasoning", "", "thinking"},
+		{"agentMessage", "", "output"},
+		{"commandExecution", "", "tool:exec"},
+		{"fileChange", "", "tool:apply_patch"},
+		{"mcpToolCall", "search", "tool:search"},
+		{"mcpToolCall", "", "tool:mcpToolCall"},
+		{"userMessage", "", ""},
+	} {
+		item := map[string]json.RawMessage{}
+		if tc.tool != "" {
+			item["tool"] = json.RawMessage(`"` + tc.tool + `"`)
+		}
+		if got := codexItemStatus(tc.typ, item); got != tc.want {
+			t.Fatalf("codexItemStatus(%q, tool %q) = %q, want %q", tc.typ, tc.tool, got, tc.want)
+		}
+	}
+}

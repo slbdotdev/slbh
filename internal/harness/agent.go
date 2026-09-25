@@ -46,6 +46,9 @@ type Agent struct {
 
 	mu     sync.RWMutex
 	status string
+	// statusSince is when status last changed, so a line can say how long
+	// an agent has been waiting on the API or on a tool.
+	statusSince time.Time
 	// statusMu is held across a status change and the event that reports it,
 	// so the last status event is always the agent's status: two changes can
 	// otherwise publish in the opposite order to the one they happened in.
@@ -78,7 +81,7 @@ type Agent struct {
 }
 
 func newAgent(runtime *Runtime, agentID, title, parentID string, depth int, model, effort string) *Agent {
-	return &Agent{runtime: runtime, ID: agentID, Title: title, ParentID: parentID, Depth: depth, Model: model, Effort: effort, Harness: "native", WorkDir: runtime.workDir, status: "idle", wake: make(chan struct{}, 1), done: make(chan struct{})}
+	return &Agent{runtime: runtime, ID: agentID, Title: title, ParentID: parentID, Depth: depth, Model: model, Effort: effort, Harness: "native", WorkDir: runtime.workDir, status: "idle", statusSince: time.Now(), wake: make(chan struct{}, 1), done: make(chan struct{})}
 }
 
 func (a *Agent) start() {
@@ -191,6 +194,7 @@ func (a *Agent) Snapshot() seam.AgentSnapshot {
 		Model:           a.Model,
 		Effort:          a.Effort,
 		Status:          a.status,
+		StatusSince:     a.statusSince,
 		Harness:         a.Harness,
 		WorkDir:         a.WorkDir,
 		ContextWindow:   a.contextWindow,
@@ -334,7 +338,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			a.runtime.promotePending(a.ID)
 		}
 	}()
-	a.setStatus("thinking")
+	a.setStatus("prefill")
 	history = a.appendMessages(history, messages)
 	// Preserve consumed input even when provider setup or inference fails.
 	defer func() {
@@ -366,6 +370,9 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 		if turnCtx.Err() != nil {
 			return
 		}
+		// Set before compaction, so a compaction restores it rather than the
+		// tool that just returned.
+		a.setStatus("prefill")
 		history = a.appendMessages(history, a.takeMessages())
 		history = a.compactHistoryIfNeeded(turnCtx, p, model, effort, history, contextWindow, system, tools)
 		if round >= 500 {
@@ -396,11 +403,13 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			a.recordRequestContext(req, contextWindow)
 			a.runtime.recordInferenceRequest(a, round, req, p)
 			attempt++
+			a.setStatus("prefill")
 			defer func() {
 				// Every failed attempt is its own event, so a recovered 5xx or a
 				// dropped stream is visible in the transcript rather than
 				// inferred from a retried request.
 				if streamErr != nil && turnCtx.Err() == nil {
+					a.setStatus("retry")
 					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "request_error", Text: streamErr.Error(), Metadata: map[string]any{"round": round, "attempt": attempt}})
 				}
 				if streamErr == nil {
@@ -415,9 +424,11 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 				}
 				switch event.Kind {
 				case provider.EventText:
+					a.setStatus("output")
 					answer.WriteString(event.Text)
 					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "assistant", Text: event.Text})
 				case provider.EventReasoning:
+					a.setStatus("thinking")
 					reasoning.WriteString(event.Text)
 					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "thinking", Text: event.Text})
 				case provider.EventTool:
@@ -433,6 +444,12 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 						call.Function.Name = event.ToolName
 					}
 					call.Function.Arguments += event.Input
+					// The name rides on the first fragment only.
+					if call.Function.Name != "" {
+						a.setStatus("calling:" + call.Function.Name)
+					} else {
+						a.setStatus("calling")
+					}
 					a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool", Text: event.Input, Metadata: map[string]any{"name": event.ToolName, "call_id": event.ToolCallID, "index": event.ToolIndex}})
 				case provider.EventUsage:
 					if incomplete, _ := event.Usage["incomplete"].(bool); !incomplete {
@@ -516,9 +533,11 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			if a.historyEpoch == epoch {
 				a.history = history
 			}
-			a.status = "idle"
+			changed := a.assignStatusLocked("idle")
 			a.mu.Unlock()
-			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: "idle"})
+			if changed {
+				a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: "idle"})
+			}
 			a.statusMu.Unlock()
 			if a.ParentID != "" && answer.Len() > 0 {
 				if parent, ok := a.runtime.lookupAgent(a.ParentID); ok {
@@ -562,6 +581,7 @@ func (a *Agent) handle(ctx context.Context, messages []agentMessage) {
 			history = append(history, message)
 			// Every execution is on record before it runs, so a call killed
 			// before it returns is still a call.
+			a.setStatus("tool:" + call.Function.Name)
 			a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "tool_start", Metadata: map[string]any{"name": call.Function.Name, "call_id": call.ID}})
 			result, toolErr := a.runtime.ExecuteTool(a.ID, call.Function.Name, call.Function.Arguments)
 			flagged := false
@@ -593,13 +613,28 @@ func (a *Agent) fail(err error) {
 	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "error", Text: err.Error()})
 }
 
+// setStatus reports a change only: the turn loop sets a status on every
+// stream fragment, and a repeat is not news.
 func (a *Agent) setStatus(status string) {
 	a.statusMu.Lock()
 	defer a.statusMu.Unlock()
 	a.mu.Lock()
-	a.status = status
+	changed := a.assignStatusLocked(status)
 	a.mu.Unlock()
-	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: status})
+	if changed {
+		a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: status})
+	}
+}
+
+// assignStatusLocked sets the status and, on a change, when it began. The
+// caller holds mu.
+func (a *Agent) assignStatusLocked(status string) bool {
+	if a.status == status {
+		return false
+	}
+	a.status = status
+	a.statusSince = time.Now()
+	return true
 }
 
 func (a *Agent) recordRequestContext(req provider.Request, contextWindow int) {

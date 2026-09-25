@@ -167,7 +167,7 @@ func TestTurnCompactionReportsProgressAndContinues(t *testing.T) {
 	waitAgentTurn(t, r, seat.ID)
 
 	requireOrder(t, agentEvents(r, seat.ID),
-		statusIs("thinking"),
+		statusIs("prefill"),
 		orderStep{"bash tool result", func(e seam.Event) bool { return e.Kind == "tool_result" }},
 		statusIs("compacting"),
 		orderStep{"compacting line", func(e seam.Event) bool {
@@ -177,7 +177,7 @@ func TestTurnCompactionReportsProgressAndContinues(t *testing.T) {
 			return e.Kind == "inference_request" && e.Metadata["purpose"] == "compaction"
 		}},
 		orderStep{"summary", func(e seam.Event) bool { return e.Kind == "compact" && e.Metadata["mode"] == "summary" }},
-		statusIs("thinking"),
+		statusIs("prefill"),
 		orderStep{"answer from the summary", func(e seam.Event) bool { return e.Kind == "assistant" && e.Text == "PELICAN-42" }},
 		orderStep{"turn_done", func(e seam.Event) bool { return e.Kind == "turn_done" }},
 	)

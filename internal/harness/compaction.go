@@ -362,7 +362,7 @@ func (a *Agent) beginCompacting(replaced int) func() {
 	prior := a.status
 	a.compactingGen++
 	generation := a.compactingGen
-	a.status = "compacting"
+	a.assignStatusLocked("compacting")
 	a.mu.Unlock()
 	a.runtime.emit(seam.Event{AgentID: a.ID, AgentTitle: a.Title, Kind: "status", Text: "compacting"})
 	a.statusMu.Unlock()
@@ -373,7 +373,7 @@ func (a *Agent) beginCompacting(replaced int) func() {
 		a.mu.Lock()
 		restore := a.status == "compacting" && a.compactingGen == generation
 		if restore {
-			a.status = prior
+			a.assignStatusLocked(prior)
 		}
 		a.mu.Unlock()
 		if restore {
