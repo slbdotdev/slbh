@@ -1,3 +1,9 @@
+> **Deprecated, 2026-10-01.** slbh is retired. Its author no longer develops,
+> deploys or runs it: it was replaced by a successor runtime that is not
+> published. This repository is kept for its history and will receive no
+> further changes. Everything below describes the project as it was and is
+> not maintained.
+
 ***This project, and ALL of it's associated documentation, was produced entirely by a system of coordinating AI agents. I have never read any of the code, and that is the point. This is an experiment.***
 
 # slbh
